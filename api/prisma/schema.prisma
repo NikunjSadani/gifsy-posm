@@ -1,0 +1,406 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// POSM Field-Execution Platform — Prisma schema  (v0 · FIRST CUT for review)
+//
+// Standalone multi-tenant product on the shared Gifsy chassis. Postgres on the
+// shared instance (own `posm` database). Chassis models (Client/User/Session/
+// AuditLog) are adapted from Loyaltybaseclaude; POSM domain models are new.
+//
+// Design rationale + reuse map: docs/plans/POSM-BUILD-PLAN.md
+// Anti-fraud posture: geo-fence + accuracy caps + dup-hash + before≠after
+//   (PWA-achievable; NO OS mock-provider flag — matches the platform pattern).
+//
+// ⚠️ v0 — the two domain modelling calls to confirm before we build on this:
+//   (1) Pipeline unit = site-level Recce/Installation submissions with per-POSM
+//       child rows (chosen here), vs a flat per-POSM "unit" row. See notes below.
+//   (2) Vendor field logins = `User` rows (role VENDOR_FIELD + vendorId) reusing
+//       the chassis auth, vs a separate identity table. `User.vendorId` chosen.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CHASSIS — adapted from loyalty (copy the code; strip loyalty-specific fields)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// A tenant. One deploy serves many (Kwality + future POSM clients).
+model Client {
+  id        String   @id @default(cuid())
+  slug      String   @unique                 // e.g. "kwality"
+  name      String
+  features  Json     @default("{}")          // per-tenant flags (posmEnabled, nearbyOutletsEnabled, …)
+  branding  Json     @default("{}")          // primaryColor etc. → CSS vars (chassis pattern)
+  settings  Json     @default("{}")          // PosmConfig lives here (settings-backed, like VisibilityConfig)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users    User[]
+  vendors  Vendor[]
+  sites    Site[]
+  posmTypes PosmType[]
+
+  @@map("clients")
+}
+
+enum UserRole {
+  GIFSY_ADMIN   // platform operator (cross-tenant)
+  CLIENT_ADMIN  // the brand's admin (Kwality HO)
+  ASM           // approves recces
+  AUDITOR       // audits installations
+  VENDOR_HO     // vendor head-office (read-only over its fleet)
+  VENDOR_FIELD  // the 7–10 on-ground login IDs
+}
+
+/// Every human login. Vendor field IDs are User rows with role VENDOR_FIELD +
+/// vendorId set — the chassis JwtPayload already carries an optional vendorId,
+/// so vendor-fleet scoping rides the existing RBAC (blueprint: express in chassis).
+model User {
+  id        String   @id @default(cuid())
+  clientId  String
+  phone     String
+  name      String
+  role      UserRole
+  vendorId  String?                          // set for VENDOR_FIELD / VENDOR_HO
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client   Client   @relation(fields: [clientId], references: [id])
+  vendor   Vendor?  @relation(fields: [vendorId], references: [id])
+  sessions UserSession[]
+
+  // reverse relations for actor stamps
+  asmSites          Site[]         @relation("SiteAsm")
+  approvedRecces    Recce[]        @relation("RecceApprover")
+  submittedRecces   Recce[]        @relation("RecceSubmitter")
+  auditedInstalls   Installation[] @relation("InstallAuditor")
+  submittedInstalls Installation[] @relation("InstallSubmitter")
+
+  @@unique([clientId, phone])                 // one active login per (tenant, phone)
+  @@index([clientId, role])
+  @@index([vendorId])
+  @@map("users")
+}
+
+/// Rolling 7-day session with single-use refresh rotation (chassis auth pattern).
+model UserSession {
+  id                  String   @id @default(cuid())
+  userId              String
+  refreshTokenHash    String   @unique
+  rotatedFromId       String?
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  createdAt           DateTime @default(now())
+  lastSeenAt          DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  APPROVE
+  REJECT
+  EXPORT
+  IMPORT
+}
+
+/// Immutable, append-only audit trail (chassis pattern — add a thin
+/// AuditService.write() wrapper rather than 44 inline call-sites).
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  action     AuditAction
+  entityType String
+  entityId   String
+  oldValues  Json?
+  newValues  Json?
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// POSM MASTERS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Vendor {
+  id        String   @id @default(cuid())
+  clientId  String
+  code      String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id])
+  users  User[]
+  sites  Site[]
+
+  @@unique([clientId, code])
+  @@map("vendors")
+}
+
+enum SiteStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// First-class site master with its OWN authoritative geo (POSM does not
+/// bootstrap the fence reference off a KYC board-photo like loyalty does).
+model Site {
+  id        String     @id @default(cuid())
+  clientId  String
+  code      String
+  name      String
+  phone     String?
+  lat       Decimal?   @db.Decimal(10, 8)    // authoritative reference for the geo-fence
+  lng       Decimal?   @db.Decimal(11, 8)
+  town      String?
+  rsCode    String?                          // "RS" filter dimension from the brief
+  vendorId  String?                          // the vendor whose fleet services this site
+  asmUserId String?                          // approving ASM
+  status    SiteStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  client   Client         @relation(fields: [clientId], references: [id])
+  vendor   Vendor?        @relation(fields: [vendorId], references: [id])
+  asm      User?          @relation("SiteAsm", fields: [asmUserId], references: [id])
+  recces   Recce[]
+  installs Installation[]
+
+  @@unique([clientId, code])
+  @@index([clientId, vendorId])
+  @@index([clientId, asmUserId])
+  @@index([clientId, town])
+  @@map("sites")
+}
+
+model PosmType {
+  id                String   @id @default(cuid())
+  clientId          String
+  code              String
+  name              String
+  defaultDimensions Json?                    // {width,height,unit} template
+  isActive          Boolean  @default(true)
+
+  client     Client       @relation(fields: [clientId], references: [id])
+  reccePosms ReccePosm[]
+
+  @@unique([clientId, code])
+  @@map("posm_types")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PIPELINE — recce → ASM approval → installation → audit
+//   Site-level submissions (Recce / Installation) with per-POSM child rows.
+//   Max 2 POSM per site is enforced in service logic + a partial constraint.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum RecceStatus {
+  SUBMITTED
+  APPROVED     // ASM approved → unlocks installation
+  REJECTED
+}
+
+enum InstallationStatus {
+  SUBMITTED
+  AUDIT_APPROVED
+  AUDIT_REJECTED
+}
+
+/// Controlled reject-reason vocabulary (chassis reject-code pattern). Used by
+/// both the ASM (recce) and the auditor (installation) stages.
+enum RejectReasonCode {
+  BLURRY
+  WRONG_SITE
+  POSM_NOT_VISIBLE
+  GEO_MISMATCH
+  DUPLICATE_PHOTO
+  WRONG_POSM
+  DIMENSIONS_MISMATCH
+  OTHER
+}
+
+/// One live recce per site (recapture on reject bumps `version`).
+model Recce {
+  id                 String      @id @default(cuid())
+  clientId           String
+  siteId             String
+  submittedById      String                    // VENDOR_FIELD user
+  status             RecceStatus @default(SUBMITTED)
+  version            Int         @default(1)
+
+  // geo (worst/representative fixed photo — same math as loyalty geo-fence)
+  captureLat         Decimal?    @db.Decimal(10, 8)
+  captureLng         Decimal?    @db.Decimal(11, 8)
+  captureAccuracy    Int?
+  distanceMeters     Decimal?    @db.Decimal(10, 2)
+  geoFenceOk         Boolean?                    // null = unverifiable (flag, not block)
+
+  capturedAt         DateTime?                   // client shutter time
+  receivedAt         DateTime    @default(now()) // server time (clock-skew guard)
+
+  approvedById       String?                     // ASM
+  reviewedAt         DateTime?
+  rejectionReasonCode RejectReasonCode?
+  rejectionReason    String?
+
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  client       Client         @relation(fields: [clientId], references: [id])
+  site         Site           @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  submittedBy  User           @relation("RecceSubmitter", fields: [submittedById], references: [id])
+  approvedBy   User?          @relation("RecceApprover", fields: [approvedById], references: [id])
+  posms        ReccePosm[]
+  installation Installation?
+
+  @@unique([clientId, siteId])                   // one live recce per site
+  @@index([clientId, status])
+  @@map("recces")
+}
+
+/// A single POSM planned at a site during recce (max 2 per recce).
+model ReccePosm {
+  id         String   @id @default(cuid())
+  recceId    String
+  slotNo     Int                                // 1 or 2
+  posmTypeId String
+  dimensions Json                               // {width,height,unit} entered by the rep (numeric)
+  photo      Json                               // MediaValue {key, geo?} — the marked recce photo
+  markup     Json?                              // the on-image marked install-area annotation
+
+  recce      Recce      @relation(fields: [recceId], references: [id], onDelete: Cascade)
+  posmType   PosmType   @relation(fields: [posmTypeId], references: [id])
+  installPosm InstallPosm?
+
+  @@unique([recceId, slotNo])
+  @@map("recce_posms")
+}
+
+/// One installation submission per site (after its recce is APPROVED).
+model Installation {
+  id                 String             @id @default(cuid())
+  clientId           String
+  siteId             String
+  recceId            String             @unique
+  submittedById      String                             // VENDOR_FIELD user
+  status             InstallationStatus @default(SUBMITTED)
+  version            Int                @default(1)
+
+  capturedAt         DateTime?
+  receivedAt         DateTime           @default(now())
+
+  auditedById        String?                             // AUDITOR
+  auditedAt          DateTime?
+  rejectionReasonCode RejectReasonCode?
+  rejectionReason    String?
+
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  client      Client   @relation(fields: [clientId], references: [id])
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  recce       Recce    @relation(fields: [recceId], references: [id])
+  submittedBy User     @relation("InstallSubmitter", fields: [submittedById], references: [id])
+  auditedBy   User?    @relation("InstallAuditor", fields: [auditedById], references: [id])
+  posms       InstallPosm[]
+
+  @@index([clientId, status])
+  @@map("installations")
+}
+
+/// The actual installed-POSM photo, linked 1:1 to the recce POSM it fulfils.
+model InstallPosm {
+  id                     String   @id @default(cuid())
+  installationId         String
+  reccePosmId            String   @unique
+  photo                  Json                        // MediaValue {key, geo?}
+  captureLat             Decimal? @db.Decimal(10, 8)
+  captureLng             Decimal? @db.Decimal(11, 8)
+  geoFenceOk             Boolean?
+  distanceFromRecce      Decimal? @db.Decimal(10, 2) // recce↔install distance (auditor input)
+  beforeAfterDiffOk      Boolean?                    // perceptual-diff: install ≠ recce
+  qualityFlags           Json?                       // {blur, lowLight, overexposed, glare, blank, lowAccuracy}
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  reccePosm    ReccePosm    @relation(fields: [reccePosmId], references: [id])
+
+  @@map("install_posms")
+}
+
+/// Content-hash duplicate detection across the tenant (copy of VisibilityImageHash).
+model ImageHash {
+  id        String   @id @default(cuid())
+  clientId  String
+  ownerKind String                              // "RECCE" | "INSTALL" | "MANUAL"
+  ownerId   String                              // the submission id owning the photo
+  hash      String                              // SHA-256 of raw bytes
+  createdAt DateTime @default(now())
+
+  @@index([clientId, hash])
+  @@index([ownerKind, ownerId])
+  @@map("image_hashes")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MANUAL WORKFLOW — admin-configured ad-hoc tasks (skip the recce/install spine)
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum ManualTaskStatus {
+  OPEN
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+model ManualTask {
+  id           String           @id @default(cuid())
+  clientId     String
+  title        String
+  formSchema   Json                              // reuse the trimmed form engine
+  vendorId     String?                           // scoped to a vendor's fleet (or null = all)
+  status       ManualTaskStatus @default(OPEN)
+  createdAt    DateTime         @default(now())
+
+  submissions ManualTaskSubmission[]
+
+  @@index([clientId, status])
+  @@map("manual_tasks")
+}
+
+model ManualTaskSubmission {
+  id                  String           @id @default(cuid())
+  taskId              String
+  submittedById       String                     // VENDOR_FIELD user
+  formValues          Json
+  status              ManualTaskStatus @default(SUBMITTED)
+  reviewedById        String?                     // admin (direct approval)
+  rejectionReasonCode RejectReasonCode?
+  createdAt           DateTime         @default(now())
+
+  task ManualTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@map("manual_task_submissions")
+}
