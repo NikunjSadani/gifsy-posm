@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 90">
+  <!-- Heart-swirl icon -->
+  <g transform="translate(10,8)">
+    <!-- Outer left lobe -->
+    <path d="M36,10 C36,10 14,10 14,30 C14,46 36,62 36,62 C36,62 16,48 16,34 C16,22 26,16 36,16" fill="none" stroke="white" stroke-width="5" stroke-linecap="round"/>
+    <!-- Inner left swirl -->
+    <path d="M36,16 C30,16 22,22 22,32 C22,40 30,46 36,50" fill="none" stroke="white" stroke-width="5" stroke-linecap="round"/>
+    <!-- Outer right lobe -->
+    <path d="M36,10 C36,10 58,10 58,30 C58,46 36,62 36,62 C36,62 56,48 56,34 C56,22 46,16 36,16" fill="none" stroke="white" stroke-width="5" stroke-linecap="round"/>
+    <!-- Inner right swirl -->
+    <path d="M36,16 C42,16 50,22 50,32 C50,40 42,46 36,50" fill="none" stroke="white" stroke-width="5" stroke-linecap="round"/>
+    <!-- Center dot -->
+    <circle cx="36" cy="34" r="4" fill="white"/>
+  </g>
+
+  <!-- Text -->
+  <text x="84" y="38" font-family="'Arial Black', Arial, sans-serif" font-weight="900" font-size="17" fill="white" letter-spacing="2">KWALITY</text>
+  <text x="84" y="60" font-family="'Arial Black', Arial, sans-serif" font-weight="900" font-size="17" fill="white" letter-spacing="2">WALL'S<tspan font-size="10" baseline-shift="super">™</tspan></text>
+</svg>

@@ -22,7 +22,9 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // Prisma 7 no longer accepts an inline `url` here — the connection URL lives in
+  // prisma.config.ts (for Migrate) and is supplied to PrismaClient via the pg adapter
+  // (prisma/prisma.service.ts). Data model below is UNCHANGED.
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -44,6 +46,10 @@ model Client {
   vendors  Vendor[]
   sites    Site[]
   posmTypes PosmType[]
+  // Opposite relation fields required by Prisma for Recce.client / Installation.client
+  // (the relations already exist on those models; these are the mandatory back-references).
+  recces   Recce[]
+  installs Installation[]
 
   @@map("clients")
 }

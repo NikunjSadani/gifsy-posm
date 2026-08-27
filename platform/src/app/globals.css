@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/* ─── Kwality-themed brand palette (chassis defaults) ──────────────────────────
+   The real values are injected per-request into :root by the root layout via
+   buildCssVariables (--brand-primary / -dark / -light / --brand-accent). These bare
+   :root defaults keep the tokens defined even before that <style> mounts, and give the
+   whole app the Kwality look: red #E3000F header + CTAs, red #c0000d hover/press, yellow
+   #FFD200 accent, green confirm, white cards, rounded-2xl, soft shadows.
+─────────────────────────────────────────────────────────────────────────────── */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* Kwality brand */
+  --brand-primary: #E3000F;       /* red — header + primary CTAs */
+  --brand-primary-dark: #c0000d;  /* red — hover / press */
+  --brand-primary-light: #fde7e8; /* red tint — subtle backgrounds */
+  --brand-accent: #FFD200;        /* yellow — accents / reward tiers */
+  --brand-confirm: #16a34a;       /* green — confirm / success */
+
+  --card-border: #e5e7eb;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-primary-dark: var(--brand-primary-dark);
+  --color-brand-primary-light: var(--brand-primary-light);
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-confirm: var(--brand-confirm);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;   /* prevent any element overflow reaching the viewport */
+}
+
+/* Scrollbar styling — Kwality red thumb */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--brand-primary);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-primary-dark);
+}
+
+/* Loading shimmer */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Fade-in */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Pulse for alerts — Kwality red */
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(227, 0, 15, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(227, 0, 15, 0); }
+}
+.pulse-alert {
+  animation: pulse-red 2s infinite;
+}

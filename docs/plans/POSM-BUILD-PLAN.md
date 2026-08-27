@@ -83,6 +83,10 @@ Source: `C:\Users\nikun\kwality-walls-microsite`. Red `#E3000F` (header + CTAs),
 `cd api && npx jest --no-coverage` · `cd api && npx nest build` · `cd platform && npx vitest run` · `cd platform && npx tsc --noEmit`. A red suite must block deploy.
 
 ## 10. Open items
+- [x] Wave 0 backend chassis built + gates independently green (generate/build/tsc/jest) + DI boots. Accepted schema config fixes: datasource `url` moved to `prisma.config.ts` (Prisma 7 rule) + added `Client.recces`/`Client.installs` back-refs (were missing — my v0 bug).
+- [ ] **AUTH durability — MUST-FIX before prod:** the chassis uses an *in-memory* OTP store; Cloud Run `min=0` is multi-instance, so an OTP sent by one instance can't be verified by another. Add an `OtpCode` model + DB-backed store (loyalty pattern) during auth hardening. FIXED_OTP(123456) works for dev/staging now.
+- [ ] Session simplifications (v0 schema has no `clientId` on `UserSession`, no `sessionsInvalidBefore`): assume-tenant scope reverts on the ~hourly refresh; no logout-all-before-stamp. Confirm whether POSM needs durable assumed sessions / logout-all.
+- [ ] Confirm real prod/staging DB names (chassis fixed-OTP guard assumes `posm_prod`/`posm_staging`; bucket `posm-platform-files`).
 - [ ] Confirm v0 schema (§5) — the two modelling calls.
 - [ ] Scope package **B (~₹6.15L, Nec+Imp)** vs **C (~₹7.95L, full)** — needed before the Wave-3 good-to-haves.
 - [ ] Correct mock-GPS wording in proposal/Excel/demo (pre-contract).
