@@ -1,7 +1,7 @@
 # POSM Field-Execution Platform — Build Plan (living doc)
 
 > Single source of truth for this build. Update it in the same pass as any fact change (working agreement #7).
-> **Status: 2026-08-25 — foundation being scaffolded.** Client **Kwality** gave verbal approval; scope B-vs-C pending.
+> **Status: 2026-08-28 — Wave 0 (chassis) COMPLETE** — built · dual-audited · hardened · re-audited + fixed; gates green (backend 76 tests / FE 11); commits `ea338bc→96039ad` on `develop`. ▶ NEXT: Wave 1 (masters + ingestion). Client **Kwality** verbal approval; scope B-vs-C pending.
 
 ---
 
