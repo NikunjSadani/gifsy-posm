@@ -21,10 +21,12 @@ function makePrisma() {
     recce: {
       count: jest.fn().mockResolvedValue(0),
       findMany: jest.fn().mockResolvedValue([]),
+      groupBy: jest.fn().mockResolvedValue([]),
     },
     installation: {
       count: jest.fn().mockResolvedValue(0),
       findMany: jest.fn().mockResolvedValue([]),
+      groupBy: jest.fn().mockResolvedValue([]),
     },
     vendor: { findMany: jest.fn().mockResolvedValue([]) },
     manualTask: { count: jest.fn().mockResolvedValue(0) },
@@ -108,14 +110,14 @@ describe('AnalyticsService.summary — scoping', () => {
 });
 
 describe('AnalyticsService.summary — KPI math + 0-guards', () => {
-  it('rates are 0 when denominators are 0 (no divide-by-zero → 0, never NaN)', async () => {
+  it('rates are NULL when denominators are 0 (no data → null → "—", never a misleading 0)', async () => {
     const { prisma } = makePrisma(); // all counts default to 0
     const svc = new AnalyticsService(prisma);
     const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
-    expect(res.kpis.recceApprovalRatePct).toBe(0);
-    expect(res.kpis.installAuditApprovalRatePct).toBe(0);
-    expect(res.kpis.geoFencePassRatePct).toBe(0);
+    expect(res.kpis.recceApprovalRatePct).toBeNull();
+    expect(res.kpis.installAuditApprovalRatePct).toBeNull();
+    expect(res.kpis.geoFencePassRatePct).toBeNull();
     // No AUDIT_APPROVED install with timestamps → avgTurnaroundDays omitted entirely.
     expect(res.kpis).not.toHaveProperty('avgTurnaroundDays');
   });
@@ -158,7 +160,8 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
 
     expect(fns.site.groupBy.mock.calls[0][0].where).toEqual({ clientId: 'c1', vendorId: 'v-7' });
     expect(fns.vendor.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', id: 'v-7' });
-    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
+    // Counts now come from EXACT groupBy over the scoped recce set (no ROW_CAP findMany).
+    expect(fns.recce.groupBy.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
   });
 
   it('ASM: vendor universe restricted to vendors in their territory (from site groupBy)', async () => {
@@ -171,16 +174,28 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     expect(fns.vendor.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', id: { in: ['v-1'] } });
   });
 
-  it('buckets recce/install aggregates by the site vendorId and 0-guards the rates', async () => {
+  it('attributes EXACT groupBy aggregates to the site vendorId and nulls the rates on no data', async () => {
     const { prisma, fns } = makePrisma();
     fns.site.groupBy.mockResolvedValue([{ vendorId: 'v-1', _count: { _all: 4 } }]);
-    fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
-    fns.recce.findMany.mockResolvedValue([
-      { status: 'APPROVED', geoFenceOk: true, site: { vendorId: 'v-1' } },
-      { status: 'REJECTED', geoFenceOk: false, site: { vendorId: 'v-1' } },
-      { status: 'SUBMITTED', geoFenceOk: null, site: { vendorId: 'v-1' } },
+    // siteId → vendorId map (three sites all under v-1).
+    fns.site.findMany.mockResolvedValue([
+      { id: 's1', vendorId: 'v-1' }, { id: 's2', vendorId: 'v-1' }, { id: 's3', vendorId: 'v-1' },
     ]);
-    fns.installation.findMany.mockResolvedValue([]);
+    fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
+    // EXACT per-site groupBy results: 3 recces (1 APPROVED, 1 REJECTED, 1 SUBMITTED).
+    fns.recce.groupBy
+      .mockResolvedValueOnce([
+        { siteId: 's1', status: 'APPROVED', _count: { _all: 1 } },
+        { siteId: 's2', status: 'REJECTED', _count: { _all: 1 } },
+        { siteId: 's3', status: 'SUBMITTED', _count: { _all: 1 } },
+      ])
+      .mockResolvedValueOnce([
+        { siteId: 's1', geoFenceOk: true, _count: { _all: 1 } },
+        { siteId: 's2', geoFenceOk: false, _count: { _all: 1 } },
+        { siteId: 's3', geoFenceOk: null, _count: { _all: 1 } },
+      ]);
+    fns.installation.groupBy.mockResolvedValue([]);
+    fns.installation.findMany.mockResolvedValue([]); // no AUDIT_APPROVED turnaround rows
     const svc = new AnalyticsService(prisma);
     const res = await svc.vendorScorecards(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
@@ -194,6 +209,41 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     // no audited installs → null (not 0/NaN)
     expect(row.avgTurnaroundDays).toBeNull();
     expect(row.rejectedCount).toBe(1);
+    // Counts must come from groupBy, never a bounded findMany over the recce/install rows.
+    expect(fns.recce.findMany).not.toHaveBeenCalled();
+  });
+
+  it('EXACT counts do not depend on ROW_CAP: a groupBy summing past 20k rows is honored in full', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.groupBy.mockResolvedValue([{ vendorId: 'v-1', _count: { _all: 30_000 } }]);
+    fns.site.findMany.mockResolvedValue([
+      { id: 's1', vendorId: 'v-1' }, { id: 's2', vendorId: 'v-1' },
+    ]);
+    fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
+    // A single group whose exact count far exceeds ROW_CAP (20k) — the old bounded findMany
+    // would have undercounted; the groupBy _count carries the true total.
+    fns.recce.groupBy
+      .mockResolvedValueOnce([
+        { siteId: 's1', status: 'APPROVED', _count: { _all: 25_000 } },
+        { siteId: 's2', status: 'REJECTED', _count: { _all: 5_000 } },
+      ])
+      .mockResolvedValueOnce([
+        { siteId: 's1', geoFenceOk: true, _count: { _all: 25_000 } },
+      ]);
+    fns.installation.groupBy.mockResolvedValue([
+      { siteId: 's1', status: 'AUDIT_APPROVED', _count: { _all: 22_000 } },
+    ]);
+    fns.installation.findMany.mockResolvedValue([]);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.vendorScorecards(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+
+    const row = res.items[0];
+    expect(row.recced).toBe(30_000); // 25k + 5k — no ROW_CAP truncation
+    expect(row.approved).toBe(25_000);
+    expect(row.installed).toBe(22_000);
+    expect(row.audited).toBe(22_000);
+    expect(row.rejectedCount).toBe(5_000); // 5k rejected recces + 0 rejected installs
+    expect(row.recceApprovalRatePct).toBe(83.3); // approved 25k / decided (25k+5k=30k) → 83.3
   });
 });
 

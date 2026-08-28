@@ -81,6 +81,8 @@ export interface GeoPoint {
 
 export interface GeoResult {
   points: GeoPoint[];
+  /** True when the backend capped the point set (GEO_CAP) — surface a "refine filters" notice. */
+  truncated: boolean;
 }
 
 /** GET /api/analytics/records?stage=recce|install&status=&page=&limit= */
@@ -257,22 +259,22 @@ export function geoFenceLabel(ok: boolean | null | undefined): GeoFenceLabel {
 /**
  * Same-origin xlsx export URL. Rendered as an `<a href>` so the browser downloads the
  * attachment and the edge proxy injects auth — never fetched with a manual bearer header.
- * An optional stage narrows the export when the backend supports it.
+ * The backend export is always Summary + Vendor-Scorecards (no stage scoping), so the URL
+ * carries no query params — the signature no longer implies a stage-scoped export.
  */
-export function exportUrl(params: { stage?: AnalyticsStage } = {}): string {
-  const qs = new URLSearchParams();
-  if (params.stage) qs.set('stage', params.stage);
-  const s = qs.toString();
-  return s ? `/api/analytics/export?${s}` : '/api/analytics/export';
+export function exportUrl(): string {
+  return '/api/analytics/export';
 }
 
 /**
  * Serialise records-drilldown filters to a query string (leading `?` when non-empty).
- * Blank status is dropped; page 0 is preserved (not treated as absent).
+ * Blank status is dropped; page 0 is preserved (not treated as absent). An optional `vendorId`
+ * narrows the list SERVER-SIDE (admin vendor drill-down) so `total`/pagination stay correct.
  */
 export function recordsQueryString(filters: {
   stage: AnalyticsStage;
   status?: string;
+  vendorId?: string;
   page?: number;
   limit?: number;
 }): string {
@@ -280,6 +282,8 @@ export function recordsQueryString(filters: {
   params.set('stage', filters.stage);
   const status = filters.status?.trim();
   if (status) params.set('status', status);
+  const vendorId = filters.vendorId?.trim();
+  if (vendorId) params.set('vendorId', vendorId);
   if (filters.page != null) params.set('page', String(filters.page));
   if (filters.limit != null) params.set('limit', String(filters.limit));
   return `?${params.toString()}`;
@@ -317,6 +321,7 @@ export function fetchGeo(stage: AnalyticsStage): Promise<ApiResponse<GeoResult>>
 export function fetchRecords(filters: {
   stage: AnalyticsStage;
   status?: string;
+  vendorId?: string;
   page?: number;
   limit?: number;
 }): Promise<ApiResponse<RecordsResult>> {

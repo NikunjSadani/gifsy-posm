@@ -47,6 +47,7 @@ export function GeoMap({
   error,
   onRetry,
   onSelect,
+  truncated,
   title = 'Site execution map',
 }: {
   points: GeoPoint[] | null;
@@ -56,6 +57,8 @@ export function GeoMap({
   error?: string | null;
   onRetry?: () => void;
   onSelect?: (point: GeoPoint) => void;
+  /** Backend flagged the point set as capped (GEO_CAP) — show a "refine filters" notice. */
+  truncated?: boolean;
   title?: string;
 }) {
   const plottable = (points ?? []).filter((p) => p.lat != null && p.lng != null);
@@ -114,6 +117,12 @@ export function GeoMap({
           <GeoMapInner points={plottable} onSelect={onSelect} />
         )}
       </div>
+
+      {truncated && !loading && !error && (
+        <div className="px-4 py-2 border-t border-amber-100 bg-amber-50 text-xs text-amber-800">
+          Showing the first 5,000 sites — refine filters to see the rest.
+        </div>
+      )}
 
       <Legend />
     </div>

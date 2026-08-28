@@ -48,11 +48,11 @@ interface Scope {
 @Injectable()
 export class AnalyticsService {
   /**
-   * PERF (Wave-4): the turnaround average and the vendor-scorecard buckets aggregate a BOUNDED
-   * row fetch in JS rather than in SQL, because turnaround spans two tables (Installation ↔
-   * Recce) and the vendor dimension lives on the Site relation (no vendorId column on
-   * Recce/Installation to GROUP BY). At ~50k rows this should move into SQL (a view / raw
-   * aggregate). Every fetch here is scoped AND capped (ROW_CAP) so it stays bounded today.
+   * PERF (Wave-4): vendor-scorecard COUNTS are exact (Prisma groupBy, no cap) attributed to
+   * vendors via a siteId→vendorId map. Only the turnaround AVERAGE keeps a BOUNDED JS fetch,
+   * because it spans two tables (Installation ↔ Recce) with no column to GROUP BY. That fetch is
+   * scoped AND capped (ROW_CAP) so it stays bounded today; at ~50k AUDIT_APPROVED rows it should
+   * move into SQL (a view / raw aggregate).
    */
   private static readonly ROW_CAP = 20_000;
   /** Geo/heatmap hard cap (contract): report truncation past this many points. */
@@ -147,8 +147,8 @@ export class AnalyticsService {
 
     const avgTurnaroundDays = await this.avgTurnaround(s.install);
 
-    const kpis: Record<string, number> = {
-      // Approval rate = approved among DECIDED recces (approved + rejected), 0-guarded.
+    const kpis: Record<string, number | null> = {
+      // Approval rate = approved among DECIDED recces (approved + rejected); null when none.
       recceApprovalRatePct: this.pct(approved, approved + rejectedRecce),
       installAuditApprovalRatePct: this.pct(audited, audited + rejectedInstall),
       // Geo pass rate = among recces with a verifiable fix (geoFenceOk not null).
@@ -197,8 +197,11 @@ export class AnalyticsService {
   /**
    * Per-vendor scorecard rows. Admin → one row per vendor in the tenant (platform-wide for an
    * un-assumed OWNER); VENDOR_HO → ONLY their own row; ASM → vendors with a site in their
-   * territory. Site counts use Prisma groupBy (exact); recce/install aggregates are bucketed in
-   * JS over a bounded scoped fetch (vendor lives on the Site relation — no column to GROUP BY).
+   * territory. Counts (recced/approved/rejected/installed/audited + geo pass) are EXACT — Prisma
+   * groupBy over the whole scope with NO row cap — then attributed to each vendor via a
+   * siteId→vendorId map. This makes the scorecards equal the funnel's exact count() at any tenant
+   * size (the old bounded findMany silently undercounted past ROW_CAP). Only avgTurnaround (an
+   * average, not a count) keeps a bounded fetch of the far-smaller AUDIT_APPROVED set.
    */
   async vendorScorecards(user: JwtPayload) {
     const s = this.resolveScope(user);
@@ -215,6 +218,15 @@ export class AnalyticsService {
     }
     const territoryVendorIds = [...sitesByVendor.keys()];
 
+    // siteId → vendorId map (scoped, bounded by #sites) — the join key for the exact aggregates
+    // below, since Recce/Installation carry no vendorId column to GROUP BY directly.
+    const siteRows = await this.prisma.site.findMany({
+      where: s.site,
+      select: { id: true, vendorId: true },
+    });
+    const siteToVendor = new Map<string, string | null>();
+    for (const sr of siteRows) siteToVendor.set(sr.id, sr.vendorId);
+
     // The vendor universe for the caller.
     const vendorWhere: Prisma.VendorWhereInput = {};
     if (s.clientId !== undefined) vendorWhere.clientId = s.clientId;
@@ -226,21 +238,33 @@ export class AnalyticsService {
       orderBy: { code: 'asc' },
     });
 
-    // Recce/install aggregates, bucketed by the site's vendorId (bounded, scoped).
-    const [recces, installs] = await Promise.all([
-      this.prisma.recce.findMany({
+    // EXACT per-site aggregates via groupBy (NO row cap) — attributed to vendors via siteToVendor.
+    const [recceByStatus, recceByGeo, installByStatus, turnaroundRows] = await Promise.all([
+      this.prisma.recce.groupBy({
+        by: ['siteId', 'status'],
         where: s.recce,
-        select: { status: true, geoFenceOk: true, site: { select: { vendorId: true } } },
-        take: AnalyticsService.ROW_CAP,
+        _count: { _all: true },
       }),
-      this.prisma.installation.findMany({
+      this.prisma.recce.groupBy({
+        by: ['siteId', 'geoFenceOk'],
+        where: s.recce,
+        _count: { _all: true },
+      }),
+      this.prisma.installation.groupBy({
+        by: ['siteId', 'status'],
         where: s.install,
+        _count: { _all: true },
+      }),
+      // avgTurnaround only: bounded, DETERMINISTIC (orderBy) fetch of the far-smaller
+      // AUDIT_APPROVED set (Wave-4 note: an average, not a count — no funnel contradiction).
+      this.prisma.installation.findMany({
+        where: { ...s.install, status: 'AUDIT_APPROVED' },
         select: {
-          status: true,
           auditedAt: true,
           recce: { select: { receivedAt: true } },
           site: { select: { vendorId: true } },
         },
+        orderBy: { id: 'asc' },
         take: AnalyticsService.ROW_CAP,
       }),
     ]);
@@ -263,30 +287,41 @@ export class AnalyticsService {
       return b;
     };
 
-    for (const r of recces) {
-      const b = bucket(r.site?.vendorId);
+    // Recce counts by status (recced = all statuses; approved / rejected among them).
+    for (const g of recceByStatus) {
+      const b = bucket(siteToVendor.get(g.siteId));
       if (!b) continue;
-      b.recced += 1;
-      if (r.status === 'APPROVED') b.approved += 1;
-      else if (r.status === 'REJECTED') b.rejectedRecce += 1;
-      if (r.geoFenceOk !== null) {
-        b.geoDecided += 1;
-        if (r.geoFenceOk === true) b.geoTrue += 1;
-      }
+      const n = g._count._all;
+      b.recced += n;
+      if (g.status === 'APPROVED') b.approved += n;
+      else if (g.status === 'REJECTED') b.rejectedRecce += n;
     }
-    for (const i of installs) {
+    // Geo-fence pass among recces with a verifiable fix (geoFenceOk not null).
+    for (const g of recceByGeo) {
+      if (g.geoFenceOk === null) continue;
+      const b = bucket(siteToVendor.get(g.siteId));
+      if (!b) continue;
+      const n = g._count._all;
+      b.geoDecided += n;
+      if (g.geoFenceOk === true) b.geoTrue += n;
+    }
+    // Install counts by status.
+    for (const g of installByStatus) {
+      const b = bucket(siteToVendor.get(g.siteId));
+      if (!b) continue;
+      const n = g._count._all;
+      b.installed += n;
+      if (g.status === 'AUDIT_APPROVED') b.audited += n;
+      else if (g.status === 'AUDIT_REJECTED') b.rejectedInstall += n;
+    }
+    // Turnaround average (bounded set, bucketed by the install's site vendorId).
+    for (const i of turnaroundRows) {
       const b = bucket(i.site?.vendorId);
       if (!b) continue;
-      b.installed += 1;
-      if (i.status === 'AUDIT_APPROVED') {
-        b.audited += 1;
-        const received = i.recce?.receivedAt;
-        if (i.auditedAt && received) {
-          b.turnaroundSum += (i.auditedAt.getTime() - received.getTime()) / 86_400_000;
-          b.turnaroundN += 1;
-        }
-      } else if (i.status === 'AUDIT_REJECTED') {
-        b.rejectedInstall += 1;
+      const received = i.recce?.receivedAt;
+      if (i.auditedAt && received) {
+        b.turnaroundSum += (i.auditedAt.getTime() - received.getTime()) / 86_400_000;
+        b.turnaroundN += 1;
       }
     }
 
@@ -519,9 +554,12 @@ export class AnalyticsService {
 
   // ── Internals ────────────────────────────────────────────────────────────────────
 
-  /** 0–100 rate to one decimal, 0-guarded (den ≤ 0 → 0, never NaN/Infinity). */
-  private pct(num: number, den: number): number {
-    if (den <= 0) return 0;
+  /**
+   * 0–100 rate to one decimal. Returns null (→ "—" in the UI) when there is NO data to rate
+   * (den ≤ 0) rather than a misleading 0 — mirrors avgTurnaround's null-on-no-data contract.
+   */
+  private pct(num: number, den: number): number | null {
+    if (den <= 0) return null;
     return Math.round((num / den) * 1000) / 10;
   }
 

@@ -22,7 +22,7 @@ import {
   fetchGeo,
   type AnalyticsSummary,
   type VendorScorecard,
-  type GeoPoint,
+  type GeoResult,
   type AnalyticsStage,
 } from '@/lib/analytics/api';
 
@@ -37,7 +37,7 @@ const initial = <T,>(): Widget<T> => ({ loading: true, error: null, data: null }
 export default function VendorDashboardPage() {
   const [summary, setSummary] = useState<Widget<AnalyticsSummary>>(initial);
   const [scorecards, setScorecards] = useState<Widget<VendorScorecard[]>>(initial);
-  const [geo, setGeo] = useState<Widget<GeoPoint[]>>(initial);
+  const [geo, setGeo] = useState<Widget<GeoResult>>(initial);
   const [stage, setStage] = useState<AnalyticsStage>('recce');
   const [drill, setDrill] = useState<DrillTarget | null>(null);
 
@@ -56,7 +56,7 @@ export default function VendorDashboardPage() {
   const loadGeo = useCallback(async (st: AnalyticsStage) => {
     setGeo((s) => ({ ...s, loading: true, error: null }));
     const res = await fetchGeo(st);
-    setGeo(res.success ? { loading: false, error: null, data: res.data.points } : { loading: false, error: res.error, data: null });
+    setGeo(res.success ? { loading: false, error: null, data: res.data } : { loading: false, error: res.error, data: null });
   }, []);
 
   useEffect(() => {
@@ -103,7 +103,8 @@ export default function VendorDashboardPage() {
           onStageClick={(d, label) => setDrill({ ...d, title: label })}
         />
         <GeoMap
-          points={geo.data}
+          points={geo.data?.points ?? null}
+          truncated={geo.data?.truncated}
           stage={stage}
           onStageChange={setStage}
           loading={geo.loading}
@@ -119,7 +120,7 @@ export default function VendorDashboardPage() {
         error={scorecards.error}
         onRetry={loadScorecards}
         title="Your scorecard"
-        onVendorClick={(v) => setDrill({ stage, vendorName: v.vendorName, title: `${v.vendorName} — records` })}
+        onVendorClick={(v) => setDrill({ stage, vendorId: v.vendorId, title: `${v.vendorName} — records` })}
       />
 
       <DrillDownPanel target={drill} onClose={() => setDrill(null)} />

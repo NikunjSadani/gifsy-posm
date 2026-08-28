@@ -8,12 +8,12 @@
  */
 
 import { Download } from 'lucide-react';
-import { exportUrl, type AnalyticsStage } from '@/lib/analytics/api';
+import { exportUrl } from '@/lib/analytics/api';
 
-export function ExportButton({ stage, className = '' }: { stage?: AnalyticsStage; className?: string }) {
+export function ExportButton({ className = '' }: { className?: string }) {
   return (
     <a
-      href={exportUrl({ stage })}
+      href={exportUrl()}
       download
       className={`inline-flex items-center gap-2 rounded-xl bg-[var(--brand-primary)] hover:bg-[var(--brand-primary-dark)] text-white text-sm font-semibold px-4 py-2.5 active:scale-95 transition-all ${className}`}
     >

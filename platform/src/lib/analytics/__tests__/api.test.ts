@@ -145,12 +145,8 @@ describe('geoFenceLabel', () => {
 // ─── exportUrl ────────────────────────────────────────────────────────────────
 
 describe('exportUrl', () => {
-  it('builds the plain same-origin export path', () => {
+  it('builds the plain same-origin export path (no stage param — export is always Summary + Scorecards)', () => {
     expect(exportUrl()).toBe('/api/analytics/export');
-    expect(exportUrl({})).toBe('/api/analytics/export');
-  });
-  it('appends a stage filter when provided', () => {
-    expect(exportUrl({ stage: 'install' })).toBe('/api/analytics/export?stage=install');
   });
 });
 
@@ -163,6 +159,10 @@ describe('recordsQueryString', () => {
   it('drops a blank status but keeps a real one', () => {
     expect(recordsQueryString({ stage: 'recce', status: '   ' })).toBe('?stage=recce');
     expect(recordsQueryString({ stage: 'recce', status: 'APPROVED' })).toBe('?stage=recce&status=APPROVED');
+  });
+  it('serialises an optional vendorId (admin server-side drill-down) and drops a blank one', () => {
+    expect(recordsQueryString({ stage: 'recce', vendorId: 'v-9' })).toBe('?stage=recce&vendorId=v-9');
+    expect(recordsQueryString({ stage: 'recce', vendorId: '  ' })).toBe('?stage=recce');
   });
   it('serialises page (including 0) and limit', () => {
     expect(recordsQueryString({ stage: 'install', page: 0, limit: 20 })).toBe('?stage=install&page=0&limit=20');

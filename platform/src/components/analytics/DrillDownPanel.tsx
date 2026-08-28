@@ -9,9 +9,10 @@
  * honest "unavailable" tile, never a broken glyph. Geo-fence status is rendered truthfully
  * (inside / outside / not-verified) — we never claim GPS is "verified".
  *
- * The records endpoint is scoped by stage + status only (per the backend contract). When a
- * vendor is clicked, `vendorName` narrows the CURRENT page client-side and the panel says so
- * honestly rather than implying a server-side vendor filter.
+ * The records endpoint is scoped by stage + status, plus an optional admin `vendorId`. A
+ * vendor-scorecard-row click passes that row's `vendorId` so the list is filtered SERVER-SIDE —
+ * the header `total` and pagination stay correct across all pages (no client-side single-page
+ * narrowing).
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -29,8 +30,8 @@ const PAGE_SIZE = 10;
 export interface DrillTarget {
   stage: AnalyticsStage;
   status?: string;
-  /** Client-side narrowing to one vendor's rows on the current page (contract has no vendor param). */
-  vendorName?: string;
+  /** Admin vendor drill-down — narrows the records list SERVER-SIDE by this vendor's id. */
+  vendorId?: string;
   title: string;
 }
 
@@ -115,7 +116,7 @@ export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null
   const [total, setTotal] = useState(0);
 
   // Reset to page 1 whenever a new target opens.
-  const targetKey = target ? `${target.stage}|${target.status ?? ''}|${target.vendorName ?? ''}` : '';
+  const targetKey = target ? `${target.stage}|${target.status ?? ''}|${target.vendorId ?? ''}` : '';
   useEffect(() => {
     if (target) setPage(1);
   }, [targetKey, target]);
@@ -124,7 +125,7 @@ export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null
     if (!target) return;
     setLoading(true);
     setError(null);
-    const res = await fetchRecords({ stage: target.stage, status: target.status, page, limit: PAGE_SIZE });
+    const res = await fetchRecords({ stage: target.stage, status: target.status, vendorId: target.vendorId, page, limit: PAGE_SIZE });
     if (res.success) {
       setItems(res.data.items);
       setTotal(res.data.total);
@@ -142,8 +143,7 @@ export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null
 
   if (!target) return null;
 
-  const vendorFilter = target.vendorName;
-  const shown = vendorFilter ? items.filter((r) => r.vendorName === vendorFilter) : items;
+  const shown = items;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
@@ -156,7 +156,6 @@ export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null
             <h3 className="text-base font-bold text-gray-900 truncate">{target.title}</h3>
             <p className="text-xs text-gray-500 mt-0.5">
               {loading ? 'Loading…' : `${total.toLocaleString()} record${total === 1 ? '' : 's'}`}
-              {vendorFilter && ' · filtered to this vendor on the current page'}
             </p>
           </div>
           <button
@@ -191,9 +190,7 @@ export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null
                 <Inbox className="h-6 w-6" />
               </div>
               <p className="text-base font-semibold text-gray-900">No records</p>
-              <p className="text-sm text-gray-500 mt-1">
-                {vendorFilter ? 'No matching records for this vendor on this page.' : 'Nothing to show for this stage yet.'}
-              </p>
+              <p className="text-sm text-gray-500 mt-1">Nothing to show for this stage yet.</p>
             </div>
           ) : (
             <div>{shown.map((r) => <RecordRow key={r.id} r={r} />)}</div>
