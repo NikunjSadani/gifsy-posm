@@ -40,6 +40,9 @@ import { MediaModule }        from './media/media.module';
 // Manual workflow — ad-hoc admin-defined task pipeline (separate from recce→install)
 import { ManualModule }       from './manual/manual.module';
 
+// Analytics — read-only reporting over the pipeline (admin dashboard + Vendor-HO console)
+import { AnalyticsModule }    from './analytics/analytics.module';
+
 /**
  * Chassis (Wave 0) + domain masters (Wave 1) + the field pipeline (Wave 2: recce → ASM
  * approval → installation → auditor review, capture integrity, media view). The global APP_GUARD chain
@@ -87,6 +90,9 @@ import { ManualModule }       from './manual/manual.module';
 
     // Manual workflow — ad-hoc admin-defined task pipeline
     ManualModule,
+
+    // Analytics — read-only reporting (admin dashboard + Vendor-HO console)
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [
