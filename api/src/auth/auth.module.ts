@@ -18,8 +18,10 @@ import { ACCESS_TTL } from './auth.constants';
       useFactory: (config: ConfigService) => ({
         secret:      config.get('JWT_SECRET'),
         // Default access-token lifetime is the SHORT ACCESS_TTL (60m), not the 7-day session
-        // window, so the rolling session actually rolls.
-        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN') ?? ACCESS_TTL },
+        // window, so the rolling session actually rolls. Pin the signing algorithm to HS256
+        // (the verify side pins algorithms:['HS256'] to match) so tokens are minted and
+        // accepted under exactly one algorithm — no alg-confusion surface.
+        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN') ?? ACCESS_TTL, algorithm: 'HS256' },
       }),
     }),
   ],

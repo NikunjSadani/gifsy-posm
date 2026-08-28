@@ -10,7 +10,7 @@ import { User } from '@prisma/client';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { Msg91Service } from '../notifications/msg91.service';
 import { isFixedOtpAllowed } from '../common/fixed-otp';
-import { generateNumericOtp } from '../common/otp';
+import { generateNumericOtp, hashOtp } from '../common/otp';
 import {
   OTP_EXPIRY_MINUTES,
   OTP_MAX_ATTEMPTS,
@@ -29,27 +29,9 @@ import * as crypto from 'crypto';
  */
 const ROTATION_GRACE_MS = 5_000;
 
-/**
- * One issued OTP, held in memory (the POSM schema intentionally has NO OtpCode table — the
- * chassis keeps OTP state process-local). Keyed by phone. See the CHASSIS decision note in
- * docs/plans/POSM-BUILD-PLAN.md: durable/multi-instance OTP persistence is a later-wave call.
- */
-interface OtpRecord {
-  code: string;
-  expiresAt: number;
-  attempts: number;
-  sends: number[]; // send timestamps within the rolling anti-abuse window
-}
-
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-
-  /**
-   * In-memory OTP store. Per-instance (not shared across Cloud Run instances) — acceptable
-   * for the chassis; a durable store is a domain-wave decision. Pruned opportunistically.
-   */
-  private readonly otpStore = new Map<string, OtpRecord>();
 
   constructor(
     private readonly prisma:  PrismaService,
@@ -106,28 +88,61 @@ export class AuthService {
 
     const fixedOtpActive = isFixedOtpAllowed() && !!this.config.get<string>('FIXED_OTP');
 
-    // Per-phone send cap over a rolling window (anti-SMS-bombing). Skipped under the fixed-OTP
-    // bypass so UAT can request freely.
+    // Per-phone send cap over a rolling window (anti-SMS-bombing). Counted in the DB so it
+    // holds across ALL Cloud Run instances — the controller's per-IP/@Throttle is per-instance
+    // and a multi-instance distribution would bypass an in-memory cap. Skipped only under the
+    // fixed-OTP bypass so UAT can request freely.
     const now = Date.now();
-    const windowStart = now - OTP_RESEND_WINDOW_HOURS * 60 * 60 * 1000;
-    const existing = this.otpStore.get(cleanPhone);
-    const recentSends = (existing?.sends ?? []).filter((t) => t >= windowStart);
-    if (!fixedOtpActive && recentSends.length >= OTP_MAX_RESENDS_PER_WINDOW) {
-      this.logger.warn(`OTP send cap hit for ****${cleanPhone.slice(-4)}`);
-      throw new HttpException(
-        'Too many OTP requests for this number. Please wait a while before trying again.',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+    const windowStart = new Date(now - OTP_RESEND_WINDOW_HOURS * 60 * 60 * 1000);
+    if (!fixedOtpActive) {
+      const recentSends = await this.prisma.otpCode.count({
+        where: { phone: cleanPhone, purpose: 'LOGIN', createdAt: { gte: windowStart } },
+      });
+      if (recentSends >= OTP_MAX_RESENDS_PER_WINDOW) {
+        this.logger.warn(`OTP send cap hit for ****${cleanPhone.slice(-4)}`);
+        throw new HttpException(
+          'Too many OTP requests for this number. Please wait a while before trying again.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      // (A small window-boundary race can let a couple extra through under high concurrency —
+      // acceptable for an anti-abuse cap; each send still costs an SMS and the per-IP throttle
+      // bounds the concurrent source.)
     }
 
     const otp = generateNumericOtp();
-    this.otpStore.set(cleanPhone, {
-      code: otp,
-      expiresAt: now + OTP_EXPIRY_MINUTES * 60 * 1000,
-      attempts: 0,
-      sends: [...recentSends, now],
+    const expiresAt = new Date(now + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+    // Prune this phone's rows that have aged out of the send-cap window, then opportunistically
+    // sweep globally-dead rows (>1 day past a 10-min expiry) so the table stays bounded without
+    // a scheduler. In-window rows are RETAINED so the cap above counts real sends.
+    await this.prisma.otpCode.deleteMany({
+      where: { phone: cleanPhone, createdAt: { lt: windowStart } },
     });
-    this.pruneOtpStore();
+    await this.prisma.otpCode.deleteMany({
+      where: { expiresAt: { lt: new Date(now - 24 * 60 * 60 * 1000) } },
+    });
+
+    // Supersede: invalidate this phone's prior UNCONSUMED codes so only the freshest is live.
+    // (verifyOtp also reads the NEWEST unconsumed row, so this is belt-and-suspenders — a
+    // superseded code can never be verified.) Retains the rows for the send-cap count above.
+    await this.prisma.otpCode.updateMany({
+      where: { phone: cleanPhone, purpose: 'LOGIN', consumedAt: null },
+      data:  { consumedAt: new Date(now) },
+    });
+
+    // Store only the HASH of the code — a DB read cannot recover a live OTP.
+    await this.prisma.otpCode.create({
+      data: {
+        phone:       cleanPhone,
+        clientId:    clientId ?? null,
+        codeHash:    hashOtp(otp),
+        purpose:     'LOGIN',
+        channel,
+        maxAttempts: OTP_MAX_ATTEMPTS,
+        expiresAt,
+      },
+    });
 
     // Per-tenant template resolution is a later-wave concern; pass undefined (global template).
     await this.msg91.sendOtp(cleanPhone, otp, channel);
@@ -144,34 +159,44 @@ export class AuthService {
     clientId: string,
   ): Promise<{ accessToken: string; refreshToken: string; user: Partial<User> }> {
     const cleanPhone = phone.replace(/\D/g, '');
-    const record = this.otpStore.get(cleanPhone);
+
+    // Read the NEWEST unconsumed code for this phone (a fresh send supersedes older ones).
+    const record = await this.prisma.otpCode.findFirst({
+      where:   { phone: cleanPhone, purpose: 'LOGIN', consumedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
 
     if (!record) {
       throw new UnauthorizedException('No active OTP found for this number. Please request a new OTP.');
     }
-    if (record.attempts >= OTP_MAX_ATTEMPTS) {
-      this.otpStore.delete(cleanPhone);
+    if (record.attempts >= record.maxAttempts) {
       throw new ForbiddenException('Too many attempts — please request a new OTP.');
     }
-    if (Date.now() > record.expiresAt) {
-      this.otpStore.delete(cleanPhone);
+    if (new Date() > record.expiresAt) {
       throw new UnauthorizedException('OTP expired — please request a new one.');
     }
 
-    // FIXED_OTP is a dev/staging convenience bypass, gated by isFixedOtpAllowed.
+    // FIXED_OTP is a dev/staging convenience bypass, gated by isFixedOtpAllowed. Otherwise the
+    // submitted code is HASHED and compared to the stored hash (the plaintext is never stored).
     const fixedOtp = isFixedOtpAllowed() ? this.config.get<string>('FIXED_OTP') : undefined;
-    const isCorrect = fixedOtp ? otp === fixedOtp : otp === record.code;
+    const isCorrect = fixedOtp ? otp === fixedOtp : hashOtp(otp) === record.codeHash;
 
     if (!isCorrect) {
-      record.attempts += 1;
-      const remaining = OTP_MAX_ATTEMPTS - record.attempts;
+      await this.prisma.otpCode.update({
+        where: { id: record.id },
+        data:  { attempts: record.attempts + 1 },
+      });
+      const remaining = record.maxAttempts - record.attempts - 1;
       throw new UnauthorizedException(
         `Invalid OTP. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`,
       );
     }
 
-    // Consume the OTP.
-    this.otpStore.delete(cleanPhone);
+    // Consume the OTP (mark used, so it cannot be replayed).
+    await this.prisma.otpCode.update({
+      where: { id: record.id },
+      data:  { consumedAt: new Date() },
+    });
 
     // Resolve the login user — the ACTIVE account IS the login (unique (clientId, phone)).
     const user = await this.prisma.user.findFirst({
@@ -227,6 +252,7 @@ export class AuthService {
     const accessToken = this.jwt.sign(payload, {
       secret:    this.config.get('JWT_SECRET'),
       expiresIn: expiresIn as unknown as number,
+      algorithm: 'HS256', // pinned both sides (verify: jwt.strategy algorithms:['HS256'])
     });
 
     const refreshToken = crypto.randomBytes(40).toString('hex');
@@ -313,6 +339,26 @@ export class AuthService {
       throw new UnauthorizedException('Session expired — please log in again.');
     }
 
+    // ── Deactivated user (finding 5) ─────────────────────────────────────────────
+    // A user deactivated mid-session cannot roll their session forward — hard-stop within the
+    // access-token TTL. The atomic claim below already revoked live rows on the winning path,
+    // but a deactivated user must be refused even before minting a successor.
+    if (!session.user.isActive) {
+      throw new UnauthorizedException('Session expired — please log in again.');
+    }
+
+    // ── logout-all / kill-switch authority — predecessor-predates-sweep guard (finding 4) ─────
+    // If a "log out everywhere" / deactivation / reuse-detection stamped sessionsInvalidBefore
+    // AFTER this session was created, the predecessor predates the sweep and is dead — refuse
+    // regardless of the grace/reuse machinery below, so a session that existed at logout time
+    // can never be rolled forward. (The DURING-refresh race is closed by the post-mint re-read.)
+    if (
+      session.user.sessionsInvalidBefore &&
+      session.createdAt < session.user.sessionsInvalidBefore
+    ) {
+      throw new UnauthorizedException('Session expired — please log in again.');
+    }
+
     // ── Live path: unrevoked and unexpired ───────────────────────────────────────
     if (session.revokedAt === null && new Date() <= session.expiresAt) {
       // ATOMIC single-use claim: revoke THIS row in one statement; only the winner proceeds.
@@ -328,7 +374,29 @@ export class AuthService {
 
         // Mint the successor, chaining rotatedFromId back to THIS predecessor.
         // CHASSIS NOTE: assumed scope is not preserved (no clientId column on the session).
-        return this.generateTokens(session.user, { rotatedFromId: session.id });
+        const tokens = await this.generateTokens(session.user, { rotatedFromId: session.id });
+
+        // ── kill-switch authority, DURING-refresh race — clock-skew robust (finding 4) ─────
+        // A concurrent "log out everywhere" (or reuse-detection) can land AFTER the predecessor
+        // read but AROUND the successor create — the classic "successor survives the sweep" hole.
+        // RE-READ the stamp now and compare it to the PREDECESSOR's createdAt (both DB-written
+        // timestamps, robust to cross-instance clock skew). Stampers write sessionsInvalidBefore
+        // BEFORE revoking, so a sweep that missed our just-minted successor is always preceded by
+        // a committed stamp this re-read observes → we revoke our own successor and 401, leaving
+        // nothing live after logout-all.
+        const fresh = await this.prisma.user.findUnique({
+          where:  { id: session.user.id },
+          select: { sessionsInvalidBefore: true },
+        });
+        if (fresh?.sessionsInvalidBefore && session.createdAt < fresh.sessionsInvalidBefore) {
+          await this.prisma.userSession.updateMany({
+            where: { refreshTokenHash: this.hashToken(tokens.refreshToken), revokedAt: null },
+            data:  { revokedAt: new Date() },
+          });
+          throw new UnauthorizedException('Session expired — please log in again.');
+        }
+
+        return tokens;
       }
       // claim LOST: a concurrent winner revoked this row ~now — fall through.
     }
@@ -345,6 +413,13 @@ export class AuthService {
     if (!withinGrace && session.revokedAt !== null) {
       const now = new Date();
       try {
+        // STAMP sessionsInvalidBefore FIRST, then revoke (stamp-before-revoke, finding 4) — the
+        // same authority logout-all uses, so any in-flight refresh's post-mint re-read observes
+        // the stamp and drops its successor rather than surviving the lineage kill.
+        await this.prisma.user.update({
+          where: { id: session.userId },
+          data:  { sessionsInvalidBefore: now },
+        });
         await this.prisma.userSession.updateMany({
           where: { userId: session.userId, revokedAt: null },
           data:  { revokedAt: now },
@@ -371,11 +446,7 @@ export class AuthService {
 
   /** POST /v1/auth/logout-all — revoke ALL of the current user's non-revoked sessions. */
   async logoutAllSessions(user: JwtPayload): Promise<{ revoked: number }> {
-    const now = new Date();
-    const result = await this.prisma.userSession.updateMany({
-      where: { userId: user.sub, revokedAt: null },
-      data:  { revokedAt: now },
-    });
+    const revoked = await this.invalidateAllSessions(user.sub);
 
     await this.prisma.auditLog.create({
       data: {
@@ -383,12 +454,34 @@ export class AuthService {
         entityType: 'SESSION',
         entityId: user.sub,
         actorId: user.sub,
-        metadata: { event: 'logout_all_sessions', revoked: result.count },
+        metadata: { event: 'logout_all_sessions', revoked },
       },
     });
 
-    this.logger.log(`User ${user.sub} logged out of all sessions (${result.count} revoked)`);
-    return { revoked: result.count };
+    this.logger.log(`User ${user.sub} logged out of all sessions (${revoked} revoked)`);
+    return { revoked };
+  }
+
+  /**
+   * Reusable session kill-switch (finding 4) — STAMP `sessionsInvalidBefore = now` FIRST
+   * (the authority), THEN revoke every live session. Stamp-before-revoke guarantees that a
+   * concurrent refresh's post-mint re-read observes the stamp and drops its just-minted
+   * successor, so nothing can outlive the kill. Call this from logout-all AND from user
+   * deactivation (flip isActive=false, then invalidateAllSessions(userId)) so a deactivated
+   * user is evicted from the refresh path immediately, not merely within the access-token TTL.
+   * Returns the number of live sessions revoked.
+   */
+  async invalidateAllSessions(userId: string): Promise<number> {
+    const now = new Date();
+    await this.prisma.user.update({
+      where: { id: userId },
+      data:  { sessionsInvalidBefore: now },
+    });
+    const result = await this.prisma.userSession.updateMany({
+      where: { userId, revokedAt: null },
+      data:  { revokedAt: now },
+    });
+    return result.count;
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
@@ -416,14 +509,6 @@ export class AuthService {
     });
     if (!vendor || !vendor.isActive) {
       throw new ForbiddenException('This vendor account is inactive. Please contact support.');
-    }
-  }
-
-  /** Drop expired OTP records so the in-memory store stays bounded. */
-  private pruneOtpStore(): void {
-    const now = Date.now();
-    for (const [phone, rec] of this.otpStore) {
-      if (rec.expiresAt < now) this.otpStore.delete(phone);
     }
   }
 }

@@ -74,6 +74,11 @@ model User {
   role      UserRole
   vendorId  String?                          // set for VENDOR_FIELD / VENDOR_HO
   isActive  Boolean  @default(true)
+  // Session kill-switch authority (chassis auth pattern, ported from loyalty). When a
+  // "log out everywhere" / deactivation / refresh-reuse stamps this to `now`, every session
+  // whose createdAt predates it is treated as dead by refreshToken + jwt.strategy — so a
+  // racing refresh cannot outlive logout-all. Nullable: no stamp ⇒ no invalidation.
+  sessionsInvalidBefore DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -143,6 +148,46 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+/// The single purpose POSM issues OTPs for today (login). Ported as an enum (not a bare
+/// string) to mirror loyalty's OtpCode.purpose and leave room for future purposes.
+enum OtpPurpose {
+  LOGIN
+}
+
+/// Delivery channel an OTP was sent over — captured for support/diagnostics.
+enum OtpChannel {
+  SMS
+  WHATSAPP
+}
+
+/// Durable, cross-instance OTP store (chassis auth pattern, ported from loyalty's OtpCode).
+/// Replaces the former in-memory Map so the per-phone send-cap and attempt-cap hold across
+/// ALL Cloud Run instances (a per-instance Map does not). The code is stored HASHED
+/// (SHA-256, see common/otp.ts) so a DB read cannot recover a live OTP; verify hashes the
+/// submitted code and compares. `consumedAt` marks a used code; a fresh send supersedes older
+/// unconsumed rows because verify always reads the NEWEST unconsumed row for the phone.
+model OtpCode {
+  id          String      @id @default(cuid())
+  phone       String
+  clientId    String?                        // the tenant the login OTP was scoped to (nullable: unbranded caller)
+  codeHash    String                         // SHA-256 hex of the 6-digit code — never the plaintext
+  purpose     OtpPurpose  @default(LOGIN)
+  channel     OtpChannel?
+  attempts    Int         @default(0)        // wrong-code attempts against THIS code
+  maxAttempts Int         @default(3)
+  expiresAt   DateTime
+  consumedAt  DateTime?                      // set when the code is verified (loyalty's verifiedAt)
+  requestId   String?                        // MSG91 request id (light delivery handle; dormant)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([phone])
+  @@index([clientId])
+  @@index([purpose])
+  @@index([expiresAt])
+  @@map("otp_codes")
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

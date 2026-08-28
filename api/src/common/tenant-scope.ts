@@ -34,3 +34,25 @@ export function tenantScope(user: JwtPayload): string | undefined {
 export function isGifsyOperator(user: JwtPayload): boolean {
   return user.role === 'GIFSY_ADMIN';
 }
+
+/**
+ * VENDOR read/write confinement predicate (cross-vendor boundary hardening).
+ *
+ * A vendor-role login (VENDOR_FIELD / VENDOR_HO) is confined to its OWN vendor's fleet — it
+ * must NEVER see or act on another vendor's sites, recces, installations or tasks. This helper
+ * returns the `vendorId` such a user is pinned to, or `null` for any non-vendor role (which is
+ * scoped by tenant instead — see tenantScope).
+ *
+ * ⚠️ CONTRACT: EVERY vendor-facing query (any list/read/count/update whose result set can
+ * contain vendor-scoped rows — sites, recces, installations, manual tasks, reports) MUST apply
+ * this. When it returns a vendorId, AND that vendorId into the `where` (e.g.
+ * `where: { ...tenantScope, ...(v ? { vendorId: v } : {}) }`); a null result means "no vendor
+ * confinement" and the tenant scope alone governs. A vendor-role user whose token carries no
+ * vendorId is a misconfiguration — such a login is already blocked at auth
+ * (assertVendorLoginAllowed), so callers can treat a missing vendorId as fail-closed (match
+ * nothing) rather than fall through to an unscoped read.
+ */
+export function vendorScope(user: JwtPayload): string | null {
+  if (user.role !== 'VENDOR_FIELD' && user.role !== 'VENDOR_HO') return null;
+  return user.vendorId ?? null;
+}

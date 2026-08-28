@@ -20,6 +20,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       jwtFromRequest:   ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey:      secret,
+      // Pin the accepted signature algorithm to HS256 (the only alg we sign with). Without
+      // this, jsonwebtoken accepts any HMAC alg the token declares — an attacker cannot forge
+      // HS512 without the key, but pinning removes alg-confusion ambiguity as defense-in-depth.
+      algorithms:       ['HS256'],
     });
   }
 
@@ -33,10 +37,29 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     }
 
     const session = await this.prisma.userSession.findFirst({
-      where: { id: payload.sid, revokedAt: null, expiresAt: { gt: new Date() } },
+      where:   { id: payload.sid, revokedAt: null, expiresAt: { gt: new Date() } },
+      include: { user: { select: { isActive: true, sessionsInvalidBefore: true } } },
     });
 
     if (!session) {
+      throw new UnauthorizedException('Session expired or revoked — please log in again.');
+    }
+
+    // ── Deactivated user (finding 5) ─────────────────────────────────────────────
+    // Evict a deactivated user within the access-token TTL — a valid, unexpired access token
+    // stops working on its NEXT request once the account is flipped inactive.
+    if (!session.user.isActive) {
+      throw new UnauthorizedException('Account deactivated — please contact your administrator.');
+    }
+
+    // ── logout-all / kill-switch authority (finding 4) ───────────────────────────
+    // A "log out everywhere" / deactivation / reuse-detection stamps sessionsInvalidBefore; any
+    // access token whose session was created before that stamp is dead on its next request, so
+    // even a still-valid access token cannot outlive the kill by its full TTL.
+    if (
+      session.user.sessionsInvalidBefore &&
+      session.createdAt < session.user.sessionsInvalidBefore
+    ) {
       throw new UnauthorizedException('Session expired or revoked — please log in again.');
     }
 
