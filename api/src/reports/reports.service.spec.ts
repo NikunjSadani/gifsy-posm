@@ -22,7 +22,7 @@ const uniqueError = () =>
   } as never);
 
 function makePrisma() {
-  const fns = {
+  const fns: Record<string, any> = {
     client: {
       findUnique: jest.fn().mockResolvedValue({ settings: {}, name: 'Acme' }),
       findMany: jest.fn().mockResolvedValue([]),
@@ -32,8 +32,17 @@ function makePrisma() {
     installation: { count: jest.fn().mockResolvedValue(0) },
     manualTask: { count: jest.fn().mockResolvedValue(0) },
     manualTaskSubmission: { count: jest.fn().mockResolvedValue(0) },
-    emailDigestLog: { create: jest.fn().mockResolvedValue({}) },
+    emailDigestLog: {
+      create: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({}),
+    },
   };
+  // Interactive-transaction shim: run the callback with the same mock as the tx client.
+  fns.$transaction = jest.fn((arg: unknown) =>
+    typeof arg === 'function'
+      ? (arg as (tx: unknown) => unknown)(fns)
+      : Promise.all(arg as Promise<unknown>[]),
+  );
   return { prisma: fns as unknown as PrismaService, fns };
 }
 
@@ -293,6 +302,43 @@ describe('ReportsService.runDailyDigestCron', () => {
       { id: 'c1', name: 'Acme', settings: { emailReports: fullConfig({ enabled: false, sendHourLocal: 8 }) } },
     ]);
     await service.runDailyDigestCron(at8IST);
+    expect(fns.emailDigestLog.create).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('ROLLS BACK the ledger claim when the send throws (so a later hour retries that day)', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([
+      { id: 'c1', name: 'Acme', settings: { emailReports: fullConfig({ sendHourLocal: 8 }) } },
+    ]);
+    sendEmail.mockRejectedValueOnce(new Error('smtp timeout'));
+    await service.runDailyDigestCron(at8IST);
+    // The claim was created, then deleted because the send failed — no permanent lost digest.
+    expect(fns.emailDigestLog.create).toHaveBeenCalledTimes(1);
+    expect(fns.emailDigestLog.delete).toHaveBeenCalledTimes(1);
+    expect(fns.emailDigestLog.delete.mock.calls[0][0].where.clientId_digestType_forDate).toMatchObject({
+      clientId: 'c1',
+      digestType: 'DAILY_DIGEST',
+    });
+  });
+
+  it('FIRES when the current hour is AFTER sendHourLocal (retry window, not only exactly at it)', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([
+      { id: 'c1', name: 'Acme', settings: { emailReports: fullConfig({ sendHourLocal: 8 }) } },
+    ]);
+    const at12IST = new Date('2026-08-28T06:30:00Z'); // 12:00 IST, past sendHour 8
+    await service.runDailyDigestCron(at12IST);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('SKIPS when the current hour is BEFORE sendHourLocal', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([
+      { id: 'c1', name: 'Acme', settings: { emailReports: fullConfig({ sendHourLocal: 8 }) } },
+    ]);
+    const at6IST = new Date('2026-08-28T00:30:00Z'); // 06:00 IST, before sendHour 8
+    await service.runDailyDigestCron(at6IST);
     expect(fns.emailDigestLog.create).not.toHaveBeenCalled();
     expect(sendEmail).not.toHaveBeenCalled();
   });

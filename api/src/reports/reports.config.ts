@@ -45,11 +45,15 @@ function positiveHours(raw: unknown, fallback: number): number {
   return i >= 1 ? i : fallback;
 }
 
+/** Hard cap on recipients regardless of how the blob was written (defense-in-depth vs the DTO). */
+export const MAX_RECIPIENTS = 50;
+
 function cleanRecipients(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const r of raw) {
+    if (out.length >= MAX_RECIPIENTS) break; // cap the read path too — not only the PUT DTO
     if (typeof r !== 'string') continue;
     const email = r.trim();
     if (!email) continue;

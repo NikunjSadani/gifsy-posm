@@ -77,16 +77,21 @@ export class ReportsService {
     };
 
     // Read-modify-write the settings blob so the emailReports key merges in WITHOUT clobbering
-    // posmCapture / geoFence / any other sibling setting on the same tenant.
-    const client = await this.prisma.client.findUnique({
-      where: { id: user.clientId },
-      select: { settings: true },
-    });
-    const merged = mergeEmailReportsConfig(client?.settings, config);
-
-    await this.prisma.client.update({
-      where: { id: user.clientId },
-      data: { settings: merged as Prisma.InputJsonValue },
+    // posmCapture / geoFence / any other sibling setting on the same tenant. Wrapped in an
+    // interactive transaction (re-read + merge + write on one connection) to shrink the
+    // lost-update window against a concurrent settings writer. NOTE: this is a mitigation, not
+    // a hard lock — a fully race-safe fix (SELECT … FOR UPDATE / JSON-path write) is a broader
+    // settings-layer concern shared by every settings editor; tracked as a residual.
+    await this.prisma.$transaction(async (tx) => {
+      const client = await tx.client.findUnique({
+        where: { id: user.clientId },
+        select: { settings: true },
+      });
+      const merged = mergeEmailReportsConfig(client?.settings, config);
+      await tx.client.update({
+        where: { id: user.clientId },
+        data: { settings: merged as Prisma.InputJsonValue },
+      });
     });
     return config;
   }
@@ -155,7 +160,12 @@ export class ReportsService {
       try {
         const config = readEmailReportsConfig(client.settings);
         if (!config.enabled) continue;
-        if (config.sendHourLocal !== currentHour) continue;
+        // Fire from the configured hour ONWARD (not only exactly at it), so a transient send
+        // failure earlier in the day is retried on the next hourly tick until it succeeds —
+        // at-least-once WITHIN the day. The ledger (claimed below, rolled back on failure)
+        // still makes it exactly-once on success: after a successful send every later hour
+        // P2002s and skips. A digest that never succeeds by day-end is dropped (forDate rolls).
+        if (currentHour < config.sendHourLocal) continue;
         if (config.recipients.length === 0) {
           this.logger.log(
             `digest cron: "${client.name}" (${client.id}) is enabled at hour ${currentHour} but has 0 recipients — skipping`,
@@ -191,7 +201,22 @@ export class ReportsService {
 
         const html = this.buildDigestHtml(client.name, counts, now);
         const subject = this.subject(client.name, now);
-        await this.msg91.sendEmail({ to: config.recipients, subject, html });
+        try {
+          await this.msg91.sendEmail({ to: config.recipients, subject, html });
+        } catch (sendErr) {
+          // The claim was committed before the send; roll it back so a LATER hour today re-tries
+          // (never lose a day's digest to a transient SMTP failure). A rare duplicate on a
+          // partial failure is an acceptable trade for a reminder digest.
+          await this.prisma.emailDigestLog
+            .delete({
+              where: { clientId_digestType_forDate: { clientId: client.id, digestType: DAILY_DIGEST, forDate } },
+            })
+            .catch(() => undefined);
+          this.logger.error(
+            `digest cron: send failed for "${client.name}" (${client.id}) — rolled back the claim to retry this day: ${this.reason(sendErr)}`,
+          );
+          continue;
+        }
         this.logger.log(
           `digest cron: sent "${client.name}" (${client.id}) to ${config.recipients.length} recipient(s)`,
         );

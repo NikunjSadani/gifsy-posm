@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Put } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ReportsService } from './reports.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -39,7 +40,13 @@ export class ReportsController {
   /**
    * POST /v1/reports/send-now — build + email the digest to configured recipients NOW (admin
    * test; exempt from the once-per-day idempotency ledger). 400 when no recipients configured.
+   *
+   * Tightly throttled (3/min per caller, well under the global 60/min) so this manual test-send
+   * can't be looped into a bulk relay through the shared SMTP domain. Recipients are still the
+   * admin-configured list (capped at 50) — a legitimately-external ops list is inherent to the
+   * feature; the throttle bounds the abuse rate.
    */
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @Post('send-now')
   @HttpCode(HttpStatus.OK)
   sendNow(@CurrentUser() user: JwtPayload) {
