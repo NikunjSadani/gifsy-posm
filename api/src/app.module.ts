@@ -29,9 +29,17 @@ import { UsersModule }         from './users/users.module';
 import { PosmTypesModule }     from './posm-types/posm-types.module';
 import { SitesModule }         from './sites/sites.module';
 
+// Wave 2 — recce → approval → installation → audit pipeline + media view
+import { CaptureIntegrityModule } from './capture-integrity/capture-integrity.module';
+import { RecceModule }        from './recce/recce.module';
+import { InstallationModule } from './installation/installation.module';
+import { ApprovalModule }     from './approval/approval.module';
+import { AuditReviewModule }  from './audit-review/audit-review.module';
+import { MediaModule }        from './media/media.module';
+
 /**
- * Chassis (Wave 0) + domain masters (Wave 1: Vendors, Users, PosmTypes, Sites + ingestion).
- * The field pipeline (recce/install/audit) arrives in later waves. The global APP_GUARD chain
+ * Chassis (Wave 0) + domain masters (Wave 1) + the field pipeline (Wave 2: recce → ASM
+ * approval → installation → auditor review, capture integrity, media view). The global APP_GUARD chain
  * (Throttler → JwtAuth → Roles → Tenant → Permission), the response envelope interceptor,
  * and the exception filter are wired here.
  */
@@ -65,6 +73,14 @@ import { SitesModule }         from './sites/sites.module';
     UsersModule,
     PosmTypesModule,
     SitesModule,
+
+    // Wave 2 — recce → approval → installation → audit pipeline + media view
+    CaptureIntegrityModule,
+    RecceModule,
+    InstallationModule,
+    ApprovalModule,
+    AuditReviewModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers: [
