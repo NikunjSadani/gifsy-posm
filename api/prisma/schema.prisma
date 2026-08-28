@@ -487,3 +487,23 @@ model ManualTaskSubmission {
   @@index([taskId])
   @@map("manual_task_submissions")
 }
+
+/**
+ * Idempotency ledger for scheduled email digests (Wave 3d). The @@unique([clientId,
+ * digestType, forDate]) is the guard: the daily cron INSERTs a row for today before sending,
+ * and a P2002 means "already sent today" — so a restart / double-fire never double-emails.
+ * `forDate` is date-only (the digest covers one calendar day). `meta` snapshots recipients +
+ * the counts that went out (audit). Recipients themselves live in per-tenant Client.settings.
+ */
+model EmailDigestLog {
+  id         String   @id @default(cuid())
+  clientId   String
+  digestType String                                 // e.g. 'DAILY_DIGEST'
+  forDate    DateTime @db.Date                       // the calendar day covered (idempotency key)
+  sentAt     DateTime @default(now())
+  meta       Json?                                   // { recipients, counts } snapshot
+
+  @@unique([clientId, digestType, forDate])
+  @@index([clientId])
+  @@map("email_digest_logs")
+}

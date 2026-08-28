@@ -13,7 +13,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3 } from 'lucide-react';
+import { LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3, Mail } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { logout } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
@@ -28,6 +28,7 @@ const TABS = [
   { href: '/admin/sites', label: 'Sites', icon: MapPin },
   { href: '/admin/manual', label: 'Manual tasks', icon: ClipboardList },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/admin/reports', label: 'Email reports', icon: Mail },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
