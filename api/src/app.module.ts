@@ -23,9 +23,15 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { AuthModule }          from './auth/auth.module';
 import { CaptureModule }       from './capture/capture.module';
 
+// Wave 1 — domain masters + ingestion
+import { VendorsModule }       from './vendors/vendors.module';
+import { UsersModule }         from './users/users.module';
+import { PosmTypesModule }     from './posm-types/posm-types.module';
+import { SitesModule }         from './sites/sites.module';
+
 /**
- * Wave 0 CHASSIS — infra modules only. NO POSM domain modules (recce/install/audit/
- * vendor/site/masters) — those arrive in later waves. The global APP_GUARD chain
+ * Chassis (Wave 0) + domain masters (Wave 1: Vendors, Users, PosmTypes, Sites + ingestion).
+ * The field pipeline (recce/install/audit) arrives in later waves. The global APP_GUARD chain
  * (Throttler → JwtAuth → Roles → Tenant → Permission), the response envelope interceptor,
  * and the exception filter are wired here.
  */
@@ -53,6 +59,12 @@ import { CaptureModule }       from './capture/capture.module';
     NotificationsModule,
     AuthModule,
     CaptureModule,
+
+    // Wave 1 — domain masters + ingestion
+    VendorsModule,
+    UsersModule,
+    PosmTypesModule,
+    SitesModule,
   ],
   controllers: [AppController],
   providers: [
