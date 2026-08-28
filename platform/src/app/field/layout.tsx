@@ -10,7 +10,7 @@
  *   My Work). Content is padded to clear the fixed bottom nav + iOS safe-area.
  */
 
-import { MapPin, Compass, ClipboardList } from 'lucide-react';
+import { MapPin, Compass, ClipboardList, ListChecks } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { NavBottom, type NavItem } from '@/components/layout/nav-bottom';
 import { FieldHeader } from '@/components/field/field-header';
@@ -19,6 +19,7 @@ import { FIELD_ROLES } from '@/lib/field/config';
 const NAV: NavItem[] = [
   { href: '/field/sites', label: 'Sites', icon: MapPin },
   { href: '/field/nearby', label: 'Nearby', icon: Compass },
+  { href: '/field/tasks', label: 'Tasks', icon: ListChecks },
   { href: '/field/work', label: 'My Work', icon: ClipboardList },
 ];
 

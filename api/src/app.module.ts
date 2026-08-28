@@ -37,6 +37,9 @@ import { ApprovalModule }     from './approval/approval.module';
 import { AuditReviewModule }  from './audit-review/audit-review.module';
 import { MediaModule }        from './media/media.module';
 
+// Manual workflow — ad-hoc admin-defined task pipeline (separate from recce→install)
+import { ManualModule }       from './manual/manual.module';
+
 /**
  * Chassis (Wave 0) + domain masters (Wave 1) + the field pipeline (Wave 2: recce → ASM
  * approval → installation → auditor review, capture integrity, media view). The global APP_GUARD chain
@@ -81,6 +84,9 @@ import { MediaModule }        from './media/media.module';
     ApprovalModule,
     AuditReviewModule,
     MediaModule,
+
+    // Manual workflow — ad-hoc admin-defined task pipeline
+    ManualModule,
   ],
   controllers: [AppController],
   providers: [

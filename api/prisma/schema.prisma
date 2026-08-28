@@ -418,40 +418,72 @@ model ImageHash {
 // MANUAL WORKFLOW — admin-configured ad-hoc tasks (skip the recce/install spine)
 // ═════════════════════════════════════════════════════════════════════════════
 
-enum ManualTaskStatus {
+// A manual task's own lifecycle (accepting submissions vs archived) — distinct from a
+// submission's review lifecycle below. The v0 scaffolding conflated both into one enum.
+enum ManualTaskState {
   OPEN
+  CLOSED
+}
+
+// A manual-task submission's review lifecycle — direct admin approval (no ASM/auditor stage).
+enum ManualSubmissionStatus {
   SUBMITTED
   APPROVED
   REJECTED
 }
 
+/**
+ * ManualTask — an ad-hoc, admin-defined task (survey / checklist / photo capture) OUTSIDE the
+ * recce→install pipeline. The `formSchema` reuses the trimmed capture form engine
+ * (visibility-types: TEXT / CAMERA / GPS_POINT …), so a task can require typed answers, photos
+ * (stored media keys), and per-photo geo. `vendorId = null` targets every vendor fleet in the
+ * tenant; a value scopes it to one fleet. Direct admin approval — no ASM/auditor.
+ */
 model ManualTask {
-  id           String           @id @default(cuid())
+  id           String          @id @default(cuid())
   clientId     String
   title        String
-  formSchema   Json                              // reuse the trimmed form engine
-  vendorId     String?                           // scoped to a vendor's fleet (or null = all)
-  status       ManualTaskStatus @default(OPEN)
-  createdAt    DateTime         @default(now())
+  description  String?
+  formSchema   Json                              // reuse the trimmed capture form engine
+  vendorId     String?                           // null = all fleets in the tenant
+  dueDate      DateTime?                          // optional deadline (drives reminder emails)
+  status       ManualTaskState @default(OPEN)
+  createdById  String                             // admin who defined the task
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   submissions ManualTaskSubmission[]
 
   @@index([clientId, status])
+  @@index([clientId, vendorId])
   @@map("manual_tasks")
 }
 
+/**
+ * One field-user submission for a ManualTask. `formValues` holds the answers keyed by field id
+ * (media fields carry `{key, geo?}` MediaValues). One live submission per (task, submitter); a
+ * REJECTED one is re-captured in place (version bumps). `clientId` is denormalized so tenant
+ * scoping needs no join. Reviewed directly by an admin.
+ */
 model ManualTaskSubmission {
-  id                  String           @id @default(cuid())
-  taskId              String
-  submittedById       String                     // VENDOR_FIELD user
-  formValues          Json
-  status              ManualTaskStatus @default(SUBMITTED)
-  reviewedById        String?                     // admin (direct approval)
-  rejectionReasonCode RejectReasonCode?
-  createdAt           DateTime         @default(now())
+  id              String                 @id @default(cuid())
+  clientId        String                                    // denormalized for tenant scoping
+  taskId          String
+  submittedById   String                                    // VENDOR_FIELD user
+  vendorId        String?                                   // submitter's fleet at submit time
+  formValues      Json
+  status          ManualSubmissionStatus @default(SUBMITTED)
+  version         Int                    @default(1)
+  reviewedById    String?                                   // admin (direct approval)
+  reviewedAt      DateTime?
+  rejectionReason String?                                   // free-text (arbitrary tasks)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
 
   task ManualTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
+  @@unique([taskId, submittedById])
+  @@index([clientId, status])
   @@index([taskId])
   @@map("manual_task_submissions")
 }
