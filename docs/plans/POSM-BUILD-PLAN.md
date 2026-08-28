@@ -83,6 +83,14 @@ Source: `C:\Users\nikun\kwality-walls-microsite`. Red `#E3000F` (header + CTAs),
 `cd api && npx jest --no-coverage` · `cd api && npx nest build` · `cd platform && npx vitest run` · `cd platform && npx tsc --noEmit`. A red suite must block deploy.
 
 ## 10. Open items
+
+**Wave 2 anti-fraud residuals (dual-audited 2026-08-28 — documented, NOT silently dropped):**
+- **mock-GPS / geo-fence is ADVISORY** — the fence trusts client-supplied coords; a PWA cannot attest GPS. Compensating controls built: fail-closed-on-missing-geo (fence on), before≠after hard-block, impossible-travel, three-way geo cross-check, GPS-accuracy caps. Full close ⇒ native wrapper (TWA/Capacitor). This is the same fact as the owed mock-GPS deliverable-wording fix.
+- **before≠after (16×16 aHash)** catches lazy/identical reuse (identical → hard-block); a determined crop/rotate/re-compress evades perceptual hashing — auditor + geo-distance are the backstop.
+- **no cross-site PERCEPTUAL dedup** (exact-SHA cross-site only) — a re-compressed photo reused per site evades exact-dup. Candidate: store+compare aHash cross-site.
+- **media-view is tenant-scoped, not vendor-scoped** (mitigated: unguessable keys, no in-surface path to another vendor's key). Candidate hardening: vendor-scope the view.
+- **geo-fence DEFAULTS DISABLED on malformed/empty tenant settings** (deliberate — never hard-block a legit submit on misconfig). ⇒ the fence MUST be explicitly configured per tenant at go-live.
+
 - [x] Wave 0 backend chassis built + gates independently green (generate/build/tsc/jest) + DI boots. Accepted schema config fixes: datasource `url` moved to `prisma.config.ts` (Prisma 7 rule) + added `Client.recces`/`Client.installs` back-refs (were missing — my v0 bug).
 - [ ] **AUTH durability — MUST-FIX before prod:** the chassis uses an *in-memory* OTP store; Cloud Run `min=0` is multi-instance, so an OTP sent by one instance can't be verified by another. Add an `OtpCode` model + DB-backed store (loyalty pattern) during auth hardening. FIXED_OTP(123456) works for dev/staging now.
 - [ ] Session simplifications (v0 schema has no `clientId` on `UserSession`, no `sessionsInvalidBefore`): assume-tenant scope reverts on the ~hourly refresh; no logout-all-before-stamp. Confirm whether POSM needs durable assumed sessions / logout-all.
