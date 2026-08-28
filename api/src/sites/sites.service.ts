@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
-import { tenantScope, vendorScope } from '../common/tenant-scope';
+import { tenantScope, vendorScope, platformWide } from '../common/tenant-scope';
+import { normalizeIndianPhone } from '../common/phone';
 import { aoaToSheetSafe } from '../common/xlsx';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
@@ -32,7 +33,14 @@ interface SiteErrorRow {
   error_remarks: string;
 }
 
-/** A validated, resolved upload row ready to upsert. */
+/**
+ * A validated, resolved upload row ready to upsert.
+ *
+ * `present` records which SOURCE CELLS were non-empty (F3). On the upsert UPDATE branch a
+ * column is written ONLY when its source cell was non-empty, so a blank cell LEAVES the
+ * existing value unchanged (never null-outs vendorId/asmUserId/lat/lng/phone/town/rsCode/
+ * status). The CREATE branch always writes the resolved values (blank → null / default).
+ */
 interface SiteSuccessRow {
   code: string;
   name: string;
@@ -44,7 +52,19 @@ interface SiteSuccessRow {
   vendorId: string | null;
   asmUserId: string | null;
   status: SiteStatus;
+  present: {
+    phone: boolean;
+    latlng: boolean;
+    town: boolean;
+    rsCode: boolean;
+    vendor: boolean;
+    asm: boolean;
+    status: boolean;
+  };
 }
+
+/** F2: hard cap on data rows per bulk upload — bounds per-request work on an untrusted file. */
+const MAX_UPLOAD_ROWS = 5000;
 
 /**
  * Wave-1 Site master service — CRUD + Excel bulk-ingestion + role-scoped listing.
@@ -131,6 +151,10 @@ export class SitesService {
 
   // ── Create ─────────────────────────────────────────────────────────────────────
   async create(user: JwtPayload, dto: CreateSiteDto) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    if (platformWide(user)) {
+      throw new BadRequestException('Assume a tenant before creating tenant data.');
+    }
     const clientId = user.clientId;
     await this.assertRefsInTenant(clientId, dto.vendorId, dto.asmUserId);
 
@@ -206,6 +230,10 @@ export class SitesService {
 
   // ── Bulk upload ────────────────────────────────────────────────────────────────
   async bulkUpload(user: JwtPayload, file: Express.Multer.File | undefined) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    if (platformWide(user)) {
+      throw new BadRequestException('Assume a tenant before creating tenant data.');
+    }
     if (!file) {
       throw new BadRequestException(
         'No file provided. Attach an .xlsx or .xls file with the field name "file".',
@@ -242,6 +270,14 @@ export class SitesService {
     if (missing.length > 0) {
       throw new BadRequestException(
         `Missing required columns: ${missing.join(', ')}. Please use the downloaded template.`,
+      );
+    }
+
+    // F2: reject an oversized sheet BEFORE the per-row loop (each row does DB lookups).
+    if (rows.length > MAX_UPLOAD_ROWS) {
+      throw new BadRequestException(
+        `Too many rows (${rows.length}). The maximum per upload is ${MAX_UPLOAD_ROWS}. ` +
+          'Please split the file and upload in batches.',
       );
     }
 
@@ -327,8 +363,9 @@ export class SitesService {
       // Resolve asm_phone → asmUserId (must be an ASM in the tenant).
       let asmUserId: string | null = null;
       if (asmPhone !== '') {
+        // Match the ASM User by canonical E.164 (users are stored normalized — F5).
         const asm = await this.prisma.user.findUnique({
-          where: { clientId_phone: { clientId, phone: asmPhone } },
+          where: { clientId_phone: { clientId, phone: normalizeIndianPhone(asmPhone) } },
           select: { id: true, role: true },
         });
         if (!asm) {
@@ -348,6 +385,17 @@ export class SitesService {
         town: town || null,
         rsCode: rsCode || null,
         vendorId, asmUserId, status,
+        // F3: which source cells were non-empty — the UPDATE branch writes ONLY these, so a
+        // blank cell leaves the existing value untouched (lat/lng are a paired unit).
+        present: {
+          phone: phone !== '',
+          latlng: lat !== null && lng !== null,
+          town: town !== '',
+          rsCode: rsCode !== '',
+          vendor: vendorCode !== '',
+          asm: asmPhone !== '',
+          status: statusRaw !== '',
+        },
       });
     }
 
@@ -363,10 +411,18 @@ export class SitesService {
             lat: r.lat, lng: r.lng, town: r.town, rsCode: r.rsCode,
             vendorId: r.vendorId, asmUserId: r.asmUserId, status: r.status,
           },
+          // F3: UPDATE only the columns whose source cell was non-empty. `name` is required
+          // (a blank name row is rejected upstream) so it is always written; every other
+          // column is gated on `present.*` so a blank cell preserves the existing value.
           update: {
-            name: r.name, phone: r.phone,
-            lat: r.lat, lng: r.lng, town: r.town, rsCode: r.rsCode,
-            vendorId: r.vendorId, asmUserId: r.asmUserId, status: r.status,
+            name: r.name,
+            ...(r.present.phone ? { phone: r.phone } : {}),
+            ...(r.present.latlng ? { lat: r.lat, lng: r.lng } : {}),
+            ...(r.present.town ? { town: r.town } : {}),
+            ...(r.present.rsCode ? { rsCode: r.rsCode } : {}),
+            ...(r.present.vendor ? { vendorId: r.vendorId } : {}),
+            ...(r.present.asm ? { asmUserId: r.asmUserId } : {}),
+            ...(r.present.status ? { status: r.status } : {}),
           },
         }),
       );

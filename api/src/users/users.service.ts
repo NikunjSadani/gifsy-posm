@@ -9,7 +9,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
-import { tenantScope } from '../common/tenant-scope';
+import { tenantScope, platformWide } from '../common/tenant-scope';
+import { normalizeIndianPhone } from '../common/phone';
 import { CreateUserDto, ManagedRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
@@ -77,14 +78,19 @@ export class UsersService {
   // ── Writes ─────────────────────────────────────────────────────────────────────
 
   async create(user: JwtPayload, dto: CreateUserDto) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    this.assertTenantContext(user);
     const clientId = user.clientId; // writes pin to the caller's tenant
+    // F5: canonicalise to E.164 BEFORE the uniqueness check + store so the two typed forms
+    // (`9830011252` / `+919830011252`) collapse to one identity.
+    const phone = normalizeIndianPhone(dto.phone);
     await this.assertVendorLinkage(clientId, dto.role, dto.vendorId ?? null);
 
     try {
       const created = await this.prisma.user.create({
         data: {
           clientId,
-          phone: dto.phone,
+          phone,
           name: dto.name,
           role: dto.role,
           vendorId: dto.vendorId ?? null,
@@ -94,7 +100,7 @@ export class UsersService {
       await this.audit(user, 'CREATE', created.id, undefined, created);
       return created;
     } catch (e) {
-      this.rethrowDuplicate(e, dto.phone);
+      this.rethrowDuplicate(e, phone);
     }
   }
 
@@ -107,11 +113,24 @@ export class UsersService {
       dto.vendorId === undefined ? existing.vendorId : dto.vendorId;
     await this.assertVendorLinkage(existing.clientId, nextRole, nextVendorId);
 
+    // F5: canonicalise a supplied phone to E.164 before the uniqueness check + store.
+    const nextPhone =
+      dto.phone !== undefined ? normalizeIndianPhone(dto.phone) : undefined;
+
+    // F6: an update that DEACTIVATES or DEMOTES-away-from-CLIENT_ADMIN must not lock the
+    // tenant out — block self-target and last-active-admin removal BEFORE mutating.
+    const deactivating = dto.isActive === false && existing.isActive;
+    const demotingFromAdmin =
+      existing.role === 'CLIENT_ADMIN' && nextRole !== 'CLIENT_ADMIN';
+    if (deactivating || demotingFromAdmin) {
+      await this.assertNotTenantLockout(user, existing);
+    }
+
     try {
       const updated = await this.prisma.user.update({
         where: { id: existing.id },
         data: {
-          ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+          ...(nextPhone !== undefined ? { phone: nextPhone } : {}),
           ...(dto.name !== undefined ? { name: dto.name } : {}),
           ...(dto.role !== undefined ? { role: dto.role } : {}),
           ...(dto.vendorId !== undefined ? { vendorId: dto.vendorId } : {}),
@@ -121,14 +140,19 @@ export class UsersService {
       });
       await this.audit(user, 'UPDATE', updated.id, existing, updated);
 
-      // A reactivation (false→true) needs no eviction; a deactivation via update MUST still
-      // evict live sessions, exactly like the DELETE path.
-      if (dto.isActive === false && existing.isActive) {
+      // Session-eviction triggers (immediate enforcement, not merely within the access-token
+      // TTL). A reactivation (false→true) needs no eviction; otherwise evict when:
+      //  - the update DEACTIVATES (isActive true→false), OR
+      //  - the effective role OR vendorId ACTUALLY CHANGES (F4) — a demotion / vendor
+      //    re-scope must bite now, so a stale token can't keep acting under the old grant.
+      const roleOrVendorChanged =
+        nextRole !== existing.role || nextVendorId !== existing.vendorId;
+      if (deactivating || roleOrVendorChanged) {
         await this.authService.invalidateAllSessions(updated.id);
       }
       return updated;
     } catch (e) {
-      this.rethrowDuplicate(e, dto.phone ?? existing.phone);
+      this.rethrowDuplicate(e, nextPhone ?? existing.phone);
     }
   }
 
@@ -138,6 +162,8 @@ export class UsersService {
    */
   async deactivate(user: JwtPayload, id: string) {
     const existing = await this.findScopedOrThrow(user, id);
+    // F6: never let a caller deactivate themselves, nor strip the tenant's last active admin.
+    await this.assertNotTenantLockout(user, existing);
     const updated = await this.prisma.user.update({
       where: { id: existing.id },
       data: { isActive: false },
@@ -168,17 +194,55 @@ export class UsersService {
           `A ${role} user must be linked to a vendor (vendorId is required).`,
         );
       }
+      // F7: an inactive (soft-deleted) vendor must not accept new logins — require isActive.
       const vendor = await this.prisma.vendor.findFirst({
-        where: { id: vendorId, clientId },
+        where: { id: vendorId, clientId, isActive: true },
         select: { id: true },
       });
       if (!vendor) {
-        throw new BadRequestException('vendorId does not match a vendor in this tenant.');
+        throw new BadRequestException('vendorId does not match an active vendor in this tenant.');
       }
     } else if (vendorId) {
       throw new BadRequestException(
         `A ${role} user must not be linked to a vendor (remove vendorId).`,
       );
+    }
+  }
+
+  /**
+   * F8: refuse a tenant-data WRITE from an un-assumed GIFSY_ADMIN (no tenant context — its
+   * clientId is the platform tenant). Reads stay platform-wide; only writes are gated. An
+   * ASSUMED operator (working inside a brand) and every tenant admin pass.
+   */
+  private assertTenantContext(user: JwtPayload): void {
+    if (platformWide(user)) {
+      throw new BadRequestException('Assume a tenant before creating tenant data.');
+    }
+  }
+
+  /**
+   * F6 tenant lock-out guards — for an operation that DEACTIVATES or DEMOTES-away-from
+   * CLIENT_ADMIN a target user:
+   *  (a) a caller may not deactivate/demote THEMSELVES (compare target id to `user.sub`);
+   *  (b) the LAST active CLIENT_ADMIN of the tenant may not be removed (count active admins
+   *      in the tenant; the target counts itself, so <= 1 means it is the last).
+   */
+  private async assertNotTenantLockout(
+    user: JwtPayload,
+    existing: { id: string; clientId: string; role: string; isActive: boolean },
+  ): Promise<void> {
+    if (existing.id === user.sub) {
+      throw new BadRequestException('You cannot deactivate or demote your own account.');
+    }
+    if (existing.role === 'CLIENT_ADMIN' && existing.isActive) {
+      const activeAdmins = await this.prisma.user.count({
+        where: { clientId: existing.clientId, role: 'CLIENT_ADMIN', isActive: true },
+      });
+      if (activeAdmins <= 1) {
+        throw new BadRequestException(
+          'Cannot deactivate or demote the last active CLIENT_ADMIN of this tenant.',
+        );
+      }
     }
   }
 

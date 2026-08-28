@@ -2,12 +2,13 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
-import { tenantScope } from '../common/tenant-scope';
+import { tenantScope, platformWide } from '../common/tenant-scope';
 import { CreateVendorDto } from './dto/create-vendor.dto';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
 
@@ -53,6 +54,10 @@ export class VendorsService {
   // ── Writes ─────────────────────────────────────────────────────────────────────
 
   async create(user: JwtPayload, dto: CreateVendorDto) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    if (platformWide(user)) {
+      throw new BadRequestException('Assume a tenant before creating tenant data.');
+    }
     const clientId = user.clientId; // writes pin to the caller's tenant
     try {
       const vendor = await this.prisma.vendor.create({

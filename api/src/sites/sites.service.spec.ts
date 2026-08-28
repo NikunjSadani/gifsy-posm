@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { SitesService } from './sites.service';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -93,5 +94,16 @@ describe('SitesService.list — role scoping', () => {
     const where = findMany.mock.calls[0][0].where;
     expect(where.name).toEqual({ contains: 'foo', mode: 'insensitive' });
     expect(where.town).toEqual({ contains: 'bar', mode: 'insensitive' });
+  });
+});
+
+// ── F8 — an un-assumed GIFSY_ADMIN cannot create a site (no tenant context) ────────
+describe('SitesService.create — F8 tenant-context write gate', () => {
+  it('rejects create from an un-assumed GIFSY_ADMIN (400)', async () => {
+    const prisma = { site: { create: jest.fn() } } as unknown as PrismaService;
+    const svc = new SitesService(prisma);
+    await expect(
+      svc.create(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), { code: 'A1', name: 'Alpha' } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

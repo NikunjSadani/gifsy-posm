@@ -33,7 +33,9 @@ export class SitesController {
   @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
   @Post('bulk-upload')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('file'))
+  // F2: cap the raw upload at 5 MB — a larger multipart part is rejected by Multer before it
+  // ever reaches the parser, bounding the memory/CPU an untrusted upload can consume.
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   bulkUpload(@CurrentUser() user: JwtPayload, @UploadedFile() file: Express.Multer.File) {
     return this.sites.bulkUpload(user, file);
   }

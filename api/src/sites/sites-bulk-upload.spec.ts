@@ -37,8 +37,10 @@ function makePrisma() {
   const vendorFindUnique = jest.fn().mockImplementation(({ where }) =>
     where.clientId_code.code === 'VC1' ? Promise.resolve({ id: 'v1' }) : Promise.resolve(null),
   );
+  // Users are stored E.164-normalized (F5); the service normalizes the sheet's asm_phone
+  // cell ('9811111111') to '+919811111111' before this lookup.
   const userFindUnique = jest.fn().mockImplementation(({ where }) =>
-    where.clientId_phone.phone === '9811111111'
+    where.clientId_phone.phone === '+919811111111'
       ? Promise.resolve({ id: 'asm1', role: 'ASM' })
       : Promise.resolve(null),
   );
@@ -147,5 +149,58 @@ describe('SitesService.bulkUpload', () => {
     await expect(
       svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File),
     ).rejects.toThrow(/Missing required columns/i);
+  });
+
+  // ── F2 — row cap ───────────────────────────────────────────────────────────────
+  it('F2: rejects an upload exceeding the 5000-row cap (before any per-row work)', async () => {
+    const { prisma, upsert } = makePrisma();
+    const svc = new SitesService(prisma);
+    const many = Array.from({ length: 5001 }, (_, i) => [`C${i}`, `N${i}`, '', '', '', '', '', '', '', '']);
+    const buffer = buildXlsxBuffer(many);
+    await expect(
+      svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File),
+    ).rejects.toThrow(/Too many rows/i);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  // ── F3 — a blank cell must PRESERVE the existing value on UPDATE ─────────────────
+  it('F3: a blank cell leaves the existing value unchanged on UPDATE (only name written)', async () => {
+    const { prisma, upsert } = makePrisma();
+    const svc = new SitesService(prisma);
+    // code + name present; every optional cell blank.
+    const buffer = buildXlsxBuffer([['EXIST', 'New Name', '', '', '', '', '', '', '', '']]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(1);
+    // UPDATE writes ONLY name — no phone/lat/lng/town/rsCode/vendorId/asmUserId/status keys,
+    // so a blank cell can never null-out an existing value.
+    expect(upsert.mock.calls[0][0].update).toEqual({ name: 'New Name' });
+    // CREATE (first-insert branch) still carries the full nullable payload + default status.
+    expect(upsert.mock.calls[0][0].create).toMatchObject({
+      code: 'EXIST', name: 'New Name', phone: null, lat: null, lng: null,
+      town: null, rsCode: null, vendorId: null, asmUserId: null, status: 'ACTIVE',
+    });
+  });
+
+  it('F3: a NON-empty cell IS written on UPDATE', async () => {
+    const { prisma, upsert } = makePrisma();
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([['EXIST', 'N', '9876500000', 12.9, 77.6, 'T', 'RS', 'VC1', '9811111111', 'INACTIVE']]);
+    await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(upsert.mock.calls[0][0].update).toMatchObject({
+      name: 'N', phone: '9876500000', lat: 12.9, lng: 77.6, town: 'T',
+      rsCode: 'RS', vendorId: 'v1', asmUserId: 'asm1', status: 'INACTIVE',
+    });
+  });
+
+  // ── F8 — an un-assumed GIFSY_ADMIN cannot ingest tenant data ─────────────────────
+  it('F8: an un-assumed GIFSY_ADMIN is refused (400), no parsing/DB work', async () => {
+    const { prisma, upsert } = makePrisma();
+    const svc = new SitesService(prisma);
+    const gifsy = { sub: 'op1', role: 'GIFSY_ADMIN', clientId: 'gifsy', phone: '9', name: 'Op' } as unknown as JwtPayload;
+    const buffer = buildXlsxBuffer([['A1', 'Alpha', '', '', '', '', '', '', '', '']]);
+    await expect(
+      svc.bulkUpload(gifsy, { originalname: 'x.xlsx', buffer } as Express.Multer.File),
+    ).rejects.toThrow(/Assume a tenant/i);
+    expect(upsert).not.toHaveBeenCalled();
   });
 });

@@ -3,7 +3,7 @@
 // cross-tenant by-id 404, duplicate-code 409, audit rows on every mutation.
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { VendorsService } from './vendors.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -71,6 +71,18 @@ describe('VendorsService', () => {
       mockPrisma.vendor.create.mockRejectedValue(dupError());
       await expect(service.create(clientAdmin, { code: 'V1', name: 'Acme' })).rejects.toBeInstanceOf(ConflictException);
       expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    // F8 — an un-assumed GIFSY_ADMIN has no tenant context → cannot create tenant data.
+    it('rejects create from an un-assumed GIFSY_ADMIN (400), never touching the DB', async () => {
+      await expect(service.create(owner, { code: 'V1', name: 'Acme' })).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.vendor.create).not.toHaveBeenCalled();
+    });
+
+    it('ALLOWS create from an ASSUMED GIFSY operator', async () => {
+      mockPrisma.vendor.create.mockResolvedValue({ id: 'v1', clientId: 'kwality', code: 'V1', name: 'Acme', isActive: true, createdAt: new Date() });
+      await service.create(assumedOwner, { code: 'V1', name: 'Acme' });
+      expect(mockPrisma.vendor.create).toHaveBeenCalled();
     });
   });
 

@@ -11,6 +11,7 @@ import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { Msg91Service } from '../notifications/msg91.service';
 import { isFixedOtpAllowed } from '../common/fixed-otp';
 import { generateNumericOtp, hashOtp } from '../common/otp';
+import { normalizeIndianPhone } from '../common/phone';
 import {
   OTP_EXPIRY_MINUTES,
   OTP_MAX_ATTEMPTS,
@@ -75,8 +76,9 @@ export class AuthService {
     // clientId is absent (unbranded caller). Runs even under the FIXED_OTP bypass so it is
     // testable on staging.
     if (clientId) {
+      // Match the User row by its canonical E.164 phone (users are stored normalized).
       const account = await this.prisma.user.findFirst({
-        where: { phone: cleanPhone, clientId, isActive: true },
+        where: { phone: normalizeIndianPhone(cleanPhone), clientId, isActive: true },
         select: { id: true },
       });
       if (!account) {
@@ -199,8 +201,9 @@ export class AuthService {
     });
 
     // Resolve the login user — the ACTIVE account IS the login (unique (clientId, phone)).
+    // Match by canonical E.164 phone (users are stored normalized).
     const user = await this.prisma.user.findFirst({
-      where: { phone: cleanPhone, clientId, isActive: true },
+      where: { phone: normalizeIndianPhone(cleanPhone), clientId, isActive: true },
     });
     if (!user) {
       throw new UnauthorizedException(

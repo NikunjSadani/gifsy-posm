@@ -3,7 +3,7 @@
 // duplicate-code 409, audit rows on every mutation.
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PosmTypesService } from './posm-types.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -63,6 +63,19 @@ describe('PosmTypesService', () => {
     it('a duplicate (clientId, code) surfaces as a 409', async () => {
       mockPrisma.posmType.create.mockRejectedValue(dupError());
       await expect(service.create(clientAdmin, { code: 'STD', name: 'Standee' })).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    // F8 — an un-assumed GIFSY_ADMIN has no tenant context → cannot create tenant data.
+    it('rejects create from an un-assumed GIFSY_ADMIN (400), never touching the DB', async () => {
+      await expect(service.create(owner, { code: 'STD', name: 'Standee' })).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.posmType.create).not.toHaveBeenCalled();
+    });
+
+    it('ALLOWS create from an ASSUMED GIFSY operator', async () => {
+      const assumedOwner = { ...owner, assumed: true, clientId: 'kwality' } as any;
+      mockPrisma.posmType.create.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'STD', name: 'Standee', isActive: true });
+      await service.create(assumedOwner, { code: 'STD', name: 'Standee' });
+      expect(mockPrisma.posmType.create).toHaveBeenCalled();
     });
   });
 

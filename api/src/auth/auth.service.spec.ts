@@ -156,7 +156,8 @@ describe('AuthService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null); // no active holder under the tenant
       await expect(service.sendOtp('9876543210', 'SMS', 'deoleo')).rejects.toMatchObject({ status: 401 });
       const where = mockPrisma.user.findFirst.mock.calls[0][0].where;
-      expect(where).toMatchObject({ phone: '9876543210', clientId: 'deoleo', isActive: true });
+      // The User row is matched by canonical E.164 (users are stored normalized).
+      expect(where).toMatchObject({ phone: '+919876543210', clientId: 'deoleo', isActive: true });
       expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
       expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
     });
