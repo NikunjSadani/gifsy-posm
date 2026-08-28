@@ -89,7 +89,7 @@ export class ManualService {
 
   /** POST /v1/manual/tasks — define a task. Validates formSchema via the form engine. */
   async createTask(user: JwtPayload, dto: CreateManualTaskDto) {
-    const errors = validateFormSchema(dto.formSchema);
+    const errors = validateFormSchema(dto.formSchema, { requireCamera: false });
     if (errors.length > 0) {
       throw new BadRequestException({ message: 'Invalid formSchema', errors });
     }
@@ -222,13 +222,17 @@ export class ManualService {
     }
 
     if ('formSchema' in dto && dto.formSchema !== undefined) {
+      // KNOWN RESIDUAL (LOW, display-only): count-then-update is a narrow TOCTOU — a submit
+      // landing between this count and the update would be validated against the OLD schema but
+      // rendered against the NEW one in review (mismatched labels). No security/data effect (the
+      // stored formValues are untouched); not worth a row-lock/serializable tx for a manual task.
       const subCount = await this.prisma.manualTaskSubmission.count({ where: { taskId: task.id } });
       if (subCount > 0) {
         throw new ConflictException(
           'The capture form cannot be changed once the task has submissions.',
         );
       }
-      const errors = validateFormSchema(dto.formSchema);
+      const errors = validateFormSchema(dto.formSchema, { requireCamera: false });
       if (errors.length > 0) {
         throw new BadRequestException({ message: 'Invalid formSchema', errors });
       }

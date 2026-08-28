@@ -48,7 +48,7 @@ export interface ManualTaskListItem {
   dueDate: string | null;
   status: TaskStatus;
   createdAt: string;
-  counts: TaskCounts;
+  submissionCounts: TaskCounts;
 }
 
 export interface ManualTaskListResult {
@@ -82,8 +82,13 @@ export interface TaskSubmissionRow {
   createdAt: string;
 }
 
-export interface ManualTaskDetail {
-  task: ManualTask;
+/**
+ * GET /api/manual/tasks/:id returns the task fields FLAT (not wrapped in `task`), with its
+ * submissions alongside — so the detail is `ManualTask & { createdById, updatedAt, submissions }`.
+ */
+export interface ManualTaskDetail extends ManualTask {
+  createdById?: string;
+  updatedAt?: string;
   submissions: TaskSubmissionRow[];
 }
 

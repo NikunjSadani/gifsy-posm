@@ -91,6 +91,12 @@ Source: `C:\Users\nikun\kwality-walls-microsite`. Red `#E3000F` (header + CTAs),
 - **media-view is tenant-scoped, not vendor-scoped** (mitigated: unguessable keys, no in-surface path to another vendor's key). Candidate hardening: vendor-scope the view.
 - **geo-fence DEFAULTS DISABLED on malformed/empty tenant settings** (deliberate — never hard-block a legit submit on misconfig). ⇒ the fence MUST be explicitly configured per tenant at go-live.
 
+**Wave 3b manual-workflow residuals (adversarial-audited 2026-08-28 — 2 HIGH + 1 MEDIUM fixed & runtime-verified; scoping/race/unique-constraint confirmed solid):**
+- FIXED HIGH: admin task-list & task-detail pages crashed on a FE↔BE shape mismatch (`counts`↔`submissionCounts`; `getTask` returns FLAT not `{task}`) — my under-specified agent contract; FE aligned to the tested backend + browser-verified.
+- FIXED MEDIUM: the reused `validateFormSchema` forced a CAMERA field (a visibility assumption) — now `requireCamera` opt-out so a manual survey/checklist can be photo-less; runtime-verified (201).
+- RESIDUAL LOW (accepted): formSchema edit-lock is a narrow count-then-update TOCTOU — display-only (answers rendered against a swapped schema), no security/data effect; not worth a row-lock for a manual task (commented in `updateTask`).
+- RESIDUAL LOW (accepted): manual submissions skip same-tenant duplicate-photo detection (no `ownerKind:MANUAL` hash recorded) — cross-tenant reuse still blocked by tenant-scoped `viewMedia`; manual isn't a payout path. Candidate: record ImageHash on submit + surface a dup flag in review.
+
 - [x] Wave 0 backend chassis built + gates independently green (generate/build/tsc/jest) + DI boots. Accepted schema config fixes: datasource `url` moved to `prisma.config.ts` (Prisma 7 rule) + added `Client.recces`/`Client.installs` back-refs (were missing — my v0 bug).
 - [ ] **AUTH durability — MUST-FIX before prod:** the chassis uses an *in-memory* OTP store; Cloud Run `min=0` is multi-instance, so an OTP sent by one instance can't be verified by another. Add an `OtpCode` model + DB-backed store (loyalty pattern) during auth hardening. FIXED_OTP(123456) works for dev/staging now.
 - [ ] Session simplifications (v0 schema has no `clientId` on `UserSession`, no `sessionsInvalidBefore`): assume-tenant scope reverts on the ~hourly refresh; no logout-all-before-stamp. Confirm whether POSM needs durable assumed sessions / logout-all.

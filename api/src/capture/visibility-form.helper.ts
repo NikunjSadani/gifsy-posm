@@ -64,7 +64,16 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * Validates the structural integrity of a capture form schema. Returns an array of
  * human-readable error strings; an empty array means valid.
  */
-export function validateFormSchema(rawSchema: unknown): string[] {
+/**
+ * Validate a capture-form schema. `requireCamera` (default true) enforces the visibility rule
+ * that a form must carry at least one CAMERA field (proof-of-POSM via photo); the MANUAL-task
+ * builder passes `false` because a manual task may be a photo-less survey / checklist.
+ */
+export function validateFormSchema(
+  rawSchema: unknown,
+  opts: { requireCamera?: boolean } = {},
+): string[] {
+  const requireCamera = opts.requireCamera ?? true;
   const errors: string[] = [];
 
   if (!isObject(rawSchema)) {
@@ -201,10 +210,12 @@ export function validateFormSchema(rawSchema: unknown): string[] {
     }
   }
 
-  // At least one CAMERA field — capture is proof-of-POSM via photo.
-  const hasCamera = fields.some((f) => isObject(f) && f.type === 'CAMERA');
-  if (!hasCamera) {
-    errors.push('The capture form must have at least one CAMERA (photo) field.');
+  // At least one CAMERA field — capture is proof-of-POSM via photo (visibility only).
+  if (requireCamera) {
+    const hasCamera = fields.some((f) => isObject(f) && f.type === 'CAMERA');
+    if (!hasCamera) {
+      errors.push('The capture form must have at least one CAMERA (photo) field.');
+    }
   }
 
   // GPS coherence: a submit-time GPS capture needs a GPS_POINT field to store into.

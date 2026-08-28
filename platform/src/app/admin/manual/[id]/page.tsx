@@ -73,7 +73,7 @@ export default function ManualTaskDetailPage() {
 
   const initial = useMemo(() => {
     if (!detail) return null;
-    const t = detail.task;
+    const t = detail; // getTask returns the task fields FLAT (+ submissions), not wrapped in `task`
     return {
       title: t.title,
       description: t.description ?? '',
@@ -109,7 +109,7 @@ export default function ManualTaskDetailPage() {
 
   const toggleStatus = async () => {
     if (!detail) return;
-    const next = detail.task.status === 'OPEN' ? 'CLOSED' : 'OPEN';
+    const next = detail.status === 'OPEN' ? 'CLOSED' : 'OPEN';
     setStatusBusy(true);
     const res = await manualApi.updateTask(id, { status: next });
     setStatusBusy(false);
@@ -168,7 +168,7 @@ export default function ManualTaskDetailPage() {
     );
   }
 
-  const task = detail.task;
+  const task = detail;
 
   return (
     <div>

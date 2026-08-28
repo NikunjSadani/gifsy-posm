@@ -34,7 +34,7 @@ const STATUS_OPTIONS = [
   { value: 'CLOSED', label: 'Closed' },
 ];
 
-function CountChips({ counts }: { counts: ManualTaskListItem['counts'] }) {
+function CountChips({ counts }: { counts: ManualTaskListItem['submissionCounts'] }) {
   return (
     <div className="flex items-center gap-1.5 text-xs">
       <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700" title="Awaiting review">
@@ -136,7 +136,7 @@ export default function ManualTasksPage() {
         ),
     },
     { key: 'status', header: 'Status', render: (t) => <TaskStatusPill status={t.status} /> },
-    { key: 'counts', header: 'Submissions', render: (t) => <CountChips counts={t.counts} /> },
+    { key: 'counts', header: 'Submissions', render: (t) => <CountChips counts={t.submissionCounts} /> },
     {
       key: 'actions',
       header: '',
