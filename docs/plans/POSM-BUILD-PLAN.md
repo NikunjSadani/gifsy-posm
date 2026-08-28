@@ -1,7 +1,7 @@
 # POSM Field-Execution Platform — Build Plan (living doc)
 
 > Single source of truth for this build. Update it in the same pass as any fact change (working agreement #7).
-> **Status: 2026-08-28 — Wave 0 (chassis) COMPLETE** — built · dual-audited · hardened · re-audited + fixed; gates green (backend 76 tests / FE 11); commits `ea338bc→96039ad` on `develop`. ▶ NEXT: Wave 1 (masters + ingestion). Client **Kwality** verbal approval; scope B-vs-C pending.
+> **Status: 2026-08-28 — Waves 0–1 COMPLETE** — chassis + masters/ingestion, both **dual-audited + all findings fixed**; gates green (backend **137 tests** / FE 11); commits `ea338bc→12e0f1e` on `develop`. ▶ NEXT: **Wave 1b** (admin UI for the masters) or **Wave 2** (recce→install pipeline — needs the §5 schema-call confirm). ⚠️ runtime-DB verification pending (no local Postgres). Client **Kwality** verbal approval; scope B-vs-C pending.
 
 ---
 
