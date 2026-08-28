@@ -27,6 +27,17 @@ export async function generateMetadata(): Promise<Metadata> {
       template: `%s | ${config.branding.displayName}`,
     },
     description: `${config.branding.displayName} — point-of-sale material recce, approval, installation and audit.`,
+    // PWA: installable web-app manifest + iOS home-screen behaviour (online-only, no SW).
+    manifest: '/manifest.webmanifest',
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: 'default',
+      title: 'Kwality Field',
+    },
+    icons: {
+      icon: '/kwality-walls-logo.png',
+      apple: '/kwality-walls-logo.png',
+    },
   };
 }
 
