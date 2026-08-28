@@ -214,10 +214,10 @@ export class InstallationService {
 
       // before≠after perceptual diff (both byte sources required, else null/unverifiable).
       const recceBytes = await this.integrity.fetchImageBytes(readMediaValue(rp.photo).key);
-      const beforeAfterDiffOk = this.integrity.beforeAfterDiffOk(recceBytes, installBytes.get(l.reccePosmId) ?? null);
+      const beforeAfterDiffOk = await this.integrity.beforeAfterDiffOk(recceBytes, installBytes.get(l.reccePosmId) ?? null);
 
       const hash = installHash.get(l.reccePosmId) ?? null;
-      const qualityFlags = this.integrity.qualityFlags(installBytes.get(l.reccePosmId) ?? null, {
+      const qualityFlags = await this.integrity.qualityFlags(installBytes.get(l.reccePosmId) ?? null, {
         duplicate: hash ? dupSet.has(hash) : false,
         accuracy: installGeo?.accuracy,
       });

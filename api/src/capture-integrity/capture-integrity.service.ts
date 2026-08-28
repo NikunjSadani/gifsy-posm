@@ -47,16 +47,20 @@ export class CaptureIntegrityService {
    * Returns null when EITHER byte source is unavailable (unverifiable — a soft flag for the
    * reviewer, never a persisted pass on missing evidence).
    */
-  beforeAfterDiffOk(recceBytes: Buffer | null, installBytes: Buffer | null): boolean | null {
+  async beforeAfterDiffOk(
+    recceBytes: Buffer | null,
+    installBytes: Buffer | null,
+  ): Promise<boolean | null> {
     if (!recceBytes || !installBytes) return null;
+    // beforeAfterDiffers itself returns null when either image is undecodable (unverifiable).
     return beforeAfterDiffers(recceBytes, installBytes);
   }
 
-  /** Assemble the soft quality flags for one install photo (blur/exposure from bytes + passed signals). */
-  qualityFlags(
+  /** Assemble the soft quality flags for one install photo (blur/exposure from DECODED pixels + passed signals). */
+  async qualityFlags(
     bytes: Buffer | null,
     signals: { duplicate: boolean; accuracy: number | null | undefined },
-  ): QualityFlags {
+  ): Promise<QualityFlags> {
     return computeQualityFlags(bytes, {
       duplicate: signals.duplicate,
       lowAccuracy: isLowAccuracy(signals.accuracy),

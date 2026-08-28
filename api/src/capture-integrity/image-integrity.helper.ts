@@ -1,74 +1,144 @@
 /**
- * image-integrity.helper.ts — pure, dependency-free capture-integrity primitives for the
- * POSM field pipeline. NO NestJS / Prisma / image-decoder imports, so every routine is
- * unit-testable on synthetic buffers and safe to import from services and specs alike.
+ * image-integrity.helper.ts — capture-integrity primitives for the POSM field pipeline,
+ * now operating on REAL DECODED PIXELS via a pure-JS decoder (jimp — no native binary).
  *
- * ── Scope + honest caveat ────────────────────────────────────────────────────────────────
- * The dependency set carries NO image decoder (no sharp/jimp), so these are FIRST-CUT,
- * BYTE-DOMAIN heuristics that treat the stored file's raw bytes as a pixel-proxy signal:
- *   - before≠after  → an aHash-style 8×8 average-pool fingerprint + Hamming distance;
- *   - blur          → variance of a discrete Laplacian over the 8×8 pooled grid;
- *   - exposure      → mean byte value (luminance-proxy) too low / too high.
- * They are deterministic and directional (identical input → identical output; a constant
- * buffer reads as blurry/dark; a high-frequency buffer reads as sharp), which is what the
- * pipeline's soft reviewer-flags need. When an image decoder is added the internals can be
- * upgraded to true grayscale-pixel aHash / Laplacian / luminance WITHOUT changing any caller
- * (the public signatures below are pixel-agnostic on purpose).
+ * ── What changed & why ───────────────────────────────────────────────────────────────────
+ * The previous cut computed its heuristics over the stored file's RAW BYTES. For a JPEG/PNG
+ * those bytes are the *compressed* stream, so "mean byte value", "byte-pool aHash" and a
+ * "Laplacian over pooled bytes" measure the entropy of the codec, NOT the picture — they are
+ * non-functional on any real photo. This module now DECODES each image to a small fixed
+ * grayscale grid and analyzes actual luminance:
+ *   - before≠after  → a TRUE perceptual aHash: decode both, 8×8 grayscale, threshold each
+ *                     pixel vs the grid mean, 64-bit hash, Hamming distance.
+ *   - blur          → variance of a discrete Laplacian over a 32×32 decoded luminance grid.
+ *   - exposure      → mean decoded luminance (0..255) too low / too high.
+ *
+ * ── Failure posture (never throw) ────────────────────────────────────────────────────────
+ * Decoding is wrapped in try/catch. A non-image / corrupt / PDF / empty buffer yields an
+ * "unverifiable / neutral" result — the decode helpers return `null`, the boolean quality
+ * checks return `false` (no flag raised on evidence we cannot read), and before≠after returns
+ * `null` (unverifiable) — NEVER an exception. Soft reviewer flags only; never a hard block.
+ *
+ * ── Async ────────────────────────────────────────────────────────────────────────────────
+ * Decoding is asynchronous, so every image-analyzing routine returns a Promise. The pure math
+ * over an already-decoded grid (aHash-from-grid, Laplacian variance, grid mean, Hamming) stays
+ * synchronous and is exported for direct unit testing.
+ *
+ * ── Cost bound (defensive) ───────────────────────────────────────────────────────────────
+ * Every image is resized to a FIXED small grid (8×8 for the hash, 32×32 for blur/exposure)
+ * before any per-pixel work, so the analysis cost is constant regardless of the input's
+ * pixel dimensions.
+ *
+ * ── Decode path ──────────────────────────────────────────────────────────────────────────
+ * We sniff the format from the buffer's magic bytes and invoke jimp's matching format decoder
+ * DIRECTLY (via `defaultFormats`), rather than `Jimp.read`. `Jimp.read`/`fromBuffer` detect the
+ * MIME through a lazy `await import('file-type')` (a pure-ESM dep); calling the decoder directly
+ * skips that dynamic import — one less async ESM hop at runtime, and it keeps the decode usable
+ * under a CommonJS Jest VM (which cannot satisfy that native dynamic import).
  */
+
+import { Jimp, defaultFormats } from 'jimp';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tunable thresholds (single source of truth; imported by the service + specs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Side of the average-pool grid → an N×N = 64-cell fingerprint (a 64-bit aHash). */
+/** Side of the perceptual-hash grid → an N×N = 64-cell fingerprint (a 64-bit aHash). */
 export const HASH_GRID = 8;
+
+/** Side of the blur/exposure analysis grid (decoded luminance is pooled to this size). */
+export const ANALYSIS_GRID = 32;
 
 /**
  * Minimum Hamming distance (of 64 bits) an INSTALL photo must differ from its linked RECCE
  * photo to pass the before≠after check. Below this the two are "too similar" (a re-used /
- * copied photo) → beforeAfterDiffOk = false. Identical bytes → distance 0 → always fails.
+ * copied photo) → beforeAfterDiffOk = false. Identical images → distance 0 → always fails.
+ *
+ * Calibrated for a TRUE 8×8 luminance aHash: identical/near-identical frames sit at 0–4 bits,
+ * while two genuinely different photos differ by well over 8. 8 is a conservative floor that
+ * clears re-used/duplicate frames without falsely flagging two honest photos of the same site.
  */
-export const BEFORE_AFTER_MIN_HAMMING = 10;
+export const BEFORE_AFTER_MIN_HAMMING = 8;
 
-/** Variance-of-Laplacian at/under this reads as BLURRY (a flat, low-detail signal). */
-export const BLUR_VARIANCE_THRESHOLD = 100;
+/**
+ * Variance-of-Laplacian at/under this reads as BLURRY. Measured over a 32×32 decoded
+ * luminance grid (0..255): a flat / smooth / out-of-focus frame produces near-zero second
+ * derivatives → low variance; an in-focus, high-detail frame produces a high variance.
+ * Calibrated on the 32×32 luminance domain (a uniform frame ≈ 0; a sharp edge-rich frame ≫ 60).
+ */
+export const BLUR_VARIANCE_THRESHOLD = 60;
 
-/** Mean luminance-proxy under this → underexposed (lowLight). */
-export const LOW_LUMINANCE_THRESHOLD = 40;
+/** Mean decoded luminance under this → underexposed (lowLight). */
+export const LOW_LUMINANCE_THRESHOLD = 50;
 
-/** Mean luminance-proxy over this → overexposed. */
-export const HIGH_LUMINANCE_THRESHOLD = 220;
+/** Mean decoded luminance over this → overexposed. */
+export const HIGH_LUMINANCE_THRESHOLD = 205;
 
 /** GPS reported-accuracy (metres) over this reads as a low-accuracy fix → lowAccuracy flag. */
 export const GPS_ACCURACY_CAP_METERS = 100;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Average-pool sampling → the shared pooled grid
+// Decode step — real pixels → a small fixed grayscale luminance grid
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Average-pool a byte buffer into `grid`×`grid` cell means (0..255). Each cell is the mean
- * of a contiguous byte slice; an empty buffer yields all-zero cells. Deterministic and
- * length-independent (the fingerprint of two different-length encodings of the same content
- * is comparable, and identical bytes always pool identically).
- */
-export function poolGrid(buffer: Buffer, grid: number = HASH_GRID): number[] {
-  const cells = grid * grid;
-  const out = new Array<number>(cells).fill(0);
-  const n = buffer.length;
-  if (n === 0) return out;
-  for (let i = 0; i < cells; i++) {
-    const start = Math.floor((i * n) / cells);
-    const end = Math.max(start + 1, Math.floor(((i + 1) * n) / cells));
-    let sum = 0;
-    let count = 0;
-    for (let j = start; j < end && j < n; j++) {
-      sum += buffer[j];
-      count++;
+/** Rec. 601 luma from 8-bit RGB → a 0..255 grayscale luminance. */
+function luma(r: number, g: number, b: number): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** Lazily-built mime → jimp-format-decoder map (from the bundled defaultFormats). */
+let DECODERS: Map<string, (buffer: Buffer) => Promise<{ data: Buffer; width: number; height: number }>> | null = null;
+function decoders() {
+  if (!DECODERS) {
+    DECODERS = new Map();
+    for (const make of defaultFormats) {
+      const fmt = make();
+      if (fmt.decode) DECODERS.set(fmt.mime, fmt.decode as never);
     }
-    out[i] = count > 0 ? sum / count : buffer[Math.min(i, n - 1)];
   }
-  return out;
+  return DECODERS;
+}
+
+/** Sniff an image mime from the buffer's leading magic bytes (jimp's decodable formats only). */
+function sniffMime(b: Buffer): string | null {
+  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp';
+  if (b.length >= 3 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
+  if (b.length >= 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0x00) ||
+    (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0x00 && b[3] === 0x2a))) return 'image/tiff';
+  return null;
+}
+
+/**
+ * Decode an image buffer and reduce it to a `grid`×`grid` array of grayscale luminance values
+ * (0..255, row-major). Returns `null` for an empty/missing buffer or anything we cannot decode
+ * (non-image / corrupt / PDF / unknown format) — NEVER throws. The fixed-size resize caps
+ * per-pixel work regardless of the source dimensions.
+ */
+export async function decodeLumaGrid(
+  buffer: Buffer | null | undefined,
+  grid: number = ANALYSIS_GRID,
+): Promise<number[] | null> {
+  if (!buffer || buffer.length === 0) return null;
+  try {
+    const mime = sniffMime(buffer);
+    const decode = mime ? decoders().get(mime) : undefined;
+    if (!decode) return null; // unknown / non-image format → unverifiable
+    const bitmap = await decode(buffer);
+    const img = Jimp.fromBitmap(bitmap);
+    img.resize({ w: grid, h: grid });
+    const { data, width, height } = img.bitmap;
+    if (width !== grid || height !== grid) return null;
+    const out = new Array<number>(grid * grid);
+    for (let i = 0; i < grid * grid; i++) {
+      const p = i * 4; // RGBA
+      out[i] = luma(data[p], data[p + 1], data[p + 2]);
+    }
+    return out;
+  } catch {
+    return null; // unverifiable → neutral, never a throw
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,20 +146,28 @@ export function poolGrid(buffer: Buffer, grid: number = HASH_GRID): number[] {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * 64-bit average-hash (aHash) of a buffer: pool to an 8×8 grid, then set each bit where the
- * cell's mean exceeds the grid's overall mean. Returned as a BigInt bitset (bit i = cell i).
+ * 64-bit average-hash of an ALREADY-DECODED 8×8 luminance grid: set each bit where the cell's
+ * luminance exceeds the grid mean. Returned as a BigInt bitset (bit i = cell i). Pure/sync.
  */
-export function aHash(buffer: Buffer): bigint {
-  const cells = poolGrid(buffer, HASH_GRID);
-  const mean = cells.reduce((a, b) => a + b, 0) / cells.length;
+export function aHashFromGrid(grid: number[]): bigint {
+  const mean = grid.reduce((a, b) => a + b, 0) / grid.length;
   let bits = 0n;
-  for (let i = 0; i < cells.length; i++) {
-    if (cells[i] > mean) bits |= 1n << BigInt(i);
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] > mean) bits |= 1n << BigInt(i);
   }
   return bits;
 }
 
-/** Number of differing bits between two 64-bit fingerprints (XOR popcount). */
+/**
+ * Decode a buffer to an 8×8 luminance grid and return its 64-bit perceptual aHash, or `null`
+ * when the buffer is missing/undecodable (unverifiable). Async (decode).
+ */
+export async function aHash(buffer: Buffer | null | undefined): Promise<bigint | null> {
+  const grid = await decodeLumaGrid(buffer, HASH_GRID);
+  return grid ? aHashFromGrid(grid) : null;
+}
+
+/** Number of differing bits between two 64-bit fingerprints (XOR popcount). Pure/sync. */
 export function hammingDistance(a: bigint, b: bigint): number {
   let x = a ^ b;
   let count = 0;
@@ -102,32 +180,36 @@ export function hammingDistance(a: bigint, b: bigint): number {
 
 /**
  * before≠after: does the INSTALL photo differ ENOUGH from its linked RECCE photo?
- * Returns true when the aHash Hamming distance ≥ BEFORE_AFTER_MIN_HAMMING. Identical bytes
- * → distance 0 → false (the anti-fraud "re-used the recce photo" catch).
+ * Returns true when the decoded-aHash Hamming distance ≥ BEFORE_AFTER_MIN_HAMMING; false when
+ * the two are too similar (identical / re-used photo → distance ~0 → false). Returns `null`
+ * when EITHER image is missing or undecodable (unverifiable — never a pass on unreadable
+ * evidence). Async (decodes both images).
  */
-export function beforeAfterDiffers(
-  recceBytes: Buffer,
-  installBytes: Buffer,
+export async function beforeAfterDiffers(
+  recceBytes: Buffer | null | undefined,
+  installBytes: Buffer | null | undefined,
   minHamming: number = BEFORE_AFTER_MIN_HAMMING,
-): boolean {
-  return hammingDistance(aHash(recceBytes), aHash(installBytes)) >= minHamming;
+): Promise<boolean | null> {
+  const [a, b] = await Promise.all([aHash(recceBytes), aHash(installBytes)]);
+  if (a === null || b === null) return null;
+  return hammingDistance(a, b) >= minHamming;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Blur (variance of Laplacian over the pooled grid)
+// Blur (variance of a discrete Laplacian over the decoded luminance grid)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Variance of a discrete Laplacian over the 8×8 pooled grid: for each interior cell,
- * lap = 4·c − (up+down+left+right); return the variance of those lap values. A flat / smooth
- * (blurry) signal → laps near 0 → low variance; a high-detail (sharp) signal → high variance.
+ * Variance of a discrete Laplacian over a decoded `gridSize`×`gridSize` luminance grid: for
+ * each interior cell, lap = 4·c − (up+down+left+right); return the variance of those laps.
+ * A flat / out-of-focus frame → laps near 0 → low variance; a sharp, high-detail frame →
+ * high variance. Pure/sync (operates on the already-decoded grid).
  */
-export function varianceOfLaplacian(buffer: Buffer, grid: number = HASH_GRID): number {
-  const cells = poolGrid(buffer, grid);
-  const at = (r: number, c: number) => cells[r * grid + c];
+export function laplacianVariance(grid: number[], gridSize: number = ANALYSIS_GRID): number {
+  const at = (r: number, c: number) => grid[r * gridSize + c];
   const laps: number[] = [];
-  for (let r = 1; r < grid - 1; r++) {
-    for (let c = 1; c < grid - 1; c++) {
+  for (let r = 1; r < gridSize - 1; r++) {
+    for (let c = 1; c < gridSize - 1; c++) {
       laps.push(4 * at(r, c) - at(r - 1, c) - at(r + 1, c) - at(r, c - 1) - at(r, c + 1));
     }
   }
@@ -136,32 +218,70 @@ export function varianceOfLaplacian(buffer: Buffer, grid: number = HASH_GRID): n
   return laps.reduce((a, b) => a + (b - mean) ** 2, 0) / laps.length;
 }
 
-/** Blurry when the variance-of-Laplacian is at/under the threshold (a flat, low-detail image). */
-export function isBlurry(buffer: Buffer, threshold: number = BLUR_VARIANCE_THRESHOLD): boolean {
-  return varianceOfLaplacian(buffer) <= threshold;
+/**
+ * Decode a buffer to a 32×32 luminance grid and return its variance-of-Laplacian, or `null`
+ * when the buffer is missing/undecodable (unverifiable). Async (decode).
+ */
+export async function varianceOfLaplacian(
+  buffer: Buffer | null | undefined,
+): Promise<number | null> {
+  const grid = await decodeLumaGrid(buffer, ANALYSIS_GRID);
+  return grid ? laplacianVariance(grid, ANALYSIS_GRID) : null;
+}
+
+/**
+ * Blurry when the decoded variance-of-Laplacian is at/under the threshold. Missing/undecodable
+ * → false (NEUTRAL — no blur flag raised on evidence we cannot read). Async (decode).
+ */
+export async function isBlurry(
+  buffer: Buffer | null | undefined,
+  threshold: number = BLUR_VARIANCE_THRESHOLD,
+): Promise<boolean> {
+  const v = await varianceOfLaplacian(buffer);
+  return v === null ? false : v <= threshold;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Exposure (mean luminance-proxy)
+// Exposure (mean decoded luminance)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Mean byte value (0..255) — a luminance-proxy over the raw bytes. 0 for an empty buffer. */
-export function meanLuminance(buffer: Buffer): number {
-  const n = buffer.length;
-  if (n === 0) return 0;
-  let sum = 0;
-  for (let i = 0; i < n; i++) sum += buffer[i];
-  return sum / n;
+/** Mean of an already-decoded luminance grid (0..255). 0 for an empty grid. Pure/sync. */
+export function meanOfGrid(grid: number[]): number {
+  if (grid.length === 0) return 0;
+  return grid.reduce((a, b) => a + b, 0) / grid.length;
 }
 
-/** Underexposed when the mean luminance-proxy is under the low threshold. */
-export function isLowLight(buffer: Buffer, threshold: number = LOW_LUMINANCE_THRESHOLD): boolean {
-  return meanLuminance(buffer) < threshold;
+/**
+ * Decode a buffer to a 32×32 luminance grid and return its mean luminance (0..255), or `null`
+ * when the buffer is missing/undecodable (unverifiable). Async (decode).
+ */
+export async function meanLuminance(buffer: Buffer | null | undefined): Promise<number | null> {
+  const grid = await decodeLumaGrid(buffer, ANALYSIS_GRID);
+  return grid ? meanOfGrid(grid) : null;
 }
 
-/** Overexposed when the mean luminance-proxy is over the high threshold. */
-export function isOverexposed(buffer: Buffer, threshold: number = HIGH_LUMINANCE_THRESHOLD): boolean {
-  return meanLuminance(buffer) > threshold;
+/**
+ * Underexposed when the decoded mean luminance is under the low threshold. Missing/undecodable
+ * → false (NEUTRAL). Async (decode).
+ */
+export async function isLowLight(
+  buffer: Buffer | null | undefined,
+  threshold: number = LOW_LUMINANCE_THRESHOLD,
+): Promise<boolean> {
+  const m = await meanLuminance(buffer);
+  return m === null ? false : m < threshold;
+}
+
+/**
+ * Overexposed when the decoded mean luminance is over the high threshold. Missing/undecodable
+ * → false (NEUTRAL). Async (decode).
+ */
+export async function isOverexposed(
+  buffer: Buffer | null | undefined,
+  threshold: number = HIGH_LUMINANCE_THRESHOLD,
+): Promise<boolean> {
+  const m = await meanLuminance(buffer);
+  return m === null ? false : m > threshold;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,24 +299,29 @@ export interface QualityFlags {
 
 /**
  * Assemble the quality flags for one photo. `blur`/`lowLight`/`overexposed` are derived from
- * the bytes; `duplicate` (cross-submission hash hit) and `lowAccuracy` (poor GPS fix) are
- * passed in by the caller which owns those signals. All flags are SOFT (advisory to the
- * reviewer) — never a hard block.
+ * the DECODED pixels (a single decode drives all three); `duplicate` (cross-submission hash
+ * hit) and `lowAccuracy` (poor GPS fix) are passed in by the caller which owns those signals.
+ * A missing / undecodable buffer yields all image-derived flags = false (NEUTRAL — never a
+ * throw, never a flag on evidence we cannot read). All flags are SOFT (advisory), never a
+ * hard block. Async (decode).
  */
-export function computeQualityFlags(
-  bytes: Buffer | null,
+export async function computeQualityFlags(
+  bytes: Buffer | null | undefined,
   signals: { duplicate: boolean; lowAccuracy: boolean },
-): QualityFlags {
+): Promise<QualityFlags> {
+  // Decode ONCE at the analysis grid; derive blur + exposure from the same luminance grid.
+  const grid = await decodeLumaGrid(bytes, ANALYSIS_GRID);
+  const mean = grid ? meanOfGrid(grid) : null;
   return {
-    blur: bytes ? isBlurry(bytes) : false,
-    lowLight: bytes ? isLowLight(bytes) : false,
-    overexposed: bytes ? isOverexposed(bytes) : false,
+    blur: grid ? laplacianVariance(grid, ANALYSIS_GRID) <= BLUR_VARIANCE_THRESHOLD : false,
+    lowLight: mean === null ? false : mean < LOW_LUMINANCE_THRESHOLD,
+    overexposed: mean === null ? false : mean > HIGH_LUMINANCE_THRESHOLD,
     duplicate: signals.duplicate,
     lowAccuracy: signals.lowAccuracy,
   };
 }
 
-/** GPS fix quality: a reported accuracy worse than the cap reads as low-accuracy. */
+/** GPS fix quality: a reported accuracy worse than the cap reads as low-accuracy. Pure/sync. */
 export function isLowAccuracy(
   accuracy: number | null | undefined,
   cap: number = GPS_ACCURACY_CAP_METERS,
