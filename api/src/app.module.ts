@@ -67,7 +67,9 @@ import { CaptureModule }       from './capture/capture.module';
     { provide: APP_GUARD, useClass: RolesGuard },
     // Tenant chokepoint (after JWT): asserts a tenant is resolved + stamps req.tenantId.
     { provide: APP_GUARD, useClass: TenantGuard },
-    // RBAC permission enforcement — flag-gated, no-op unless @RequirePermission + flags on.
+    // RBAC permission enforcement — ALWAYS fail-closed: any @RequirePermission route is enforced
+    // on every request (no env/tenant flag gate). Routes without the decorator (and @Public
+    // routes) are unaffected.
     { provide: APP_GUARD, useClass: PermissionGuard },
   ],
 })

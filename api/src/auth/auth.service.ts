@@ -376,14 +376,19 @@ export class AuthService {
         // CHASSIS NOTE: assumed scope is not preserved (no clientId column on the session).
         const tokens = await this.generateTokens(session.user, { rotatedFromId: session.id });
 
-        // ── kill-switch authority, DURING-refresh race — clock-skew robust (finding 4) ─────
+        // ── kill-switch authority, DURING-refresh race (finding 4) ─────────────────────────
         // A concurrent "log out everywhere" (or reuse-detection) can land AFTER the predecessor
         // read but AROUND the successor create — the classic "successor survives the sweep" hole.
-        // RE-READ the stamp now and compare it to the PREDECESSOR's createdAt (both DB-written
-        // timestamps, robust to cross-instance clock skew). Stampers write sessionsInvalidBefore
-        // BEFORE revoking, so a sweep that missed our just-minted successor is always preceded by
-        // a committed stamp this re-read observes → we revoke our own successor and 401, leaving
-        // nothing live after logout-all.
+        // RE-READ the stamp now and compare it to the PREDECESSOR's createdAt. Note the two
+        // timestamps have DIFFERENT clocks: predecessor.createdAt is DB-written (`now()`), while
+        // sessionsInvalidBefore is stamped with the app clock (`new Date()`), so this is a
+        // predecessor.createdAt (DB) vs app-written-stamp comparison — NOT two DB timestamps.
+        // The guarantee still holds: a REAL predecessor is created long before any logout-all
+        // (seconds-to-days earlier), so createdAt < stamp is decided by that large gap, and
+        // sub-second app↔DB skew under NTP is negligible against it. Stampers write
+        // sessionsInvalidBefore BEFORE revoking, so a sweep that missed our just-minted successor
+        // is always preceded by a committed stamp this re-read observes → we revoke our own
+        // successor and 401, leaving nothing live after logout-all.
         const fresh = await this.prisma.user.findUnique({
           where:  { id: session.user.id },
           select: { sessionsInvalidBefore: true },
@@ -405,38 +410,55 @@ export class AuthService {
     const predecessorRevokedAt = session.revokedAt ?? new Date();
     const withinGrace = Date.now() - predecessorRevokedAt.getTime() <= ROTATION_GRACE_MS;
 
-    // Reuse detection: an ALREADY-REVOKED token replayed AFTER the grace window (with no live
-    // successor to converge on) is a strong theft signal — revoke every live session for the
-    // user. A merely EXPIRED-but-never-revoked session is NOT reuse. Best-effort; never masks
-    // the 401. (The chassis stores only refresh HASHES, so a benign concurrent refresh cannot
-    // be handed the sibling's plaintext token — it simply retries.)
+    // Reuse detection: an ALREADY-REVOKED token replayed AFTER the grace window is a POSSIBLE
+    // theft signal — but only when NO live token descends from it. A merely EXPIRED-but-never-
+    // revoked session is NOT reuse.
     if (!withinGrace && session.revokedAt !== null) {
-      const now = new Date();
-      try {
-        // STAMP sessionsInvalidBefore FIRST, then revoke (stamp-before-revoke, finding 4) — the
-        // same authority logout-all uses, so any in-flight refresh's post-mint re-read observes
-        // the stamp and drops its successor rather than surviving the lineage kill.
-        await this.prisma.user.update({
-          where: { id: session.userId },
-          data:  { sessionsInvalidBefore: now },
-        });
-        await this.prisma.userSession.updateMany({
-          where: { userId: session.userId, revokedAt: null },
-          data:  { revokedAt: now },
-        });
-        await this.prisma.auditLog.create({
-          data: {
-            action: 'LOGOUT',
-            entityType: 'SECURITY_EVENT',
-            entityId: session.userId,
-            actorId: session.userId,
-            metadata: { event: 'refresh_token_reuse', sessionId: session.id, detectedAt: now.toISOString() },
-          },
-        });
-      } catch {
-        /* best-effort lineage kill — never mask the 401 below */
+      // Distinguish TRUE reuse from a BENIGN stale rotation before nuking. A backgrounded PWA
+      // tab (or an in-flight XHR that lost the atomic claim) can replay a token that was JUST
+      // rotated: the winning refresh already minted a LIVE successor in this token's lineage.
+      // Nuking on that false-positive would stamp sessionsInvalidBefore + revoke-all and log the
+      // whole ACTIVE user out of every device — a real regression. So look for a live successor
+      // FIRST, and treat the replay as theft ONLY when none exists.
+      const liveSuccessor = await this.prisma.userSession.findFirst({
+        where:  { rotatedFromId: session.id, revokedAt: null },
+        select: { id: true },
+      });
+
+      // Benign rotation: a live successor exists → this is a legitimate concurrent/stale refresh,
+      // not theft. Fall through to the 401 WITHOUT the lineage kill (no stamp, no revoke-all, no
+      // audit) so the racing tab simply retries with the successor token it already holds.
+      // (A replay whose DIRECT successor is ITSELF revoked is many rotation cycles stale — there
+      // is no live token descending from THIS one — so it is still treated as reuse below.)
+      if (!liveSuccessor) {
+        const now = new Date();
+        try {
+          // TRUE reuse — no live descendant. STAMP sessionsInvalidBefore FIRST, then revoke
+          // (stamp-before-revoke, finding 4) — the same authority logout-all uses, so any
+          // in-flight refresh's post-mint re-read observes the stamp and drops its successor
+          // rather than surviving the lineage kill. Best-effort; never masks the 401.
+          await this.prisma.user.update({
+            where: { id: session.userId },
+            data:  { sessionsInvalidBefore: now },
+          });
+          await this.prisma.userSession.updateMany({
+            where: { userId: session.userId, revokedAt: null },
+            data:  { revokedAt: now },
+          });
+          await this.prisma.auditLog.create({
+            data: {
+              action: 'LOGOUT',
+              entityType: 'SECURITY_EVENT',
+              entityId: session.userId,
+              actorId: session.userId,
+              metadata: { event: 'refresh_token_reuse', sessionId: session.id, detectedAt: now.toISOString() },
+            },
+          });
+        } catch {
+          /* best-effort lineage kill — never mask the 401 below */
+        }
+        this.logger.warn(`Refresh-token reuse detected for user ${session.userId} — revoked all sessions`);
       }
-      this.logger.warn(`Refresh-token reuse detected for user ${session.userId} — revoked all sessions`);
     }
 
     throw new UnauthorizedException('Session expired — please log in again.');
