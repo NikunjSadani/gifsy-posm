@@ -1,10 +1,18 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
+import { Prisma } from '@prisma/client';
 import { AuditReviewService } from './audit-review.service';
 import { RejectInstallationDto } from './dto/reject-installation.dto';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
+
+/** A Prisma "record to update/delete does not exist" error — what a 0-row guarded write throws. */
+const notFoundError = () =>
+  new Prisma.PrismaClientKnownRequestError('Record to update not found.', {
+    code: 'P2025',
+    clientVersion: 'x',
+  } as never);
 
 /**
  * Wave-2 Auditor review — scoping + transition proofs.
@@ -121,6 +129,34 @@ describe('AuditReviewService.approve/reject — transitions', () => {
     const svc = new AuditReviewService(prisma);
     await expect(svc.approve(user({ role: 'AUDITOR', clientId: 'c1' }), 'i1')).rejects.toBeInstanceOf(ConflictException);
     expect(fns.installation.update).not.toHaveBeenCalled();
+  });
+
+  it('A2: a concurrent approve whose guarded write matches 0 rows → 409, NO second audit row', async () => {
+    const { prisma, fns } = makePrisma();
+    // Pre-read still sees SUBMITTED (both racers pass assertSubmitted)...
+    fns.installation.findFirst.mockResolvedValue({ id: 'i1', status: 'SUBMITTED' });
+    // ...but the status-guarded update matches 0 rows because the winner already flipped it.
+    fns.installation.update.mockRejectedValue(notFoundError());
+    const svc = new AuditReviewService(prisma);
+    await expect(svc.approve(user({ role: 'AUDITOR', sub: 'aud-1', clientId: 'c1' }), 'i1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(fns.installation.update.mock.calls[0][0].where).toEqual({ id: 'i1', status: 'SUBMITTED' });
+    expect(fns.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('A2: a concurrent reject whose guarded write matches 0 rows → 409, NO second audit row', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findFirst.mockResolvedValue({ id: 'i1', status: 'SUBMITTED' });
+    fns.installation.update.mockRejectedValue(notFoundError());
+    const svc = new AuditReviewService(prisma);
+    await expect(
+      svc.reject(user({ role: 'AUDITOR', sub: 'aud-1', clientId: 'c1' }), 'i1', {
+        reasonCode: 'POSM_NOT_VISIBLE',
+      } as RejectInstallationDto),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(fns.installation.update.mock.calls[0][0].where).toEqual({ id: 'i1', status: 'SUBMITTED' });
+    expect(fns.auditLog.create).not.toHaveBeenCalled();
   });
 });
 

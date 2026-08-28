@@ -161,17 +161,23 @@ export class ApprovalService {
     const recce = await this.loadForMutation(user, id);
     this.assertSubmitted(recce.status);
 
-    const updated = await this.prisma.recce.update({
-      where: { id },
-      data: {
-        status: 'APPROVED',
-        approvedById: user.sub,
-        reviewedAt: new Date(),
-        // A prior rejection's reason is cleared on a subsequent approval.
-        rejectionReasonCode: null,
-        rejectionReason: null,
-      },
-    });
+    // A2 (double-pay TOCTOU): the `status: 'SUBMITTED'` predicate in the WRITE closes the
+    // window between the load above and this update. Two concurrent approves both pass the
+    // pre-read guard, but only the row STILL SUBMITTED transitions; the loser matches 0 rows
+    // (Prisma P2025) → 409, so the audit-log APPROVE row is appended only on the winning path.
+    const updated = await this.prisma.recce
+      .update({
+        where: { id, status: 'SUBMITTED' },
+        data: {
+          status: 'APPROVED',
+          approvedById: user.sub,
+          reviewedAt: new Date(),
+          // A prior rejection's reason is cleared on a subsequent approval.
+          rejectionReasonCode: null,
+          rejectionReason: null,
+        },
+      })
+      .catch((e) => this.conflictOnLostRace(e));
 
     await this.audit(user, 'APPROVE', id, { status: recce.status }, { status: 'APPROVED' });
     return updated;
@@ -182,15 +188,20 @@ export class ApprovalService {
     const recce = await this.loadForMutation(user, id);
     this.assertSubmitted(recce.status);
 
-    const updated = await this.prisma.recce.update({
-      where: { id },
-      data: {
-        status: 'REJECTED',
-        reviewedAt: new Date(),
-        rejectionReasonCode: dto.reasonCode as RejectReasonCode,
-        rejectionReason: dto.reason ?? null,
-      },
-    });
+    // A2: same status-guarded write as approve. Because only a row STILL SUBMITTED transitions,
+    // a concurrent approve (which would have set approvedById) can never co-exist with this
+    // rejection — the loser gets a 409 and writes no second audit row.
+    const updated = await this.prisma.recce
+      .update({
+        where: { id, status: 'SUBMITTED' },
+        data: {
+          status: 'REJECTED',
+          reviewedAt: new Date(),
+          rejectionReasonCode: dto.reasonCode as RejectReasonCode,
+          rejectionReason: dto.reason ?? null,
+        },
+      })
+      .catch((e) => this.conflictOnLostRace(e));
 
     await this.audit(
       user,
@@ -217,7 +228,9 @@ export class ApprovalService {
     });
     const found = new Map(recces.map((r) => [r.id, r]));
 
-    const approvedIds: string[] = [];
+    // Candidates = ids that passed scope + were SUBMITTED at read time. The guarded write below
+    // decides which of these ACTUALLY transition (a race may have flipped some in between).
+    const candidateIds: string[] = [];
     const skipped: { id: string; reason: string }[] = [];
     for (const id of ids) {
       const r = found.get(id);
@@ -233,28 +246,55 @@ export class ApprovalService {
         skipped.push({ id, reason: `INVALID_STATUS_${r.status}` });
         continue;
       }
-      approvedIds.push(id);
+      candidateIds.push(id);
     }
 
-    if (approvedIds.length > 0) {
+    let approvedIds: string[] = [];
+    if (candidateIds.length > 0) {
       const now = new Date();
-      await this.prisma.$transaction([
-        // `status: 'SUBMITTED'` in the where is a belt-and-braces idempotency guard against a
-        // race between the read above and this write.
-        this.prisma.recce.updateMany({
-          where: { id: { in: approvedIds }, status: 'SUBMITTED' },
+      // A3: the count AND the audit rows must reflect only the ids THIS call actually
+      // transitioned, not the pre-read candidate list. The guarded `updateMany` may skip ids a
+      // concurrent request already flipped; we re-select by this call's unique approver+timestamp
+      // stamp to learn the real transitioned set, then audit exactly those — never claim-approve
+      // (or audit) an id the write skipped.
+      approvedIds = await this.prisma.$transaction(async (tx) => {
+        await tx.recce.updateMany({
+          where: { id: { in: candidateIds }, status: 'SUBMITTED' },
           data: { status: 'APPROVED', approvedById: user.sub, reviewedAt: now },
-        }),
-        this.prisma.auditLog.createMany({
-          data: approvedIds.map((id) => ({
-            actorId: user.sub,
-            action: 'APPROVE' as const,
-            entityType: 'RECCE',
-            entityId: id,
-            metadata: { clientId: user.clientId, event: 'BULK_APPROVE' } as Prisma.InputJsonValue,
-          })),
-        }),
-      ]);
+        });
+        const transitioned = await tx.recce.findMany({
+          where: {
+            id: { in: candidateIds },
+            status: 'APPROVED',
+            approvedById: user.sub,
+            reviewedAt: now,
+          },
+          select: { id: true },
+        });
+        const transitionedIds = transitioned.map((r) => r.id);
+        if (transitionedIds.length > 0) {
+          await tx.auditLog.createMany({
+            data: transitionedIds.map((id) => ({
+              actorId: user.sub,
+              action: 'APPROVE' as const,
+              entityType: 'RECCE',
+              entityId: id,
+              metadata: {
+                clientId: user.clientId,
+                event: 'BULK_APPROVE',
+              } as Prisma.InputJsonValue,
+            })),
+          });
+        }
+        return transitionedIds;
+      });
+
+      // A candidate the guarded write skipped (a concurrent request beat us to it) is reported as
+      // skipped — it is never counted or audited as approved by this call.
+      const approvedSet = new Set(approvedIds);
+      for (const id of candidateIds) {
+        if (!approvedSet.has(id)) skipped.push({ id, reason: 'INVALID_STATUS_RACE' });
+      }
     }
 
     return { approvedCount: approvedIds.length, approvedIds, skipped };
@@ -308,6 +348,21 @@ export class ApprovalService {
     if (status !== 'SUBMITTED') {
       throw new ConflictException(`Recce is already ${status} and can no longer be reviewed`);
     }
+  }
+
+  /**
+   * A2: the status-guarded single-item write matched 0 rows — the recce was transitioned by a
+   * concurrent request between the load and the write. Prisma surfaces this as P2025; re-map it
+   * to a 409 so the loser of the race never appends a duplicate audit row. Any other error
+   * propagates unchanged. Returns `never` so callers' definite-assignment analysis holds.
+   */
+  private conflictOnLostRace(e: unknown): never {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+      throw new ConflictException(
+        'Recce was already reviewed by a concurrent request and can no longer be reviewed',
+      );
+    }
+    throw e;
   }
 
   /**

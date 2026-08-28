@@ -14,6 +14,13 @@ import {
   isOverexposed,
   computeQualityFlags,
   isLowAccuracy,
+  clockSkewMs,
+  isClockSkewed,
+  impliedSpeedKmh,
+  isImpossibleTravel,
+  BEFORE_AFTER_MIN_HAMMING,
+  CLOCK_SKEW_THRESHOLD_MS,
+  IMPOSSIBLE_SPEED_KMH,
   ANALYSIS_GRID,
   HASH_GRID,
 } from './image-integrity.helper';
@@ -86,8 +93,9 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
       expect(hammingDistance(aHashFromGrid(g), aHashFromGrid([...g]))).toBe(0);
     });
 
-    it('decodes to an 8×8 (64-bit) hash', async () => {
+    it('decodes to a 16×16 (256-bit) hash grid (B9 stronger fingerprint)', async () => {
       const grid = await decodeLumaGrid(await pngChecker(64, 64, 8), HASH_GRID);
+      expect(HASH_GRID).toBe(16); // B9: raised from 8×8 (64-bit) to 16×16 (256-bit)
       expect(grid!).toHaveLength(HASH_GRID * HASH_GRID);
     });
 
@@ -206,6 +214,76 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
       expect(flags).toEqual({
         blur: false, lowLight: false, overexposed: false, duplicate: true, lowAccuracy: true,
       });
+    });
+  });
+
+  describe('B9 before≠after threshold (256-bit fingerprint)', () => {
+    it('is recalibrated proportionally to 32 (12.5% of 256 bits)', () => {
+      expect(BEFORE_AFTER_MIN_HAMMING).toBe(32);
+    });
+
+    it('still catches an identical (re-used) photo as too-similar', async () => {
+      const img = await pngChecker(64, 64, 8);
+      // Identical → hamming 0 → below the 32-bit floor → beforeAfterDiffOk false.
+      await expect(beforeAfterDiffers(img, Buffer.from(img))).resolves.toBe(false);
+    });
+
+    it('still passes two clearly different photos on the stronger hash', async () => {
+      const recce = await pngChecker(64, 64, 8);
+      const install = await pngNoise(96, 96, 7);
+      await expect(beforeAfterDiffers(recce, install)).resolves.toBe(true);
+    });
+  });
+
+  describe('B6 clock-skew (client capturedAt vs server receivedAt)', () => {
+    const received = new Date('2026-08-28T12:00:00.000Z');
+
+    it('threshold is 10 minutes', () => {
+      expect(CLOCK_SKEW_THRESHOLD_MS).toBe(10 * 60 * 1000);
+    });
+
+    it('flags a capture time more than 10 min from the server clock', () => {
+      const captured = new Date('2026-08-28T12:20:00.000Z').toISOString(); // +20 min
+      expect(clockSkewMs(captured, received)).toBe(20 * 60 * 1000);
+      expect(isClockSkewed(captured, received)).toBe(true);
+    });
+
+    it('does NOT flag a capture time within 10 min (and accepts a Date too)', () => {
+      const captured = new Date('2026-08-28T12:05:00.000Z'); // +5 min
+      expect(isClockSkewed(captured, received)).toBe(false);
+    });
+
+    it('missing / unparseable capture time → NEUTRAL (false, unverifiable)', () => {
+      expect(clockSkewMs(null, received)).toBeNull();
+      expect(clockSkewMs('not-a-date', received)).toBeNull();
+      expect(isClockSkewed(undefined, received)).toBe(false);
+    });
+  });
+
+  describe('B2 impossible-travel (implied speed between two fixes)', () => {
+    const t0 = '2026-08-28T12:00:00.000Z';
+
+    it('cap is 200 km/h', () => {
+      expect(IMPOSSIBLE_SPEED_KMH).toBe(200);
+    });
+
+    it('flags 100 km covered in 1 minute (~6000 km/h)', () => {
+      const t1 = '2026-08-28T12:01:00.000Z'; // +1 min
+      const speed = impliedSpeedKmh(100_000, t0, t1); // 100 km
+      expect(speed).toBeGreaterThan(5000);
+      expect(isImpossibleTravel(100_000, t0, t1)).toBe(true);
+    });
+
+    it('does NOT flag a plausible move (2 km in 1 hour = 2 km/h)', () => {
+      const t1 = '2026-08-28T13:00:00.000Z'; // +1 hour
+      expect(impliedSpeedKmh(2000, t0, t1)).toBeCloseTo(2, 3);
+      expect(isImpossibleTravel(2000, t0, t1)).toBe(false);
+    });
+
+    it('missing distance / timestamps / zero interval → NEUTRAL (false, unverifiable)', () => {
+      expect(impliedSpeedKmh(null, t0, t0)).toBeNull();
+      expect(impliedSpeedKmh(100_000, t0, t0)).toBeNull(); // zero interval
+      expect(isImpossibleTravel(100_000, null, t0)).toBe(false);
     });
   });
 });

@@ -3,6 +3,7 @@
 // outside → 403, and a happy submit → SUBMITTED + CREATE audit.
 
 import { BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { RecceService } from './recce.service';
 
 const mockPrisma = {
@@ -11,11 +12,23 @@ const mockPrisma = {
   posmType: { findMany: jest.fn() },
   client: { findUnique: jest.fn() },
   reccePosm: { deleteMany: jest.fn() },
+  imageHash: { findMany: jest.fn(), findFirst: jest.fn() },
   auditLog: { create: jest.fn() },
   $transaction: jest.fn(),
 };
 const mockMedia = { recordImageHashes: jest.fn(), computeImageHash: jest.fn() };
-const mockIntegrity = { fetchImageBytes: jest.fn(), hash: jest.fn() };
+// isLowAccuracy / isClockSkewed use REAL logic so present()'s computed reviewer flags are
+// exercised (B5/B6), not stubbed away.
+const mockIntegrity = {
+  fetchImageBytes: jest.fn(),
+  hash: jest.fn(),
+  isLowAccuracy: (a: unknown) => typeof a === 'number' && a > 100,
+  isClockSkewed: (c: unknown, r: Date) => {
+    if (!c) return false;
+    const t = c instanceof Date ? c.getTime() : Date.parse(String(c));
+    return !Number.isNaN(t) && Math.abs(t - r.getTime()) > 10 * 60 * 1000;
+  },
+};
 
 const vendorField = {
   sub: 'u1', role: 'VENDOR_FIELD', clientId: 'kwality', vendorId: 'vA', phone: '9', name: 'Field',
@@ -115,5 +128,116 @@ describe('RecceService', () => {
     });
     expect(res.status).toBe('SUBMITTED');
     expect(res.posms[0].photo?.viewPath).toContain('/v1/media/view?key=');
+  });
+
+  // ── B1 fail-CLOSED on unverifiable geo ─────────────────────────────────────────
+  it('B1: fence enabled + a MISSING-geo photo → hard 403 (unverifiable no longer passes)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
+    // A photo with NO geo at all — previously fell through as a soft null and PASSED.
+    const noGeoLine = { posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' }, photo: { key: KEY } };
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [noGeoLine as any] }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('B8→B1: fence enabled + an over-accuracy-cap fix → hard 403 (unverifiable)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
+    const poorFix = { posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' }, photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771, accuracy: 500 } } };
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [poorFix as any] }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // ── A1 resubmit scope fail-closed ──────────────────────────────────────────────
+  it('A1: resubmit with a NULL vendor scope is DENIED (404) BEFORE any findFirst', async () => {
+    const vendorNoId = { sub: 'u1', role: 'VENDOR_FIELD', clientId: 'kwality', phone: '9', name: 'F' } as any; // no vendorId
+    await expect(
+      service.resubmit(vendorNoId, 'r1', { posms: [line({ lat: 19.076, lng: 72.877 })] }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    // The where must NEVER collapse to `{ id }` — the scoped query is not even issued.
+    expect(mockPrisma.recce.findFirst).not.toHaveBeenCalled();
+  });
+
+  // ── A4 clean 409 on a create race ──────────────────────────────────────────────
+  it('A4: a P2002 unique-violation race on create surfaces a 409, not a raw 500', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockPrisma.$transaction.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'x' }),
+    );
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.0761, lng: 72.8771 })] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  // ── B5/B6 computed reviewer flags surfaced on the recce response ────────────────
+  it('B5/B6: present() surfaces lowAccuracy + clockSkew reviewer flags from stored signals', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+
+    const received = new Date('2026-08-28T12:00:00.000Z');
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: 250, // > 100m cap → lowAccuracy
+      distanceMeters: 0, geoFenceOk: null,
+      capturedAt: new Date('2026-08-28T12:30:00.000Z'), // +30 min → clockSkew
+      receivedAt: received,
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    const res = await service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.integrity.qualityFlags).toEqual({ lowAccuracy: true, clockSkew: true, duplicate: false });
+  });
+
+  it('B8: a duplicate hash reported by recordImageHashes surfaces duplicate=true', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
+    mockIntegrity.hash.mockReturnValue('hash-dup');
+
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: ['hash-dup'] });
+
+    const res = await service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.integrity.qualityFlags.duplicate).toBe(true);
   });
 });

@@ -37,6 +37,29 @@ function readGeoFence(raw: unknown): GeoFencePolicy {
   return { enabled, radiusMeters };
 }
 
+/** Default GPS-accuracy cap (metres) — mirrors GPS_ACCURACY_CAP_METERS in image-integrity. */
+export const DEFAULT_GPS_ACCURACY_CAP_METERS = 100;
+
+/**
+ * The effective per-tenant GPS-accuracy cap (metres): a fix reported worse than this is treated
+ * as unverifiable for the fence verdict (B8 → feeds the B1 fail-closed 403). Read from
+ * `Client.settings.posmCapture.geoFence.maxAccuracyMeters` (or a top-level `geoFence.…` for
+ * back-compat); missing / malformed / non-positive ⇒ the 100 m default. Additive — it does NOT
+ * change the shared PosmCaptureConfig shape, so no capture-lane type is touched.
+ */
+export function readGpsAccuracyCapMeters(settings: unknown): number {
+  const root = isObject(settings) ? settings : {};
+  const node =
+    isObject(root.posmCapture) ? root.posmCapture
+    : isObject(root.geoFence) ? root
+    : {};
+  const gf = isObject((node as Record<string, unknown>).geoFence)
+    ? ((node as Record<string, unknown>).geoFence as Record<string, unknown>)
+    : {};
+  const v = Number(gf.maxAccuracyMeters);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_GPS_ACCURACY_CAP_METERS;
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }

@@ -9,7 +9,7 @@ import { PosmMediaService } from '../capture/posm-media.service';
 import { readMediaValue } from '../capture/visibility-types';
 import { haversineMeters, isValidGeo } from '../capture/geo-fence.helper';
 import { CaptureIntegrityService } from '../capture-integrity/capture-integrity.service';
-import { readPosmCaptureConfig } from '../capture-integrity/posm-config.helper';
+import { readPosmCaptureConfig, readGpsAccuracyCapMeters } from '../capture-integrity/posm-config.helper';
 import { aggregatePhotoFence } from '../capture-integrity/photo-geo.helper';
 import { CreateInstallationDto, InstallPosmLineDto } from './dto/create-installation.dto';
 
@@ -35,6 +35,14 @@ interface PreparedInstallPosm {
   beforeAfterDiffOk: boolean | null;
   qualityFlags: Prisma.InputJsonValue;
   hash: string | null;
+  /** B3: this photo is an exact-hash duplicate already seen elsewhere (hard-block reuse). */
+  duplicate: boolean;
+}
+
+/** prepare() result: the per-POSM payloads + a representative submission capture time. */
+interface PreparedInstallation {
+  posms: PreparedInstallPosm[];
+  capturedAt: Date | null;
 }
 
 /**
@@ -85,48 +93,73 @@ export class InstallationService {
 
     const prepared = await this.prepare(clientId, site, recce.posms, dto.posms);
 
-    const installation = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.installation.create({
-        data: {
-          clientId,
-          siteId: site.id,
-          recceId: recce.id,
-          submittedById: user.sub,
-          status: InstallationStatus.SUBMITTED,
-          version: 1,
-          posms: {
-            create: prepared.map((p) => ({
-              reccePosmId: p.reccePosmId,
-              photo: p.photo,
-              captureLat: p.captureLat,
-              captureLng: p.captureLng,
-              geoFenceOk: p.geoFenceOk,
-              distanceFromRecce: p.distanceFromRecce,
-              beforeAfterDiffOk: p.beforeAfterDiffOk,
-              qualityFlags: p.qualityFlags,
-            })),
+    // B3 HARD-BLOCK install-photo reuse: an install photo that is ≈identical to its linked recce
+    // photo (beforeAfterDiffOk === false) OR an exact-hash duplicate already seen elsewhere
+    // (duplicate === true) is a REJECTION, not a soft flag. Reusing the recce photo as the
+    // install "after" is the core fraud this pipeline exists to stop. (blur / lowLight /
+    // overexposed / lowAccuracy stay SOFT flags — enforced nowhere here.)
+    const reused = prepared.posms.find((p) => p.beforeAfterDiffOk === false || p.duplicate === true);
+    if (reused) {
+      throw new ConflictException(
+        reused.beforeAfterDiffOk === false
+          ? 'An installation photo is identical to its recce photo — capture a real post-installation photo.'
+          : 'An installation photo has already been used on another submission — capture a fresh photo at the site.',
+      );
+    }
+
+    let installation;
+    try {
+      installation = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.installation.create({
+          data: {
+            clientId,
+            siteId: site.id,
+            recceId: recce.id,
+            submittedById: user.sub,
+            status: InstallationStatus.SUBMITTED,
+            version: 1,
+            capturedAt: prepared.capturedAt,
+            posms: {
+              create: prepared.posms.map((p) => ({
+                reccePosmId: p.reccePosmId,
+                photo: p.photo,
+                captureLat: p.captureLat,
+                captureLng: p.captureLng,
+                geoFenceOk: p.geoFenceOk,
+                distanceFromRecce: p.distanceFromRecce,
+                beforeAfterDiffOk: p.beforeAfterDiffOk,
+                qualityFlags: p.qualityFlags,
+              })),
+            },
           },
-        },
-        include: this.detailInclude(),
+          include: this.detailInclude(),
+        });
+        const hashes = prepared.posms.map((p) => p.hash).filter((h): h is string => !!h);
+        if (hashes.length > 0) {
+          await this.media.recordImageHashes(
+            tx, clientId, { ownerKind: 'INSTALL', ownerId: created.id }, hashes,
+          );
+        }
+        await tx.auditLog.create({
+          data: {
+            actorId: user.sub,
+            action: 'CREATE',
+            entityType: 'INSTALLATION',
+            entityId: created.id,
+            newValues: toJson({ status: created.status, siteId: site.id, recceId: recce.id }),
+            metadata: { clientId, event: 'INSTALLATION_SUBMIT' } as Prisma.InputJsonValue,
+          },
+        });
+        return created;
       });
-      const hashes = prepared.map((p) => p.hash).filter((h): h is string => !!h);
-      if (hashes.length > 0) {
-        await this.media.recordImageHashes(
-          tx, clientId, { ownerKind: 'INSTALL', ownerId: created.id }, hashes,
-        );
+    } catch (e) {
+      // A4: a concurrent submit racing the one-installation-per-recce unique constraint
+      // (Installation.recceId @unique) surfaces a clean 409, not a raw 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('This recce already has an installation (concurrent submit).');
       }
-      await tx.auditLog.create({
-        data: {
-          actorId: user.sub,
-          action: 'CREATE',
-          entityType: 'INSTALLATION',
-          entityId: created.id,
-          newValues: toJson({ status: created.status, siteId: site.id, recceId: recce.id }),
-          metadata: { clientId, event: 'INSTALLATION_SUBMIT' } as Prisma.InputJsonValue,
-        },
-      });
-      return created;
-    });
+      throw e;
+    }
 
     return this.present(installation);
   }
@@ -156,7 +189,7 @@ export class InstallationService {
     site: { lat: Prisma.Decimal | null; lng: Prisma.Decimal | null },
     reccePosms: { id: string; photo: unknown }[],
     lines: InstallPosmLineDto[],
-  ): Promise<PreparedInstallPosm[]> {
+  ): Promise<PreparedInstallation> {
     // Media keys must belong to THIS tenant's media folder (key-ownership guard).
     for (const l of lines) {
       const { key } = readMediaValue(l.photo);
@@ -170,8 +203,11 @@ export class InstallationService {
       select: { settings: true },
     });
     const config = readPosmCaptureConfig(client?.settings);
+    const accuracyCapMeters = readGpsAccuracyCapMeters(client?.settings);
     const reference =
       site.lat != null && site.lng != null ? { lat: Number(site.lat), lng: Number(site.lng) } : null;
+    // One server clock read for the whole submission (B6 clock-skew reference).
+    const receivedAt = new Date();
 
     const recceById = new Map(reccePosms.map((r) => [r.id, r]));
 
@@ -195,16 +231,25 @@ export class InstallationService {
       for (const s of seen) dupSet.add(s.hash);
     }
 
-    let anyOutside = false;
+    let hardFail = false;
+    let hardFailOutside = false;
+    let capturedAt: Date | null = null;
     const out: PreparedInstallPosm[] = [];
     for (const l of lines) {
       const rp = recceById.get(l.reccePosmId)!; // presence guaranteed by assertOnePerReccePosm
       const installGeo = readMediaValue(l.photo).geo;
       const recceGeo = readMediaValue(rp.photo).geo;
 
-      // Per-photo fence verdict + representative fix (single-photo aggregate).
-      const agg = aggregatePhotoFence([{ geo: installGeo }], reference, config.geoFence.radiusMeters);
-      if (config.geoFence.enabled && agg.anyOutside) anyOutside = true;
+      // Per-photo fence verdict + representative fix (single-photo aggregate). B1/B8: an OUTSIDE
+      // fix OR an unverifiable one (missing / invalid / over-accuracy-cap) fails CLOSED when the
+      // fence is enabled and the site has a reference.
+      const agg = aggregatePhotoFence([{ geo: installGeo }], reference, config.geoFence.radiusMeters, {
+        accuracyCapMeters,
+      });
+      if (config.geoFence.enabled && (agg.anyOutside || agg.anyUnverifiable)) {
+        hardFail = true;
+        if (agg.anyOutside) hardFailOutside = true;
+      }
 
       // Distance from the linked recce photo (both fixes must be valid).
       const distanceFromRecce =
@@ -212,15 +257,53 @@ export class InstallationService {
           ? haversineMeters({ lat: installGeo.lat, lng: installGeo.lng }, { lat: recceGeo.lat, lng: recceGeo.lng })
           : null;
 
+      // B2 three-way geo cross-check (reviewer flags): site↔recce, site↔install, recce↔install.
+      const siteToRecceMeters =
+        reference && isValidGeo(recceGeo)
+          ? haversineMeters({ lat: recceGeo.lat, lng: recceGeo.lng }, reference) : null;
+      const siteToInstallMeters =
+        reference && isValidGeo(installGeo)
+          ? haversineMeters({ lat: installGeo.lat, lng: installGeo.lng }, reference) : null;
+      const geoCrossCheck =
+        siteToInstallMeters !== null && siteToInstallMeters > config.geoFence.radiusMeters;
+
+      // B2 impossible-travel (reviewer flag): implied speed recce-fix → install-fix.
+      const impossibleTravel = this.integrity.isImpossibleTravel(
+        distanceFromRecce, recceGeo?.capturedAt, installGeo?.capturedAt,
+      );
+
+      // B6 clock-skew (reviewer flag): this install photo's shutter time vs. server receive time.
+      const clockSkew = this.integrity.isClockSkewed(installGeo?.capturedAt, receivedAt);
+
+      // Representative submission capture time — the latest install shutter time we can parse.
+      if (installGeo?.capturedAt && !Number.isNaN(Date.parse(installGeo.capturedAt))) {
+        const t = new Date(installGeo.capturedAt);
+        if (!capturedAt || t > capturedAt) capturedAt = t;
+      }
+
       // before≠after perceptual diff (both byte sources required, else null/unverifiable).
       const recceBytes = await this.integrity.fetchImageBytes(readMediaValue(rp.photo).key);
       const beforeAfterDiffOk = await this.integrity.beforeAfterDiffOk(recceBytes, installBytes.get(l.reccePosmId) ?? null);
 
       const hash = installHash.get(l.reccePosmId) ?? null;
-      const qualityFlags = await this.integrity.qualityFlags(installBytes.get(l.reccePosmId) ?? null, {
-        duplicate: hash ? dupSet.has(hash) : false,
+      const duplicate = hash ? dupSet.has(hash) : false;
+      const baseFlags = await this.integrity.qualityFlags(installBytes.get(l.reccePosmId) ?? null, {
+        duplicate,
         accuracy: installGeo?.accuracy,
       });
+      // The soft image flags (blur/lowLight/overexposed/duplicate/lowAccuracy) + the submission
+      // anti-fraud signals (B2/B6) merged into the persisted per-POSM qualityFlags the auditor
+      // reads. These are FLAGS, not blocks (the hard reuse block for beforeAfterDiffOk===false /
+      // duplicate is enforced in create()).
+      const qualityFlags = {
+        ...baseFlags,
+        clockSkew,
+        impossibleTravel,
+        geoCrossCheck,
+        siteToRecceMeters,
+        siteToInstallMeters,
+        recceToInstallMeters: distanceFromRecce,
+      };
 
       out.push({
         reccePosmId: l.reccePosmId,
@@ -232,16 +315,19 @@ export class InstallationService {
         beforeAfterDiffOk,
         qualityFlags: toJson(qualityFlags),
         hash,
+        duplicate,
       });
     }
 
-    if (anyOutside) {
+    if (hardFail) {
       throw new ForbiddenException(
-        'A photo was captured outside the site geo-fence. Re-capture at the site.',
+        hardFailOutside
+          ? 'A photo was captured outside the site geo-fence. Re-capture at the site.'
+          : 'A photo has no verifiable in-fence GPS fix (missing, invalid, or low-accuracy). Re-capture at the site with location enabled.',
       );
     }
 
-    return out;
+    return { posms: out, capturedAt };
   }
 
   /** The base `where` a caller is confined to, or null = FAIL-CLOSED (match nothing). */

@@ -4,6 +4,8 @@ import { PosmMediaService } from '../capture/posm-media.service';
 import {
   beforeAfterDiffers,
   computeQualityFlags,
+  isClockSkewed,
+  isImpossibleTravel,
   isLowAccuracy,
   QualityFlags,
 } from './image-integrity.helper';
@@ -68,7 +70,28 @@ export class CaptureIntegrityService {
   }
 
   /** GPS fix quality helper (exposed so the recce lane can flag low-accuracy fixes too). */
-  isLowAccuracy(accuracy: number | null | undefined): boolean {
-    return isLowAccuracy(accuracy);
+  isLowAccuracy(accuracy: number | null | undefined, cap?: number): boolean {
+    return cap === undefined ? isLowAccuracy(accuracy) : isLowAccuracy(accuracy, cap);
+  }
+
+  /**
+   * B6 clock-skew flag: the client capture time and the server receive time differ by more than
+   * the threshold. Missing/unparseable capture time → false (unverifiable, never a flag).
+   */
+  isClockSkewed(capturedAt: string | Date | null | undefined, receivedAt: Date): boolean {
+    return isClockSkewed(capturedAt, receivedAt);
+  }
+
+  /**
+   * B2 impossible-travel flag: the implied speed to cover `distanceMeters` between two client
+   * capture times exceeds the physical cap. Missing distance/timestamps or a zero interval →
+   * false (unverifiable). Used by the install lane (recce fix → install fix).
+   */
+  isImpossibleTravel(
+    distanceMeters: number | null | undefined,
+    fromCapturedAt: string | Date | null | undefined,
+    toCapturedAt: string | Date | null | undefined,
+  ): boolean {
+    return isImpossibleTravel(distanceMeters, fromCapturedAt, toCapturedAt);
   }
 }

@@ -143,16 +143,22 @@ export class AuditReviewService {
     const inst = await this.loadForMutation(user, id);
     this.assertSubmitted(inst.status);
 
-    const updated = await this.prisma.installation.update({
-      where: { id },
-      data: {
-        status: 'AUDIT_APPROVED',
-        auditedById: user.sub,
-        auditedAt: new Date(),
-        rejectionReasonCode: null,
-        rejectionReason: null,
-      },
-    });
+    // A2 (double-pay TOCTOU): the `status: 'SUBMITTED'` predicate in the WRITE closes the window
+    // between the load above and this update. Two concurrent audits both pass the pre-read guard,
+    // but only the row STILL SUBMITTED transitions; the loser matches 0 rows (Prisma P2025) → 409,
+    // so the audit-log APPROVE row is appended only on the winning path.
+    const updated = await this.prisma.installation
+      .update({
+        where: { id, status: 'SUBMITTED' },
+        data: {
+          status: 'AUDIT_APPROVED',
+          auditedById: user.sub,
+          auditedAt: new Date(),
+          rejectionReasonCode: null,
+          rejectionReason: null,
+        },
+      })
+      .catch((e) => this.conflictOnLostRace(e));
 
     await this.audit(user, 'APPROVE', id, { status: inst.status }, { status: 'AUDIT_APPROVED' });
     return updated;
@@ -163,16 +169,21 @@ export class AuditReviewService {
     const inst = await this.loadForMutation(user, id);
     this.assertSubmitted(inst.status);
 
-    const updated = await this.prisma.installation.update({
-      where: { id },
-      data: {
-        status: 'AUDIT_REJECTED',
-        auditedById: user.sub,
-        auditedAt: new Date(),
-        rejectionReasonCode: dto.reasonCode as RejectReasonCode,
-        rejectionReason: dto.reason ?? null,
-      },
-    });
+    // A2: same status-guarded write as approve. Because only a row STILL SUBMITTED transitions, a
+    // concurrent approve (which would have set auditedById + AUDIT_APPROVED) can never co-exist
+    // with this rejection — the loser gets a 409 and writes no second audit row.
+    const updated = await this.prisma.installation
+      .update({
+        where: { id, status: 'SUBMITTED' },
+        data: {
+          status: 'AUDIT_REJECTED',
+          auditedById: user.sub,
+          auditedAt: new Date(),
+          rejectionReasonCode: dto.reasonCode as RejectReasonCode,
+          rejectionReason: dto.reason ?? null,
+        },
+      })
+      .catch((e) => this.conflictOnLostRace(e));
 
     await this.audit(
       user,
@@ -202,6 +213,21 @@ export class AuditReviewService {
     if (status !== 'SUBMITTED') {
       throw new ConflictException(`Installation is already ${status} and can no longer be audited`);
     }
+  }
+
+  /**
+   * A2: the status-guarded single-item write matched 0 rows — the installation was transitioned
+   * by a concurrent request between the load and the write. Prisma surfaces this as P2025; re-map
+   * it to a 409 so the loser of the race never appends a duplicate audit row. Any other error
+   * propagates unchanged. Returns `never` so callers' definite-assignment analysis holds.
+   */
+  private conflictOnLostRace(e: unknown): never {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+      throw new ConflictException(
+        'Installation was already audited by a concurrent request and can no longer be audited',
+      );
+    }
+    throw e;
   }
 
   private mediaRef(photo: unknown): MediaRef | null {

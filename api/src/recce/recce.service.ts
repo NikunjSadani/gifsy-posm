@@ -8,7 +8,7 @@ import { tenantScope, vendorScope } from '../common/tenant-scope';
 import { PosmMediaService } from '../capture/posm-media.service';
 import { readMediaValue } from '../capture/visibility-types';
 import { CaptureIntegrityService } from '../capture-integrity/capture-integrity.service';
-import { readPosmCaptureConfig } from '../capture-integrity/posm-config.helper';
+import { readPosmCaptureConfig, readGpsAccuracyCapMeters } from '../capture-integrity/posm-config.helper';
 import { aggregatePhotoFence } from '../capture-integrity/photo-geo.helper';
 import { CreateRecceDto, ReccePosmLineDto } from './dto/create-recce.dto';
 import { ResubmitRecceDto } from './dto/resubmit-recce.dto';
@@ -95,38 +95,53 @@ export class RecceService {
 
     const prepared = await this.prepare(clientId, site, dto.posms);
 
-    const recce = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.recce.create({
-        data: {
-          clientId,
-          siteId: site.id,
-          submittedById: user.sub,
-          status: RecceStatus.SUBMITTED,
-          version: 1,
-          ...prepared.geo,
-          posms: { create: prepared.posmCreate },
-        },
-        include: this.detailInclude(),
+    // B8: surface a cross-submission duplicate flag — recordImageHashes reports which of this
+    // recce's photo hashes already appear on a DIFFERENT owner (a recce photo reused across
+    // sites). Captured out of the transaction closure and surfaced on the response.
+    let duplicate = false;
+    let recce;
+    try {
+      recce = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.recce.create({
+          data: {
+            clientId,
+            siteId: site.id,
+            submittedById: user.sub,
+            status: RecceStatus.SUBMITTED,
+            version: 1,
+            ...prepared.geo,
+            posms: { create: prepared.posmCreate },
+          },
+          include: this.detailInclude(),
+        });
+        if (prepared.hashes.length > 0) {
+          const rec = await this.media.recordImageHashes(
+            tx, clientId, { ownerKind: 'RECCE', ownerId: created.id }, prepared.hashes,
+          );
+          duplicate = rec.dupHashes.length > 0;
+        }
+        await tx.auditLog.create({
+          data: {
+            actorId: user.sub,
+            action: 'CREATE',
+            entityType: 'RECCE',
+            entityId: created.id,
+            newValues: toJson({ status: created.status, siteId: site.id, version: created.version }),
+            metadata: { clientId, event: 'RECCE_SUBMIT' } as Prisma.InputJsonValue,
+          },
+        });
+        return created;
       });
-      if (prepared.hashes.length > 0) {
-        await this.media.recordImageHashes(
-          tx, clientId, { ownerKind: 'RECCE', ownerId: created.id }, prepared.hashes,
-        );
+    } catch (e) {
+      // A4: a concurrent create racing the one-live-recce-per-site unique constraint surfaces a
+      // clean 409, not a raw 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('This site already has a recce (concurrent submit).');
       }
-      await tx.auditLog.create({
-        data: {
-          actorId: user.sub,
-          action: 'CREATE',
-          entityType: 'RECCE',
-          entityId: created.id,
-          newValues: toJson({ status: created.status, siteId: site.id, version: created.version }),
-          metadata: { clientId, event: 'RECCE_SUBMIT' } as Prisma.InputJsonValue,
-        },
-      });
-      return created;
-    });
+      throw e;
+    }
 
-    return this.present(recce);
+    return this.present(recce, { duplicate });
   }
 
   // ── Resubmit (REJECTED → SUBMITTED, version++) ──────────────────────────────────
@@ -134,8 +149,13 @@ export class RecceService {
     const clientId = user.clientId;
     this.assertMaxTwo(dto.posms);
 
+    // A1 fail-CLOSED: a null vendor scope must DENY (404), never collapse the `where` to `{ id }`
+    // (which would let a vendor resubmit ANY tenant's recce). Matches get()/list().
+    const scope = this.scopeWhere(user);
+    if (scope === null) throw new NotFoundException('Recce not found');
+
     const recce = await this.prisma.recce.findFirst({
-      where: { id, ...this.scopeWhere(user) },
+      where: { id, ...scope },
       include: { site: true },
     });
     if (!recce) throw new NotFoundException('Recce not found');
@@ -148,45 +168,56 @@ export class RecceService {
 
     const prepared = await this.prepare(clientId, recce.site, dto.posms);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      // A rejected recce never has an installation (install requires APPROVED), so replacing
-      // its POSM child rows is safe.
-      await tx.reccePosm.deleteMany({ where: { recceId: id } });
-      const next = await tx.recce.update({
-        where: { id },
-        data: {
-          status: RecceStatus.SUBMITTED,
-          version: { increment: 1 },
-          receivedAt: new Date(),
-          approvedById: null,
-          reviewedAt: null,
-          rejectionReasonCode: null,
-          rejectionReason: null,
-          ...prepared.geo,
-          posms: { create: prepared.posmCreate },
-        },
-        include: this.detailInclude(),
+    let duplicate = false;
+    let updated;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        // A rejected recce never has an installation (install requires APPROVED), so replacing
+        // its POSM child rows is safe.
+        await tx.reccePosm.deleteMany({ where: { recceId: id } });
+        const next = await tx.recce.update({
+          where: { id },
+          data: {
+            status: RecceStatus.SUBMITTED,
+            version: { increment: 1 },
+            receivedAt: new Date(),
+            approvedById: null,
+            reviewedAt: null,
+            rejectionReasonCode: null,
+            rejectionReason: null,
+            ...prepared.geo,
+            posms: { create: prepared.posmCreate },
+          },
+          include: this.detailInclude(),
+        });
+        if (prepared.hashes.length > 0) {
+          const rec = await this.media.recordImageHashes(
+            tx, clientId, { ownerKind: 'RECCE', ownerId: id }, prepared.hashes,
+          );
+          duplicate = rec.dupHashes.length > 0;
+        }
+        await tx.auditLog.create({
+          data: {
+            actorId: user.sub,
+            action: 'UPDATE',
+            entityType: 'RECCE',
+            entityId: id,
+            oldValues: toJson({ status: RecceStatus.REJECTED, version: recce.version }),
+            newValues: toJson({ status: RecceStatus.SUBMITTED, version: next.version }),
+            metadata: { clientId, event: 'RECCE_RESUBMIT' } as Prisma.InputJsonValue,
+          },
+        });
+        return next;
       });
-      if (prepared.hashes.length > 0) {
-        await this.media.recordImageHashes(
-          tx, clientId, { ownerKind: 'RECCE', ownerId: id }, prepared.hashes,
-        );
+    } catch (e) {
+      // A4: clean 409 on a unique-constraint race.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('This recce could not be resubmitted (concurrent write).');
       }
-      await tx.auditLog.create({
-        data: {
-          actorId: user.sub,
-          action: 'UPDATE',
-          entityType: 'RECCE',
-          entityId: id,
-          oldValues: toJson({ status: RecceStatus.REJECTED, version: recce.version }),
-          newValues: toJson({ status: RecceStatus.SUBMITTED, version: next.version }),
-          metadata: { clientId, event: 'RECCE_RESUBMIT' } as Prisma.InputJsonValue,
-        },
-      });
-      return next;
-    });
+      throw e;
+    }
 
-    return this.present(updated);
+    return this.present(updated, { duplicate });
   }
 
   // ── List (the field user's OWN recces, vendor-scoped) ───────────────────────────
@@ -245,7 +276,31 @@ export class RecceService {
       include: this.detailInclude(),
     });
     if (!recce) throw new NotFoundException('Recce not found');
-    return this.present(recce);
+    const duplicate = await this.recceDuplicate(recce.clientId, recce.id);
+    return this.present(recce, { duplicate });
+  }
+
+  /**
+   * B8: does any of this recce's recorded photo hashes also appear on a DIFFERENT owner (a
+   * recce photo reused across sites / an install)? Two cheap indexed lookups against the shared
+   * ImageHash store — no byte re-fetch. Returns false when the recce recorded no hashes.
+   */
+  private async recceDuplicate(clientId: string, recceId: string): Promise<boolean> {
+    const own = await this.prisma.imageHash.findMany({
+      where: { ownerKind: 'RECCE', ownerId: recceId },
+      select: { hash: true },
+    });
+    if (own.length === 0) return false;
+    const hashes = [...new Set(own.map((h) => h.hash))];
+    const other = await this.prisma.imageHash.findFirst({
+      where: {
+        clientId,
+        hash: { in: hashes },
+        NOT: { ownerKind: 'RECCE', ownerId: recceId },
+      },
+      select: { id: true },
+    });
+    return !!other;
   }
 
   // ── Internals ────────────────────────────────────────────────────────────────
@@ -276,14 +331,24 @@ export class RecceService {
       select: { settings: true },
     });
     const config = readPosmCaptureConfig(client?.settings);
+    const accuracyCapMeters = readGpsAccuracyCapMeters(client?.settings);
     const reference =
       site.lat != null && site.lng != null ? { lat: Number(site.lat), lng: Number(site.lng) } : null;
 
     const photos = lines.map((l) => ({ geo: readMediaValue(l.photo).geo }));
-    const agg = aggregatePhotoFence(photos, reference, config.geoFence.radiusMeters);
-    if (config.geoFence.enabled && agg.anyOutside) {
+    const agg = aggregatePhotoFence(photos, reference, config.geoFence.radiusMeters, {
+      accuracyCapMeters,
+    });
+    // B1 fail-CLOSED: when the fence is enabled AND the site has a reference, ANY fence-required
+    // photo that is OUTSIDE **or** unverifiable (missing / invalid / over-accuracy-cap fix) is a
+    // HARD 403 — an unverifiable fix no longer falls through as a soft null. `anyOutside` /
+    // `anyUnverifiable` are only ever set when a reference exists, so the fence-disabled and
+    // no-site-reference cases stay soft flags (geoFenceOk on the row).
+    if (config.geoFence.enabled && (agg.anyOutside || agg.anyUnverifiable)) {
       throw new ForbiddenException(
-        'A photo was captured outside the site geo-fence. Re-capture at the site.',
+        agg.anyOutside
+          ? 'A photo was captured outside the site geo-fence. Re-capture at the site.'
+          : 'A photo has no verifiable in-fence GPS fix (missing, invalid, or low-accuracy). Re-capture at the site with location enabled.',
       );
     }
 
@@ -381,16 +446,30 @@ export class RecceService {
   }
 
   /** Shape a recce (with includes) into the API response, resolving media view-paths. */
-  private present(r: {
-    id: string; status: RecceStatus; version: number;
-    captureLat: Prisma.Decimal | null; captureLng: Prisma.Decimal | null; captureAccuracy: number | null;
-    distanceMeters: Prisma.Decimal | null; geoFenceOk: boolean | null;
-    capturedAt: Date | null; receivedAt: Date;
-    rejectionReasonCode: unknown; rejectionReason: string | null;
-    site: { id: string; code: string; name: string; town: string | null; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null };
-    submittedBy: { id: string; name: string };
-    posms: { id: string; slotNo: number; posmTypeId: string; dimensions: unknown; photo: unknown; markup: unknown; posmType: { id: string; code: string; name: string } }[];
-  }) {
+  private present(
+    r: {
+      id: string; status: RecceStatus; version: number;
+      captureLat: Prisma.Decimal | null; captureLng: Prisma.Decimal | null; captureAccuracy: number | null;
+      distanceMeters: Prisma.Decimal | null; geoFenceOk: boolean | null;
+      capturedAt: Date | null; receivedAt: Date;
+      rejectionReasonCode: unknown; rejectionReason: string | null;
+      site: { id: string; code: string; name: string; town: string | null; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null };
+      submittedBy: { id: string; name: string };
+      posms: { id: string; slotNo: number; posmTypeId: string; dimensions: unknown; photo: unknown; markup: unknown; posmType: { id: string; code: string; name: string } }[];
+    },
+    flags: { duplicate?: boolean } = {},
+  ) {
+    // Recce reviewer flags (B5/B6/B8). The Recce row has no qualityFlags column, so these are
+    // COMPUTED from stored signals and surfaced on the response `integrity` block:
+    //   - lowAccuracy: the stored representative fix's accuracy is worse than the cap (B8);
+    //   - clockSkew:   client shutter time vs. server receive time differ by > 10 min (B6);
+    //   - duplicate:   a recorded photo hash reused across submissions (B8), resolved by the
+    //                  caller (submit → recordImageHashes dupHashes; get → recceDuplicate()).
+    const qualityFlags = {
+      lowAccuracy: this.integrity.isLowAccuracy(r.captureAccuracy),
+      clockSkew: this.integrity.isClockSkewed(r.capturedAt, r.receivedAt),
+      duplicate: flags.duplicate ?? false,
+    };
     return {
       id: r.id,
       status: r.status,
@@ -406,6 +485,7 @@ export class RecceService {
         captureAccuracy: r.captureAccuracy,
         captureLat: this.dec(r.captureLat),
         captureLng: this.dec(r.captureLng),
+        qualityFlags,
       },
       capturedAt: r.capturedAt,
       receivedAt: r.receivedAt,

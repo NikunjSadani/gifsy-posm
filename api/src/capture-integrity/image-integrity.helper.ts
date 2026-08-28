@@ -43,22 +43,32 @@ import { Jimp, defaultFormats } from 'jimp';
 // Tunable thresholds (single source of truth; imported by the service + specs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Side of the perceptual-hash grid → an N×N = 64-cell fingerprint (a 64-bit aHash). */
-export const HASH_GRID = 8;
+/**
+ * Side of the perceptual-hash grid → an N×N = 256-cell fingerprint (a 256-bit aHash).
+ *
+ * B9 (audit) raised this from 8×8 (64-bit) to 16×16 (256-bit): a 64-bit aHash is coarse
+ * enough that two genuinely different site photos can collide low, weakening the before≠after
+ * signal. A 256-bit fingerprint quadruples the resolution, so honest install/recce pairs sit
+ * clearly above the recalibrated threshold while re-used/near-identical frames still collapse
+ * toward 0.
+ */
+export const HASH_GRID = 16;
 
 /** Side of the blur/exposure analysis grid (decoded luminance is pooled to this size). */
 export const ANALYSIS_GRID = 32;
 
 /**
- * Minimum Hamming distance (of 64 bits) an INSTALL photo must differ from its linked RECCE
+ * Minimum Hamming distance (of 256 bits) an INSTALL photo must differ from its linked RECCE
  * photo to pass the before≠after check. Below this the two are "too similar" (a re-used /
  * copied photo) → beforeAfterDiffOk = false. Identical images → distance 0 → always fails.
  *
- * Calibrated for a TRUE 8×8 luminance aHash: identical/near-identical frames sit at 0–4 bits,
- * while two genuinely different photos differ by well over 8. 8 is a conservative floor that
- * clears re-used/duplicate frames without falsely flagging two honest photos of the same site.
+ * Recalibrated proportionally with the B9 grid change (8×8→16×16, 64→256 bits): the old floor
+ * was 8/64 = 12.5% of the bits; holding that ratio on 256 bits gives 32. Identical/near-
+ * identical frames sit at 0–a-few bits, while two genuinely different photos differ by well
+ * over 32 — a conservative floor that still clears re-used/duplicate frames without falsely
+ * flagging two honest photos of the same site.
  */
-export const BEFORE_AFTER_MIN_HAMMING = 8;
+export const BEFORE_AFTER_MIN_HAMMING = 32;
 
 /**
  * Variance-of-Laplacian at/under this reads as BLURRY. Measured over a 32×32 decoded
@@ -146,8 +156,9 @@ export async function decodeLumaGrid(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * 64-bit average-hash of an ALREADY-DECODED 8×8 luminance grid: set each bit where the cell's
- * luminance exceeds the grid mean. Returned as a BigInt bitset (bit i = cell i). Pure/sync.
+ * Average-hash of an ALREADY-DECODED N×N luminance grid: set each bit where the cell's
+ * luminance exceeds the grid mean. Returned as a BigInt bitset (bit i = cell i), so it scales
+ * to any grid size (64-bit for an 8×8 grid, 256-bit for the 16×16 HASH_GRID). Pure/sync.
  */
 export function aHashFromGrid(grid: number[]): bigint {
   const mean = grid.reduce((a, b) => a + b, 0) / grid.length;
@@ -159,8 +170,9 @@ export function aHashFromGrid(grid: number[]): bigint {
 }
 
 /**
- * Decode a buffer to an 8×8 luminance grid and return its 64-bit perceptual aHash, or `null`
- * when the buffer is missing/undecodable (unverifiable). Async (decode).
+ * Decode a buffer to a HASH_GRID×HASH_GRID luminance grid and return its perceptual aHash
+ * (256-bit at the default 16×16 grid), or `null` when the buffer is missing/undecodable
+ * (unverifiable). Async (decode).
  */
 export async function aHash(buffer: Buffer | null | undefined): Promise<bigint | null> {
   const grid = await decodeLumaGrid(buffer, HASH_GRID);
@@ -327,4 +339,95 @@ export function isLowAccuracy(
   cap: number = GPS_ACCURACY_CAP_METERS,
 ): boolean {
   return typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy > cap;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B9 grid change note: HASH_GRID/BEFORE_AFTER_MIN_HAMMING live at the top of the file.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B6 (clock-skew) — client shutter time vs. server receive time
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** |client capturedAt − server receivedAt| beyond this reads as a clock-skew flag. */
+export const CLOCK_SKEW_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Absolute skew (ms) between a client-reported capture time and the server receive time, or
+ * `null` when either is missing / unparseable (unverifiable — never a flag on absent evidence).
+ * Pure/sync.
+ */
+export function clockSkewMs(
+  capturedAt: string | Date | null | undefined,
+  receivedAt: Date,
+): number | null {
+  if (!capturedAt) return null;
+  const t = capturedAt instanceof Date ? capturedAt.getTime() : Date.parse(capturedAt);
+  if (Number.isNaN(t)) return null;
+  const r = receivedAt.getTime();
+  if (Number.isNaN(r)) return null;
+  return Math.abs(t - r);
+}
+
+/**
+ * Clock-skew flag: true when the client capture time and the server receive time differ by
+ * more than `thresholdMs`. Missing/unparseable capture time → false (NEUTRAL, unverifiable —
+ * never a flag on evidence we cannot read). Pure/sync.
+ */
+export function isClockSkewed(
+  capturedAt: string | Date | null | undefined,
+  receivedAt: Date,
+  thresholdMs: number = CLOCK_SKEW_THRESHOLD_MS,
+): boolean {
+  const d = clockSkewMs(capturedAt, receivedAt);
+  return d === null ? false : d > thresholdMs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B2 (impossible-travel) — implied speed between two timestamped fixes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Implied ground speed beyond this (km/h) reads as physically impossible → a reviewer flag. */
+export const IMPOSSIBLE_SPEED_KMH = 200;
+
+/**
+ * Implied ground speed (km/h) to cover `distanceMeters` in the interval between two client
+ * capture times, or `null` when the distance or either timestamp is missing/unparseable, or
+ * the interval is ≤ 0 (unverifiable — two fixes at the same instant imply no travel we can
+ * measure). Pure/sync.
+ */
+export function impliedSpeedKmh(
+  distanceMeters: number | null | undefined,
+  fromCapturedAt: string | Date | null | undefined,
+  toCapturedAt: string | Date | null | undefined,
+): number | null {
+  if (typeof distanceMeters !== 'number' || !Number.isFinite(distanceMeters)) return null;
+  const parse = (v: string | Date | null | undefined): number | null => {
+    if (!v) return null;
+    const t = v instanceof Date ? v.getTime() : Date.parse(v);
+    return Number.isNaN(t) ? null : t;
+  };
+  const a = parse(fromCapturedAt);
+  const b = parse(toCapturedAt);
+  if (a === null || b === null) return null;
+  const dtMs = Math.abs(b - a);
+  if (dtMs <= 0) return null;
+  const hours = dtMs / 3_600_000;
+  const km = distanceMeters / 1000;
+  return km / hours;
+}
+
+/**
+ * Impossible-travel flag: true when the implied speed to move `distanceMeters` between the two
+ * capture times exceeds `capKmh`. Missing distance/timestamps or a zero interval → false
+ * (NEUTRAL, unverifiable). Pure/sync.
+ */
+export function isImpossibleTravel(
+  distanceMeters: number | null | undefined,
+  fromCapturedAt: string | Date | null | undefined,
+  toCapturedAt: string | Date | null | undefined,
+  capKmh: number = IMPOSSIBLE_SPEED_KMH,
+): boolean {
+  const s = impliedSpeedKmh(distanceMeters, fromCapturedAt, toCapturedAt);
+  return s === null ? false : s > capKmh;
 }

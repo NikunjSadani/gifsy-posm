@@ -35,9 +35,59 @@ describe('photo-geo.helper — aggregatePhotoFence', () => {
     expect(agg.worst?.distanceMeters).toBeNull();
   });
 
-  it('no valid fix on any photo → unverifiable (null)', () => {
+  it('no valid fix on any photo → unverifiable (null), but flags anyUnverifiable with a ref', () => {
     const agg = aggregatePhotoFence([{ geo: undefined }, {}], ref, 100);
     expect(agg.geoFenceOk).toBeNull();
     expect(agg.worst).toBeNull();
+    // B1: with a reference, a fence-required photo with no fix is UNVERIFIABLE → the service
+    // turns this into a hard 403 when the fence is enabled.
+    expect(agg.anyUnverifiable).toBe(true);
+    expect(agg.anyOutside).toBe(false);
+  });
+
+  it('B1: one in-fence photo + one no-geo photo does NOT read as a clean pass', () => {
+    const agg = aggregatePhotoFence(
+      [{ geo: { lat: 19.0761, lng: 72.8771 } }, { geo: undefined }],
+      ref,
+      100,
+    );
+    // The hole: previously geoFenceOk was true (the no-geo photo was ignored). Now the
+    // unverifiable photo blocks a `true` and flags anyUnverifiable.
+    expect(agg.geoFenceOk).toBe(false);
+    expect(agg.anyUnverifiable).toBe(true);
+    expect(agg.anyOutside).toBe(false);
+  });
+
+  it('B1: a no-reference submission stays SOFT (null, never anyUnverifiable)', () => {
+    const agg = aggregatePhotoFence([{ geo: undefined }, {}], null, 100);
+    expect(agg.geoFenceOk).toBeNull();
+    expect(agg.anyUnverifiable).toBe(false); // no reference ⇒ never a hard-fail signal
+    expect(agg.anyOutside).toBe(false);
+  });
+
+  it('B8: an over-accuracy-cap fix → lowAccuracy true AND unverifiable (feeds B1)', () => {
+    const agg = aggregatePhotoFence(
+      [{ geo: { lat: 19.0761, lng: 72.8771, accuracy: 250 } }],
+      ref,
+      100,
+      { accuracyCapMeters: 100 },
+    );
+    expect(agg.lowAccuracy).toBe(true);
+    expect(agg.anyUnverifiable).toBe(true); // poor fix cannot verify inside → hard-fail when fenced
+    expect(agg.geoFenceOk).toBeNull(); // no usable fix for the verdict
+    // Still recorded as the representative fix so captureAccuracy surfaces to the reviewer.
+    expect(agg.worst?.accuracy).toBe(250);
+  });
+
+  it('B8: a within-cap fix inside the fence still passes cleanly', () => {
+    const agg = aggregatePhotoFence(
+      [{ geo: { lat: 19.0761, lng: 72.8771, accuracy: 20 } }],
+      ref,
+      100,
+      { accuracyCapMeters: 100 },
+    );
+    expect(agg.lowAccuracy).toBe(false);
+    expect(agg.anyUnverifiable).toBe(false);
+    expect(agg.geoFenceOk).toBe(true);
   });
 });
