@@ -40,6 +40,12 @@ export class ApprovalController {
     return this.approval.waterfall(user);
   }
 
+  /** GET /v1/approval/recces/:id — one scoped recce for the detail view (any status). */
+  @Get('recces/:id')
+  getRecce(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.approval.getRecce(user, id);
+  }
+
   /** POST /v1/approval/recces/bulk-approve — approve many by id (all scoped; skip out-of-scope). */
   @Post('recces/bulk-approve')
   @HttpCode(HttpStatus.OK)

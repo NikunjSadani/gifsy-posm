@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
+import { Toaster } from 'react-hot-toast';
 import { ToastProvider } from '@/components/ui/toast';
 import { getTenantConfig, getBrandStyle } from '@/lib/platform/server';
 import { ClientConfigProvider } from '@/lib/platform/client-config-context';
@@ -84,6 +85,11 @@ export default async function RootLayout({
         {/* Bounce to /auth/login on any /api 401 (expired/invalid token), after first
             attempting a silent refresh. App-wide. */}
         <SessionExpiryGuard />
+        {/* Single app-wide react-hot-toast surface. The login page and the field/review/
+            audit/admin consoles all raise `toast(...)`; without ONE Toaster mounted here those
+            calls render nothing, and more than one Toaster renders every toast twice. Kept
+            distinct from the chassis ToastProvider above (a separate system). */}
+        <Toaster position="top-center" toastOptions={{ duration: 4000 }} />
       </body>
     </html>
   );

@@ -33,6 +33,12 @@ export class AuditReviewController {
     return this.audit.listQueue(user, query);
   }
 
+  /** GET /v1/audit/installations/:id — one scoped installation for the detail view (any status). */
+  @Get('installations/:id')
+  getInstallation(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.audit.getInstallation(user, id);
+  }
+
   /** POST /v1/audit/installations/:id/approve — SUBMITTED → AUDIT_APPROVED. */
   @Post('installations/:id/approve')
   @HttpCode(HttpStatus.OK)

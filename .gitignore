@@ -1,5 +1,6 @@
 node_modules/
 .localdb/
+.localstorage/
 dist/
 .next/
 out/

@@ -276,6 +276,55 @@ describe('ApprovalService.bulkApprove — scoped, approve-only, skips out-of-sco
   });
 });
 
+describe('ApprovalService.getRecce — scoped detail read (any status)', () => {
+  const recceRow = () => ({
+    id: 'r1', status: 'SUBMITTED', version: 1, clientId: 'c1',
+    capturedAt: new Date(), receivedAt: new Date(),
+    geoFenceOk: true, distanceMeters: null, captureAccuracy: 10, captureLat: null, captureLng: null,
+    site: { id: 's1', code: 'A1', name: 'Site A1', town: 'Pune', lat: null, lng: null },
+    submittedBy: { id: 'u1', name: 'Field' },
+    posms: [],
+  });
+
+  it('ASM: findFirst pins tenant + site.asmUserId + id; returns the mapped item', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(recceRow());
+    const svc = new ApprovalService(prisma);
+    const item = await svc.getRecce(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'r1');
+    const where = fns.recce.findFirst.mock.calls[0][0].where;
+    expect(where).toMatchObject({ id: 'r1', clientId: 'c1', site: { asmUserId: 'asm-7' } });
+    expect(item).toMatchObject({ id: 'r1', status: 'SUBMITTED' });
+    expect(item.integrity.duplicatePhoto).toBe(false);
+  });
+
+  it('an id outside the caller scope (findFirst → null) → 404', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(null);
+    const svc = new ApprovalService(prisma);
+    await expect(
+      svc.getRecce(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'x'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('CLIENT_ADMIN: tenant-scoped, no site narrowing', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(recceRow());
+    const svc = new ApprovalService(prisma);
+    await svc.getRecce(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'r1');
+    const where = fns.recce.findFirst.mock.calls[0][0].where;
+    expect(where.clientId).toBe('c1');
+    expect(where.site).toBeUndefined();
+  });
+
+  it('un-assumed GIFSY_ADMIN: platform-wide (no clientId filter)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(recceRow());
+    const svc = new ApprovalService(prisma);
+    await svc.getRecce(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), 'r1');
+    expect(fns.recce.findFirst.mock.calls[0][0].where.clientId).toBeUndefined();
+  });
+});
+
 describe('ApprovalService.waterfall — scoped counts', () => {
   it('ASM: site/recce/install counts all carry the asm-territory pin', async () => {
     const { prisma, fns } = makePrisma();

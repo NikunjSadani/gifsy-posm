@@ -1,0 +1,238 @@
+/* ─── ASM Review console — typed API client + pure helpers ────────────────────
+   Thin wrappers over the backend approval endpoints, called through the same-origin
+   `/api/*` proxy (which maps to the backend `/v1/*` and injects the bearer cookie).
+
+   The ASM (Area Sales Manager) reviews field-vendor RECCE submissions and approves or
+   rejects them. Every function returns the api-client `ApiResponse<T>` so callers branch
+   on `.success`. Pure helpers (query-string building, media URLs, integrity flags, queue
+   summarising) live here too and are unit-tested — no React, no fetch.
+
+   Endpoints (backend `/v1/approval/*`, reached as `/api/approval/*`):
+     GET  /api/approval/recces            — the SUBMITTED review queue (scoped to this ASM)
+     GET  /api/approval/waterfall         — the stage-funnel counts
+     POST /api/approval/recces/:id/approve
+     POST /api/approval/recces/:id/reject       (body: { reasonCode, reason? })
+     POST /api/approval/recces/bulk-approve     (body: { ids: string[] })
+─────────────────────────────────────────────────────────────────────────────── */
+
+import { api, type ApiResponse } from '@/lib/api-client';
+
+// ─── Domain types (mirror ApprovalService response shapes) ─────────────────────
+
+/** A render-ready media reference: raw object key + backend view-path + optional geo. */
+export interface MediaRef {
+  key: string;
+  /** Backend-relative path (`/v1/media/view?key=…`). Use `mediaSrc(key)` for the browser URL. */
+  viewPath: string;
+  geo: { lat: number; lng: number; accuracy?: number } | null;
+}
+
+export interface RecceSite {
+  id: string;
+  code: string;
+  name: string;
+  town: string | null;
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface RecceIntegrity {
+  geoFenceOk: boolean | null;
+  distanceMeters: number | null;
+  captureAccuracy: number | null;
+  captureLat: number | null;
+  captureLng: number | null;
+  duplicatePhoto: boolean;
+}
+
+export interface ReccePosm {
+  id: string;
+  slotNo: number;
+  posmType: { id: string; code: string; name: string } | null;
+  dimensions: string | null;
+  photo: MediaRef | null;
+  markup: unknown | null;
+}
+
+export interface RecceQueueItem {
+  id: string;
+  status: string;
+  version: number;
+  site: RecceSite;
+  submittedBy: { id: string; name: string } | null;
+  capturedAt: string | null;
+  receivedAt: string | null;
+  integrity: RecceIntegrity;
+  posms: ReccePosm[];
+}
+
+export interface QueueResult {
+  items: RecceQueueItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface Waterfall {
+  totalSites: number;
+  recced: number;
+  approved: number;
+  installed: number;
+  audited: number;
+}
+
+export interface BulkApproveResult {
+  approvedCount: number;
+  approvedIds: string[];
+  skipped: { id: string; reason: string }[];
+}
+
+export interface QueueFilters {
+  siteCode?: string;
+  town?: string;
+  page?: number;
+  limit?: number;
+}
+
+// ─── Reject reason vocabulary (mirrors the Prisma RejectReasonCode enum) ───────
+
+export const REJECT_REASON_CODES = [
+  'BLURRY',
+  'WRONG_SITE',
+  'POSM_NOT_VISIBLE',
+  'GEO_MISMATCH',
+  'DUPLICATE_PHOTO',
+  'WRONG_POSM',
+  'DIMENSIONS_MISMATCH',
+  'OTHER',
+] as const;
+
+export type RejectReasonCode = (typeof REJECT_REASON_CODES)[number];
+
+/** Human labels for the controlled reject-reason vocabulary. */
+export const REJECT_REASON_LABELS: Record<RejectReasonCode, string> = {
+  BLURRY: 'Blurry / unclear photo',
+  WRONG_SITE: 'Wrong site',
+  POSM_NOT_VISIBLE: 'POSM not visible',
+  GEO_MISMATCH: 'Location mismatch',
+  DUPLICATE_PHOTO: 'Duplicate photo',
+  WRONG_POSM: 'Wrong POSM',
+  DIMENSIONS_MISMATCH: 'Dimensions mismatch',
+  OTHER: 'Other',
+};
+
+export interface RejectBody {
+  reasonCode: RejectReasonCode;
+  reason?: string;
+}
+
+// ─── Pure helpers (unit-tested; no fetch / no React) ───────────────────────────
+
+/**
+ * Browser `<img src>` for a stored media key. The backend view-path is `/v1/media/view`;
+ * the same-origin proxy exposes it at `/api/media/view` (and injects the auth cookie), so
+ * a raw object key becomes a directly-renderable, auth-gated URL.
+ */
+export function mediaSrc(key: string): string {
+  return `/api/media/view?key=${encodeURIComponent(key)}`;
+}
+
+/**
+ * Serialise queue filters to a query string (leading `?` when non-empty). Blank/whitespace
+ * strings are dropped so an empty filter box never narrows the query. Deterministic key
+ * order keeps it testable.
+ */
+export function queueQueryString(filters: QueueFilters = {}): string {
+  const params = new URLSearchParams();
+  const siteCode = filters.siteCode?.trim();
+  const town = filters.town?.trim();
+  if (siteCode) params.set('siteCode', siteCode);
+  if (town) params.set('town', town);
+  if (filters.page != null) params.set('page', String(filters.page));
+  if (filters.limit != null) params.set('limit', String(filters.limit));
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+/**
+ * Human-readable integrity warnings for a recce, worst-first, for the reviewer to eyeball.
+ * Empty array = no flags raised. Kept pure so the queue and detail views agree.
+ */
+export function recceFlags(item: RecceQueueItem): string[] {
+  const flags: string[] = [];
+  const ig = item.integrity;
+  if (ig.geoFenceOk === false) {
+    flags.push(
+      ig.distanceMeters != null
+        ? `Outside geo-fence (${Math.round(ig.distanceMeters)} m away)`
+        : 'Outside geo-fence',
+    );
+  }
+  if (ig.duplicatePhoto) flags.push('Duplicate photo detected');
+  if (ig.captureAccuracy != null && ig.captureAccuracy > 100) {
+    flags.push(`Low GPS accuracy (±${Math.round(ig.captureAccuracy)} m)`);
+  }
+  return flags;
+}
+
+/** How many POSM photos a recce carries (some slots may have no photo). */
+export function photoCount(item: RecceQueueItem): number {
+  return item.posms.filter((p) => p.photo != null).length;
+}
+
+export interface QueueSummary {
+  total: number;
+  flagged: number;
+  towns: number;
+}
+
+/**
+ * Roll a queue page into headline counts for the reviewer: how many recces, how many carry
+ * at least one integrity flag, and how many distinct towns are represented.
+ */
+export function summarizeQueue(items: RecceQueueItem[]): QueueSummary {
+  const towns = new Set<string>();
+  let flagged = 0;
+  for (const it of items) {
+    if (recceFlags(it).length > 0) flagged += 1;
+    if (it.site.town) towns.add(it.site.town.toLowerCase());
+  }
+  return { total: items.length, flagged, towns: towns.size };
+}
+
+// ─── Network calls ─────────────────────────────────────────────────────────────
+
+/** GET the SUBMITTED review queue for this ASM (scoped server-side). */
+export function fetchQueue(filters: QueueFilters = {}): Promise<ApiResponse<QueueResult>> {
+  return api.get<QueueResult>(`/api/approval/recces${queueQueryString(filters)}`);
+}
+
+/** GET the stage-funnel counts scoped to the caller. */
+export function fetchWaterfall(): Promise<ApiResponse<Waterfall>> {
+  return api.get<Waterfall>('/api/approval/waterfall');
+}
+
+/**
+ * GET one scoped recce by id for the detail view. Backed by `/v1/approval/recces/:id`, which
+ * applies the same tenant + ASM-territory scoping as the queue and returns a recce in ANY
+ * status — so the detail page opens a recce past the queue's page cap or already reviewed
+ * (an out-of-scope / missing id resolves as `success:false` with status 404).
+ */
+export function fetchRecce(id: string): Promise<ApiResponse<RecceQueueItem>> {
+  return api.get<RecceQueueItem>(`/api/approval/recces/${encodeURIComponent(id)}`);
+}
+
+/** POST approve a single recce (SUBMITTED → APPROVED). */
+export function approveRecce(id: string): Promise<ApiResponse<unknown>> {
+  return api.post<unknown>(`/api/approval/recces/${encodeURIComponent(id)}/approve`, {});
+}
+
+/** POST reject a single recce with a required reason code (+ optional note). */
+export function rejectRecce(id: string, body: RejectBody): Promise<ApiResponse<unknown>> {
+  return api.post<unknown>(`/api/approval/recces/${encodeURIComponent(id)}/reject`, body);
+}
+
+/** POST bulk-approve many recces by id (out-of-scope / non-SUBMITTED ids are skipped server-side). */
+export function bulkApproveRecces(ids: string[]): Promise<ApiResponse<BulkApproveResult>> {
+  return api.post<BulkApproveResult>('/api/approval/recces/bulk-approve', { ids });
+}

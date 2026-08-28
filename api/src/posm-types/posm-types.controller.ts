@@ -22,6 +22,13 @@ import { UpdatePosmTypeDto } from './dto/update-posm-type.dto';
 export class PosmTypesController {
   constructor(private readonly posmTypes: PosmTypesService) {}
 
+  /**
+   * The POSM-type catalogue (tenant-scoped reference data). Widened beyond the admin floor to
+   * the vendor field roles: a VENDOR_FIELD rep must pick a POSM type during recce capture. This
+   * is READ-ONLY reference data — the write handlers below keep the admin-only class floor. The
+   * method-level @Roles overrides the class-level one for this handler.
+   */
+  @Roles('VENDOR_FIELD', 'VENDOR_HO', 'ASM', 'AUDITOR', 'CLIENT_ADMIN', 'GIFSY_ADMIN')
   @Get()
   list(@CurrentUser() user: JwtPayload) {
     return this.posmTypes.list(user);

@@ -89,6 +89,51 @@ describe('AuditReviewService.listQueue — tenant scoping', () => {
   });
 });
 
+describe('AuditReviewService.getInstallation — scoped detail read (any status)', () => {
+  const installRow = () => ({
+    id: 'i1', status: 'AUDIT_APPROVED', version: 1, capturedAt: null, receivedAt: new Date(),
+    site: { id: 's1', code: 'S1', name: 'Site', town: 'Pune', lat: null, lng: null },
+    submittedBy: { id: 'v1', name: 'Rep' },
+    recce: { id: 'r1', captureLat: null, captureLng: null, captureAccuracy: 12, geoFenceOk: true },
+    posms: [
+      {
+        id: 'ip1', reccePosmId: 'rp1', photo: { key: 'posm-media/c1/install.jpg' },
+        captureLat: null, captureLng: null, geoFenceOk: true,
+        distanceFromRecce: 3.5, beforeAfterDiffOk: true, qualityFlags: null,
+        reccePosm: { photo: 'posm-media/c1/recce.jpg', dimensions: { width: 1, height: 1, unit: 'm' }, markup: null, posmType: { id: 'pt1', code: 'BOARD', name: 'Board' } },
+      },
+    ],
+  });
+
+  it('AUDITOR: findFirst pins the tenant + id; returns the mapped compare item (even when already audited)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findFirst.mockResolvedValue(installRow());
+    const svc = new AuditReviewService(prisma);
+    const item = await svc.getInstallation(user({ role: 'AUDITOR', clientId: 'c1' }), 'i1');
+    expect(fns.installation.findFirst.mock.calls[0][0].where).toMatchObject({ id: 'i1', clientId: 'c1' });
+    expect(item).toMatchObject({ id: 'i1', status: 'AUDIT_APPROVED' });
+    expect(item.compare[0].installPhoto?.viewPath).toContain('install.jpg');
+    expect(item.compare[0].reccePhoto?.viewPath).toContain('recce.jpg');
+  });
+
+  it('a cross-tenant / missing id (findFirst → null) → 404', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findFirst.mockResolvedValue(null);
+    const svc = new AuditReviewService(prisma);
+    await expect(
+      svc.getInstallation(user({ role: 'AUDITOR', clientId: 'c1' }), 'x'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('un-assumed GIFSY_ADMIN: platform-wide (no clientId filter)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findFirst.mockResolvedValue(installRow());
+    const svc = new AuditReviewService(prisma);
+    await svc.getInstallation(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), 'i1');
+    expect(fns.installation.findFirst.mock.calls[0][0].where.clientId).toBeUndefined();
+  });
+});
+
 describe('AuditReviewService.approve/reject — transitions', () => {
   it('approves a SUBMITTED installation → AUDIT_APPROVED + stamps auditedById/auditedAt', async () => {
     const { prisma, fns } = makePrisma();

@@ -11,6 +11,33 @@ import { RejectInstallationDto } from './dto/reject-installation.dto';
 const toJson = (v: unknown): Prisma.InputJsonValue =>
   JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
 
+/**
+ * Single source of truth for the installation audit shape — shared by the queue (findMany) and
+ * the scoped single-record GET (findFirst) so the compare payload can never drift.
+ */
+const INSTALL_INCLUDE = {
+  site: { select: { id: true, code: true, name: true, town: true, lat: true, lng: true } },
+  submittedBy: { select: { id: true, name: true } },
+  recce: {
+    select: {
+      id: true,
+      captureLat: true,
+      captureLng: true,
+      captureAccuracy: true,
+      geoFenceOk: true,
+    },
+  },
+  posms: {
+    include: {
+      reccePosm: {
+        include: { posmType: { select: { id: true, code: true, name: true } } },
+      },
+    },
+  },
+} satisfies Prisma.InstallationInclude;
+
+type InstallRow = Prisma.InstallationGetPayload<{ include: typeof INSTALL_INCLUDE }>;
+
 export interface MediaRef {
   key: string;
   viewPath: string;
@@ -68,31 +95,35 @@ export class AuditReviewService {
         orderBy: [{ receivedAt: 'asc' }], // FIFO
         skip,
         take: limit,
-        include: {
-          site: { select: { id: true, code: true, name: true, town: true, lat: true, lng: true } },
-          submittedBy: { select: { id: true, name: true } },
-          recce: {
-            select: {
-              id: true,
-              captureLat: true,
-              captureLng: true,
-              captureAccuracy: true,
-              geoFenceOk: true,
-            },
-          },
-          posms: {
-            include: {
-              reccePosm: {
-                include: { posmType: { select: { id: true, code: true, name: true } } },
-              },
-            },
-          },
-        },
+        include: INSTALL_INCLUDE,
       }),
       this.prisma.installation.count({ where }),
     ]);
 
-    const items = installs.map((inst) => ({
+    const items = installs.map((inst) => this.mapInstallItem(inst));
+
+    return { items, total, page, limit };
+  }
+
+  /**
+   * A single installation the caller is authorised to audit, by id — the detail-view read
+   * behind the auditor/admin console. Scoped identically to the queue (`installWhere`): a
+   * cross-tenant id is not found → 404. Returns an installation in ANY status, so the console
+   * can open an already-audited record and one past the queue's page cap (WoW #2: the
+   * alternate/scale path the list-scan missed).
+   */
+  async getInstallation(user: JwtPayload, id: string) {
+    const inst = await this.prisma.installation.findFirst({
+      where: { ...this.installWhere(user), id },
+      include: INSTALL_INCLUDE,
+    });
+    if (!inst) throw new NotFoundException('Installation not found');
+    return this.mapInstallItem(inst);
+  }
+
+  /** Map an installation row (INSTALL_INCLUDE) → the per-image compare item shape. */
+  private mapInstallItem(inst: InstallRow) {
+    return {
       id: inst.id,
       status: inst.status,
       version: inst.version,
@@ -131,9 +162,7 @@ export class AuditReviewService {
         beforeAfterDiffOk: p.beforeAfterDiffOk,
         qualityFlags: p.qualityFlags ?? null,
       })),
-    }));
-
-    return { items, total, page, limit };
+    };
   }
 
   // ── State transitions ────────────────────────────────────────────────────────

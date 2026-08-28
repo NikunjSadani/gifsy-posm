@@ -17,6 +17,21 @@ import { BulkApproveDto } from './dto/bulk-approve.dto';
 const toJson = (v: unknown): Prisma.InputJsonValue =>
   JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
 
+/**
+ * The single source of truth for the recce review shape — shared by the queue (findMany) and
+ * the scoped single-record GET (findFirst) so the two can never drift.
+ */
+const RECCE_INCLUDE = {
+  site: { select: { id: true, code: true, name: true, town: true, lat: true, lng: true } },
+  submittedBy: { select: { id: true, name: true } },
+  posms: {
+    orderBy: { slotNo: 'asc' },
+    include: { posmType: { select: { id: true, code: true, name: true } } },
+  },
+} satisfies Prisma.RecceInclude;
+
+type RecceRow = Prisma.RecceGetPayload<{ include: typeof RECCE_INCLUDE }>;
+
 /** A media reference the ASM UI can render: the raw object key + a relative view-path. */
 export interface MediaRef {
   key: string;
@@ -102,21 +117,37 @@ export class ApprovalService {
         orderBy: [{ receivedAt: 'asc' }], // oldest-first: FIFO review queue
         skip,
         take: limit,
-        include: {
-          site: { select: { id: true, code: true, name: true, town: true, lat: true, lng: true } },
-          submittedBy: { select: { id: true, name: true } },
-          posms: {
-            orderBy: { slotNo: 'asc' },
-            include: { posmType: { select: { id: true, code: true, name: true } } },
-          },
-        },
+        include: RECCE_INCLUDE,
       }),
       this.prisma.recce.count({ where }),
     ]);
 
     const dupRecceIds = await this.computeDuplicateRecceIds(recces);
+    const items = recces.map((r) => this.mapRecceItem(r, dupRecceIds));
 
-    const items = recces.map((r) => ({
+    return { items, total, page, limit };
+  }
+
+  /**
+   * A single recce the caller is authorised to review, by id — the detail-view read behind the
+   * ASM/admin console. Scoped identically to the queue (`recceWhere`): a recce out of the
+   * caller's tenant, or (for an ASM) not in their territory, is not found → 404. Unlike the
+   * queue this returns a recce in ANY status, so the console can open an already-reviewed recce
+   * and one past the queue's page cap (WoW #2: the alternate/scale path the list-scan missed).
+   */
+  async getRecce(user: JwtPayload, id: string) {
+    const recce = await this.prisma.recce.findFirst({
+      where: { ...this.recceWhere(user), id },
+      include: RECCE_INCLUDE,
+    });
+    if (!recce) throw new NotFoundException('Recce not found');
+    const dupRecceIds = await this.computeDuplicateRecceIds([recce]);
+    return this.mapRecceItem(recce, dupRecceIds);
+  }
+
+  /** Map a recce row (RECCE_INCLUDE) + the batch's duplicate set → the review item shape. */
+  private mapRecceItem(r: RecceRow, dupRecceIds: Set<string>) {
+    return {
       id: r.id,
       status: r.status,
       version: r.version,
@@ -149,9 +180,7 @@ export class ApprovalService {
         photo: this.mediaRef(p.photo),
         markup: p.markup ?? null,
       })),
-    }));
-
-    return { items, total, page, limit };
+    };
   }
 
   // ── State transitions ────────────────────────────────────────────────────────

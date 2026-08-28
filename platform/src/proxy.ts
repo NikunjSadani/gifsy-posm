@@ -33,13 +33,14 @@ const PUBLIC_PATHS = [
   '/auth/login',
   '/api/auth/send-otp',
   '/api/auth/verify-otp',
-  // Tokenized media/document view endpoints (backend @Public — the signed, expiring `token`
-  // query param is the sole authority). Clicked from downloaded reports with no session
-  // cookie, so they must bypass the edge auth gate.
-  '/api/media/view',
   '/_next',
   '/favicon.ico',
 ]
+// NOTE: `/api/media/view` is deliberately NOT public. The backend MediaController.view is
+// role-gated and reads the caller from a JWT (`@CurrentUser`) — there is no signed-token public
+// variant in this app — so an in-app `<img src="/api/media/view?key=…">` must flow through the
+// edge auth gate below, which injects the cookie→Bearer the backend requires. Listing it here
+// (a leftover from a chassis that had tokenized public views) made every in-app photo 401.
 
 /**
  * PAGE-route → allowed roles. POSM role set: GIFSY_ADMIN, CLIENT_ADMIN, ASM, AUDITOR,
