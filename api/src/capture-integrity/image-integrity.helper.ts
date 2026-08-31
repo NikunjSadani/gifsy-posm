@@ -383,51 +383,8 @@ export function isClockSkewed(
   return d === null ? false : d > thresholdMs;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// B2 (impossible-travel) — implied speed between two timestamped fixes
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Implied ground speed beyond this (km/h) reads as physically impossible → a reviewer flag. */
-export const IMPOSSIBLE_SPEED_KMH = 200;
-
-/**
- * Implied ground speed (km/h) to cover `distanceMeters` in the interval between two client
- * capture times, or `null` when the distance or either timestamp is missing/unparseable, or
- * the interval is ≤ 0 (unverifiable — two fixes at the same instant imply no travel we can
- * measure). Pure/sync.
- */
-export function impliedSpeedKmh(
-  distanceMeters: number | null | undefined,
-  fromCapturedAt: string | Date | null | undefined,
-  toCapturedAt: string | Date | null | undefined,
-): number | null {
-  if (typeof distanceMeters !== 'number' || !Number.isFinite(distanceMeters)) return null;
-  const parse = (v: string | Date | null | undefined): number | null => {
-    if (!v) return null;
-    const t = v instanceof Date ? v.getTime() : Date.parse(v);
-    return Number.isNaN(t) ? null : t;
-  };
-  const a = parse(fromCapturedAt);
-  const b = parse(toCapturedAt);
-  if (a === null || b === null) return null;
-  const dtMs = Math.abs(b - a);
-  if (dtMs <= 0) return null;
-  const hours = dtMs / 3_600_000;
-  const km = distanceMeters / 1000;
-  return km / hours;
-}
-
-/**
- * Impossible-travel flag: true when the implied speed to move `distanceMeters` between the two
- * capture times exceeds `capKmh`. Missing distance/timestamps or a zero interval → false
- * (NEUTRAL, unverifiable). Pure/sync.
- */
-export function isImpossibleTravel(
-  distanceMeters: number | null | undefined,
-  fromCapturedAt: string | Date | null | undefined,
-  toCapturedAt: string | Date | null | undefined,
-  capKmh: number = IMPOSSIBLE_SPEED_KMH,
-): boolean {
-  const s = impliedSpeedKmh(distanceMeters, fromCapturedAt, toCapturedAt);
-  return s === null ? false : s > capKmh;
-}
+// NOTE: impossible-travel (implied recce→install speed) was intentionally REMOVED — a vendor
+// login ID may be shared by several field reps, so consecutive captures from different people
+// would read as physically impossible travel and raise false fraud flags. The remaining
+// integrity signals (geo-fence, GPS accuracy, three-way geo cross-check, duplicate/before≠after)
+// do not depend on one-person-per-ID and are unaffected.

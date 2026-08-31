@@ -267,11 +267,6 @@ export class InstallationService {
       const geoCrossCheck =
         siteToInstallMeters !== null && siteToInstallMeters > config.geoFence.radiusMeters;
 
-      // B2 impossible-travel (reviewer flag): implied speed recce-fix → install-fix.
-      const impossibleTravel = this.integrity.isImpossibleTravel(
-        distanceFromRecce, recceGeo?.capturedAt, installGeo?.capturedAt,
-      );
-
       // B6 clock-skew (reviewer flag): this install photo's shutter time vs. server receive time.
       const clockSkew = this.integrity.isClockSkewed(installGeo?.capturedAt, receivedAt);
 
@@ -298,7 +293,6 @@ export class InstallationService {
       const qualityFlags = {
         ...baseFlags,
         clockSkew,
-        impossibleTravel,
         geoCrossCheck,
         siteToRecceMeters,
         siteToInstallMeters,

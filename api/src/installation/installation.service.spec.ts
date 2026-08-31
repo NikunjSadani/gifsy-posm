@@ -23,7 +23,6 @@ const mockIntegrity = {
   qualityFlags: jest.fn(),
   isLowAccuracy: jest.fn(),
   isClockSkewed: jest.fn(),
-  isImpossibleTravel: jest.fn(),
 };
 
 const vendorField = {
@@ -44,7 +43,6 @@ describe('InstallationService', () => {
     mockIntegrity.beforeAfterDiffOk.mockReturnValue(null);
     mockIntegrity.qualityFlags.mockReturnValue({ blur: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false });
     mockIntegrity.isClockSkewed.mockReturnValue(false);
-    mockIntegrity.isImpossibleTravel.mockReturnValue(false);
   });
 
   it('409s when the site recce is NOT APPROVED (install-before-approval)', async () => {

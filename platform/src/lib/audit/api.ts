@@ -56,7 +56,6 @@ export interface QualityFlags {
   duplicate?: boolean;
   lowAccuracy?: boolean;
   clockSkew?: boolean;
-  impossibleTravel?: boolean;
   geoCrossCheck?: boolean;
   siteToRecceMeters?: number | null;
   siteToInstallMeters?: number | null;
@@ -215,7 +214,6 @@ const FLAG_LABELS: { key: keyof QualityFlags; label: string }[] = [
   { key: 'duplicate', label: 'Duplicate' },
   { key: 'lowAccuracy', label: 'Low GPS accuracy' },
   { key: 'clockSkew', label: 'Clock skew' },
-  { key: 'impossibleTravel', label: 'Impossible travel' },
   { key: 'geoCrossCheck', label: 'Geo cross-check' },
 ];
 

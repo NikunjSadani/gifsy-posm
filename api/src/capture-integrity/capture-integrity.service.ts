@@ -5,7 +5,6 @@ import {
   beforeAfterDiffers,
   computeQualityFlags,
   isClockSkewed,
-  isImpossibleTravel,
   isLowAccuracy,
   QualityFlags,
 } from './image-integrity.helper';
@@ -82,16 +81,4 @@ export class CaptureIntegrityService {
     return isClockSkewed(capturedAt, receivedAt);
   }
 
-  /**
-   * B2 impossible-travel flag: the implied speed to cover `distanceMeters` between two client
-   * capture times exceeds the physical cap. Missing distance/timestamps or a zero interval →
-   * false (unverifiable). Used by the install lane (recce fix → install fix).
-   */
-  isImpossibleTravel(
-    distanceMeters: number | null | undefined,
-    fromCapturedAt: string | Date | null | undefined,
-    toCapturedAt: string | Date | null | undefined,
-  ): boolean {
-    return isImpossibleTravel(distanceMeters, fromCapturedAt, toCapturedAt);
-  }
 }
