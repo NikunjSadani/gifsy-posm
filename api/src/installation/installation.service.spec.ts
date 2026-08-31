@@ -131,7 +131,7 @@ describe('InstallationService', () => {
     expect(created.status).toBe('SUBMITTED');
     expect(created.recceId).toBe('r1');
     expect(created.posms.create[0]).toMatchObject({ reccePosmId: 'rp1', beforeAfterDiffOk: true, geoFenceOk: true });
-    expect(mockMedia.recordImageHashes).toHaveBeenCalledWith(tx, 'kwality', { ownerKind: 'INSTALL', ownerId: 'i1' }, ['ihash-1']);
+    expect(mockMedia.recordImageHashes).toHaveBeenCalledWith(tx, 'kwality', { ownerKind: 'INSTALL', ownerId: 'i1' }, ['ihash-1'], { hardBlock: true });
     expect(tx.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'CREATE', entityType: 'INSTALLATION', entityId: 'i1' });
     expect(res.status).toBe('SUBMITTED');
     expect(res.posms[0].installPhoto?.viewPath).toContain('/v1/media/view?key=');
@@ -197,6 +197,59 @@ describe('InstallationService', () => {
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // ── Fix 1: one photo must not fulfil multiple install POSM lines ───────────────
+  it('Fix 1: the SAME photo key on two POSM lines → 400, no write ("install one, get paid for two")', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue({
+      id: 'r1', status: 'APPROVED',
+      posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce1.jpg' } }, { id: 'rp2', photo: { key: 'posm-media/kwality/recce2.jpg' } }],
+      installation: null,
+    });
+    // PX reused on BOTH lines: differs from each recce photo (before≠after ok) and is absent from
+    // the pre-existing dup store — so ONLY the in-submission key guard can catch it.
+    await expect(
+      service.create(vendorField, {
+        siteId: 's1',
+        posms: [
+          { reccePosmId: 'rp1', photo: { key: KEY, geo } },
+          { reccePosmId: 'rp2', photo: { key: KEY, geo } },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // ── Fix 2: cross-submission duplicate race closed by the DB unique (P2002 → 409) ──
+  it('Fix 2: a P2002 on the ImageHash (clientId, hash) unique → 409 duplicate-photo hard block', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockPrisma.imageHash.findMany.mockResolvedValue([]); // pre-read dup-set empty (the race window)
+    mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
+    mockIntegrity.hash.mockReturnValue('ihash-1');
+    mockIntegrity.beforeAfterDiffOk.mockReturnValue(true);
+
+    const tx = {
+      installation: { create: jest.fn().mockResolvedValue({ id: 'i1' }) },
+      auditLog: { create: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    // The concurrent duplicate loses the (clientId, hash) unique race on the hash insert.
+    mockMedia.recordImageHashes.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('unique', {
+        code: 'P2002',
+        clientVersion: 'x',
+        meta: { target: ['clientId', 'hash'] },
+      } as never),
+    );
+
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    // hardBlock:true is what makes the duplicate insert throw rather than silently skip.
+    expect(mockMedia.recordImageHashes.mock.calls[0][4]).toEqual({ hardBlock: true });
   });
 
   // ── A4 clean 409 on a create race ──────────────────────────────────────────────

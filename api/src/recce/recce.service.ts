@@ -317,12 +317,22 @@ export class RecceService {
   ): Promise<PreparedRecce> {
     await this.assertPosmTypesInTenant(clientId, lines.map((l) => l.posmTypeId));
 
-    // Media keys must belong to THIS tenant's media folder (key-ownership guard).
+    // Media keys must belong to THIS tenant's media folder (key-ownership guard), AND no two POSM
+    // lines in this ONE submission may reuse the same photo (parity with the installation lane's
+    // in-submission dedup): a single storefront photo cannot legitimately stand in for two distinct
+    // POSM slots. Caught here, before any write/fence/hash work, so the reuse never touches the DB.
+    const seenKeys = new Set<string>();
     for (const l of lines) {
       const { key } = readMediaValue(l.photo);
       if (!key || !key.startsWith(`posm-media/${clientId}/`)) {
         throw new BadRequestException('A photo key does not belong to this tenant.');
       }
+      if (seenKeys.has(key)) {
+        throw new BadRequestException(
+          'The same photo is used on more than one POSM line — capture a distinct photo per POSM.',
+        );
+      }
+      seenKeys.add(key);
     }
 
     // Per-tenant fence policy (settings-backed).

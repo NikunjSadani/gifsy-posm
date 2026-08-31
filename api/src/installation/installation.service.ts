@@ -136,8 +136,11 @@ export class InstallationService {
         });
         const hashes = prepared.posms.map((p) => p.hash).filter((h): h is string => !!h);
         if (hashes.length > 0) {
+          // hardBlock: a cross-submission photo reuse (incl. the concurrent read-then-write race
+          // the pre-read dup check cannot catch) collides on the (clientId, hash) unique → P2002,
+          // rolling back this create. INSTALL is the money path, so a duplicate is a HARD block.
           await this.media.recordImageHashes(
-            tx, clientId, { ownerKind: 'INSTALL', ownerId: created.id }, hashes,
+            tx, clientId, { ownerKind: 'INSTALL', ownerId: created.id }, hashes, { hardBlock: true },
           );
         }
         await tx.auditLog.create({
@@ -153,9 +156,17 @@ export class InstallationService {
         return created;
       });
     } catch (e) {
-      // A4: a concurrent submit racing the one-installation-per-recce unique constraint
-      // (Installation.recceId @unique) surfaces a clean 409, not a raw 500.
+      // Two P2002 sources inside the transaction, distinguished by the violated constraint's
+      // columns (meta.target):
+      //   - the ImageHash (clientId, hash) unique  → a duplicate/reused photo (the cross-
+      //     submission race Fix 2 closes) → HARD block, same message as the pre-read dup block.
+      //   - the Installation.recceId @unique       → a concurrent one-install-per-recce submit.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        if (this.isImageHashConflict(e)) {
+          throw new ConflictException(
+            'An installation photo has already been used on another submission — capture a fresh photo at the site.',
+          );
+        }
         throw new ConflictException('This recce already has an installation (concurrent submit).');
       }
       throw e;
@@ -324,6 +335,18 @@ export class InstallationService {
     return { posms: out, capturedAt };
   }
 
+  /**
+   * Does this P2002 come from the ImageHash (clientId, hash) unique (a duplicate photo) rather
+   * than the Installation.recceId unique? Prisma reports the violated constraint's columns/name in
+   * `meta.target`; the hash unique is the only one carrying a `hash` column, so a substring match
+   * cleanly distinguishes the two (recceId target has no 'hash').
+   */
+  private isImageHashConflict(e: Prisma.PrismaClientKnownRequestError): boolean {
+    const target = (e.meta as { target?: unknown } | undefined)?.target;
+    const asText = Array.isArray(target) ? target.join(',') : String(target ?? '');
+    return asText.includes('hash');
+  }
+
   /** The base `where` a caller is confined to, or null = FAIL-CLOSED (match nothing). */
   private scopeWhere(user: JwtPayload): Prisma.InstallationWhereInput | null {
     const where: Prisma.InstallationWhereInput = {};
@@ -362,6 +385,11 @@ export class InstallationService {
   ) {
     const recceIds = new Set(reccePosms.map((r) => r.id));
     const seen = new Set<string>();
+    // "install one, get paid for two": one uploaded photo must not fulfil multiple POSM lines.
+    // The before≠after / duplicate-store checks miss this because the SAME key differs from its
+    // recce photo (ok) and is absent from the pre-existing store (ok). Reject the same photo key
+    // reused across lines of THIS submission BEFORE any write.
+    const seenKeys = new Set<string>();
     for (const l of lines) {
       if (!recceIds.has(l.reccePosmId)) {
         throw new BadRequestException('A reccePosmId is not part of this site\'s approved recce.');
@@ -370,6 +398,15 @@ export class InstallationService {
         throw new BadRequestException('Two install photos target the same recce POSM.');
       }
       seen.add(l.reccePosmId);
+      const { key } = readMediaValue(l.photo);
+      if (key) {
+        if (seenKeys.has(key)) {
+          throw new BadRequestException(
+            'The same photo is used on more than one POSM line — capture a distinct photo per POSM.',
+          );
+        }
+        seenKeys.add(key);
+      }
     }
     // Missing-required-photo → HARD block: every recce POSM must be fulfilled.
     for (const r of reccePosms) {

@@ -98,6 +98,19 @@ describe('ApprovalService.approve — transition + scope re-check on the mutatio
     expect(audit).toMatchObject({ action: 'APPROVE', entityType: 'RECCE', entityId: 'r1', actorId: 'asm-7' });
   });
 
+  it('Fix 3: the transition + its audit row run inside ONE $transaction (atomic)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'SUBMITTED', clientId: 'c1', site: { asmUserId: 'asm-7' } });
+    const order: string[] = [];
+    fns.recce.update.mockImplementation(async () => { order.push('update'); return { id: 'r1', status: 'APPROVED' }; });
+    fns.auditLog.create.mockImplementation(async () => { order.push('audit'); return {}; });
+    const svc = new ApprovalService(prisma);
+    await svc.approve(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'r1');
+    // A single transaction wraps both writes, in order (state change then append-only audit).
+    expect(fns.$transaction).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['update', 'audit']);
+  });
+
   it('ASM cannot approve a FOREIGN-site recce → 403, never updates', async () => {
     const { prisma, fns } = makePrisma();
     fns.recce.findFirst.mockResolvedValue({ id: 'r9', status: 'SUBMITTED', clientId: 'c1', site: { asmUserId: 'someone-else' } });

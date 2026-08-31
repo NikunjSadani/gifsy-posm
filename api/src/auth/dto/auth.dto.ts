@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsMobilePhone, IsIn, Length, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsMobilePhone, IsIn, Length } from 'class-validator';
 
 export class SendOtpDto {
   @IsMobilePhone('en-IN', {}, { message: 'Must be a valid 10-digit Indian mobile number' })
@@ -9,13 +9,15 @@ export class SendOtpDto {
   channel: 'SMS' | 'WHATSAPP';
 
   /**
-   * The tenant slug resolved by the FE from the request Host (pre-auth, so no session yet).
-   * Used to gate the "no account" check + pick a per-tenant OTP template. Optional so an
-   * unbranded/legacy caller still works.
+   * The tenant the OTP is for (the FE resolves it from the request Host, pre-auth). REQUIRED:
+   * it gates the "no account" check, binds the minted OTP to this tenant (so it can't redeem
+   * against another), and closes the unbranded path that would otherwise send an SMS to ANY
+   * number (SMS-cost / harassment abuse) and skip the account gate. verify-otp already requires
+   * clientId, so a legit branded login always supplies it.
    */
-  @IsOptional()
   @IsString()
-  clientId?: string;
+  @IsNotEmpty()
+  clientId: string;
 }
 
 export class VerifyOtpDto {

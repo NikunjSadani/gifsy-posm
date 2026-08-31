@@ -20,7 +20,7 @@ const notFoundError = () =>
  * double-audit → 409; reject requires a valid reason code.
  */
 function makePrisma() {
-  const fns = {
+  const fns: Record<string, any> = {
     installation: {
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
@@ -29,6 +29,13 @@ function makePrisma() {
     },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
+  // Interactive-callback form: the transition + its audit row run inside ONE transaction; the
+  // same mock object is handed back as the tx client.
+  fns.$transaction = jest.fn((arg: unknown) =>
+    typeof arg === 'function'
+      ? (arg as (tx: unknown) => unknown)(fns)
+      : Promise.all(arg as Promise<unknown>[]),
+  );
   return { prisma: fns as unknown as PrismaService, fns };
 }
 
@@ -146,6 +153,20 @@ describe('AuditReviewService.approve/reject — transitions', () => {
     expect(data.auditedById).toBe('aud-1');
     expect(data.auditedAt).toBeInstanceOf(Date);
     expect(fns.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'APPROVE', entityType: 'INSTALLATION', entityId: 'i1' });
+  });
+
+  it('Fix 3: the transition + its audit row run inside ONE $transaction (atomic)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findFirst.mockResolvedValue({ id: 'i1', status: 'SUBMITTED' });
+    fns.installation.update.mockResolvedValue({ id: 'i1', status: 'AUDIT_APPROVED' });
+    const order: string[] = [];
+    fns.installation.update.mockImplementation(async () => { order.push('update'); return { id: 'i1', status: 'AUDIT_APPROVED' }; });
+    fns.auditLog.create.mockImplementation(async () => { order.push('audit'); return {}; });
+    const svc = new AuditReviewService(prisma);
+    await svc.approve(user({ role: 'AUDITOR', sub: 'aud-1', clientId: 'c1' }), 'i1');
+    // A single transaction wraps both writes, in order (state change then append-only audit).
+    expect(fns.$transaction).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['update', 'audit']);
   });
 
   it('rejects a SUBMITTED installation → AUDIT_REJECTED + reason code, audit REJECT', async () => {

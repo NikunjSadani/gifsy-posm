@@ -64,28 +64,32 @@ export class AuthService {
   async sendOtp(
     phone: string,
     channel: 'SMS' | 'WHATSAPP',
-    clientId?: string,
+    clientId: string,
   ): Promise<{ success: boolean; expiresIn: number }> {
     if (!phone || phone.replace(/\D/g, '').length !== 10) {
       throw new BadRequestException('Invalid phone number — must be 10 digits');
     }
+    // A login OTP is ALWAYS tenant-scoped. Enforced at the DTO too, but re-asserted here so the
+    // guarantee holds on EVERY entry path (defense in depth): no clientId ⇒ no account gate + a
+    // null-tenant code that verify can't redeem, which is exactly the unbranded-SMS-abuse hole
+    // this closes. Never send an OTP without knowing which tenant it authenticates.
+    if (!clientId) {
+      throw new BadRequestException('A tenant is required to send a login OTP.');
+    }
     const cleanPhone = phone.replace(/\D/g, '');
 
-    // Registration gate: for a tenant-scoped login, refuse to send an OTP to a number that has
-    // no ACTIVE account under this tenant — immediate "no account" feedback. Skipped when
-    // clientId is absent (unbranded caller). Runs even under the FIXED_OTP bypass so it is
-    // testable on staging.
-    if (clientId) {
-      // Match the User row by its canonical E.164 phone (users are stored normalized).
-      const account = await this.prisma.user.findFirst({
-        where: { phone: normalizeIndianPhone(cleanPhone), clientId, isActive: true },
-        select: { id: true },
-      });
-      if (!account) {
-        throw new UnauthorizedException(
-          'No account found. Please contact your administrator to be onboarded first.',
-        );
-      }
+    // Registration gate: refuse to send an OTP to a number that has no ACTIVE account under this
+    // tenant — immediate "no account" feedback, and it stops an attacker from pumping SMS at
+    // arbitrary numbers. Runs even under the FIXED_OTP bypass so it is testable on staging.
+    // Match the User row by its canonical E.164 phone (users are stored normalized).
+    const account = await this.prisma.user.findFirst({
+      where: { phone: normalizeIndianPhone(cleanPhone), clientId, isActive: true },
+      select: { id: true },
+    });
+    if (!account) {
+      throw new UnauthorizedException(
+        'No account found. Please contact your administrator to be onboarded first.',
+      );
     }
 
     const fixedOtpActive = isFixedOtpAllowed() && !!this.config.get<string>('FIXED_OTP');
@@ -162,9 +166,12 @@ export class AuthService {
   ): Promise<{ accessToken: string; refreshToken: string; user: Partial<User> }> {
     const cleanPhone = phone.replace(/\D/g, '');
 
-    // Read the NEWEST unconsumed code for this phone (a fresh send supersedes older ones).
+    // Read the NEWEST unconsumed code for THIS phone AND tenant (a fresh send supersedes older
+    // ones). Binding `clientId` is the tenant-isolation guard: an OTP minted for tenant A can
+    // never be redeemed against tenant B (a phone provisioned in both tenants gets independent
+    // codes), and an unbranded/no-tenant code can never authenticate a branded login.
     const record = await this.prisma.otpCode.findFirst({
-      where:   { phone: cleanPhone, purpose: 'LOGIN', consumedAt: null },
+      where:   { phone: cleanPhone, purpose: 'LOGIN', consumedAt: null, clientId },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -184,9 +191,11 @@ export class AuthService {
     const isCorrect = fixedOtp ? otp === fixedOtp : hashOtp(otp) === record.codeHash;
 
     if (!isCorrect) {
+      // Atomic increment — a read-modify-write (`record.attempts + 1`) lets concurrent verifies
+      // all persist the same value and exceed the per-OTP attempt cap under parallelism.
       await this.prisma.otpCode.update({
         where: { id: record.id },
-        data:  { attempts: record.attempts + 1 },
+        data:  { attempts: { increment: 1 } },
       });
       const remaining = record.maxAttempts - record.attempts - 1;
       throw new UnauthorizedException(
@@ -461,6 +470,34 @@ export class AuthService {
           /* best-effort lineage kill — never mask the 401 below */
         }
         this.logger.warn(`Refresh-token reuse detected for user ${session.userId} — revoked all sessions`);
+      } else {
+        // AMBIGUOUS reuse: a revoked token replayed OUTSIDE the 5s grace while a LIVE successor
+        // descends from it. This is EITHER a legitimate multi-device / stale-cookie-jar replay
+        // OR stolen-token reuse where the thief won the rotation race — the server cannot tell
+        // them apart, and auto-nuking here would log legitimate multi-device users out (with a
+        // 5s grace + per-browser shared cookie jar, this branch is normally the stale-device
+        // case). We deliberately do NOT nuke (UX), but we RECORD a SECURITY EVENT so the reuse
+        // is no longer SILENT (the audit's core gap): it can be monitored and an owner can
+        // escalate to a manual logout-all. Best-effort — never masks the 401.
+        await this.prisma.auditLog
+          .create({
+            data: {
+              action: 'LOGOUT',
+              entityType: 'SECURITY_EVENT',
+              entityId: session.userId,
+              actorId: session.userId,
+              metadata: {
+                event: 'refresh_token_reuse_ambiguous',
+                sessionId: session.id,
+                liveSuccessorId: liveSuccessor.id,
+                detectedAt: new Date().toISOString(),
+              },
+            },
+          })
+          .catch(() => undefined);
+        this.logger.warn(
+          `Ambiguous refresh-token reuse for user ${session.userId} (live successor exists) — logged for review, not auto-revoked`,
+        );
       }
     }
 

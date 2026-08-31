@@ -409,7 +409,14 @@ model ImageHash {
   hash      String                              // SHA-256 of raw bytes
   createdAt DateTime @default(now())
 
-  @@index([clientId, hash])
+  // Anti-fraud (money path): exact-byte reuse of a photo within a tenant is a duplicate. A true
+  // unique on (clientId, hash) makes ANY reuse collide at the DB regardless of ownerKind, closing
+  // the read-then-write cross-submission duplicate race (two concurrent installs reusing one
+  // photo can no longer both commit). Distinct photos → distinct SHA-256 → never false-collide;
+  // the only legitimate same-hash case (a submission re-recording its OWN photo, e.g. recce
+  // resubmit) reuses the SAME (clientId, ownerKind, ownerId) row and is filtered out before the
+  // insert. Supersedes the former plain @@index([clientId, hash]) (a unique already indexes it).
+  @@unique([clientId, hash])
   @@index([ownerKind, ownerId])
   @@map("image_hashes")
 }

@@ -114,19 +114,19 @@ describe('AuthService', () => {
     });
 
     it('rejects an invalid phone (< 10 digits)', async () => {
-      await expect(service.sendOtp('12345', 'SMS')).rejects.toThrow();
+      await expect(service.sendOtp('12345', 'SMS', 'deoleo')).rejects.toThrow();
     });
 
     it('rejects (429) when the per-phone send cap over the window is reached', async () => {
       mockPrisma.otpCode.count.mockResolvedValue(5); // OTP_MAX_RESENDS_PER_WINDOW
-      await expect(service.sendOtp('9876543210', 'SMS')).rejects.toMatchObject({ status: 429 });
+      await expect(service.sendOtp('9876543210', 'SMS', 'deoleo')).rejects.toMatchObject({ status: 429 });
       // Nothing created and no SMS sent once capped.
       expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
       expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
     });
 
     it('counts only LOGIN sends inside the rolling window for the cap', async () => {
-      await service.sendOtp('9876543210', 'SMS');
+      await service.sendOtp('9876543210', 'SMS', 'deoleo');
       const where = mockPrisma.otpCode.count.mock.calls[0][0].where;
       expect(where.phone).toBe('9876543210');
       expect(where.purpose).toBe('LOGIN');
@@ -134,7 +134,7 @@ describe('AuthService', () => {
     });
 
     it('SUPERSEDES prior unconsumed codes for the phone (only the freshest stays live)', async () => {
-      await service.sendOtp('9876543210', 'SMS');
+      await service.sendOtp('9876543210', 'SMS', 'deoleo');
       // updateMany marks this phone's unconsumed LOGIN codes consumed.
       const call = mockPrisma.otpCode.updateMany.mock.calls[0][0];
       expect(call.where).toMatchObject({ phone: '9876543210', purpose: 'LOGIN', consumedAt: null });
@@ -142,7 +142,7 @@ describe('AuthService', () => {
     });
 
     it('stores the code HASHED (never the plaintext) — codeHash is a 64-char SHA-256 hex', async () => {
-      await service.sendOtp('9876543210', 'SMS');
+      await service.sendOtp('9876543210', 'SMS', 'deoleo');
       const data = mockPrisma.otpCode.create.mock.calls[0][0].data;
       expect(data.codeHash).toMatch(/^[0-9a-f]{64}$/);
       // The plaintext code is never persisted under any field.
@@ -162,12 +162,13 @@ describe('AuthService', () => {
       expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
     });
 
-    it('registration gate: SKIPPED when no clientId is passed (unbranded caller)', async () => {
-      mockPrisma.user.findFirst.mockResolvedValue(null); // would reject IF the gate ran
-      const res = await service.sendOtp('9876543210', 'SMS');
-      expect(res.success).toBe(true);
+    it('REQUIRES a tenant: a send with no clientId is refused (400) — no account gate, no OTP, no SMS', async () => {
+      // The unbranded path is closed (SMS-pump / account-gate-skip hole). The service re-asserts
+      // clientId even though the DTO also requires it (defense in depth on every entry path).
+      await expect(service.sendOtp('9876543210', 'SMS', '')).rejects.toMatchObject({ status: 400 });
       expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
-      expect(mockPrisma.otpCode.create).toHaveBeenCalled();
+      expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
+      expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
     });
   });
 
@@ -201,7 +202,9 @@ describe('AuthService', () => {
 
       await service.verifyOtp(phone, code, clientId);
       const call = mockPrisma.otpCode.findFirst.mock.calls[0][0];
-      expect(call.where).toMatchObject({ phone, purpose: 'LOGIN', consumedAt: null });
+      // clientId in the where is the tenant-isolation guard: an OTP minted for another tenant (or
+      // an unbranded/no-tenant code) can never be redeemed against THIS login.
+      expect(call.where).toMatchObject({ phone, purpose: 'LOGIN', consumedAt: null, clientId });
       expect(call.orderBy).toEqual({ createdAt: 'desc' });
     });
 
@@ -223,8 +226,10 @@ describe('AuthService', () => {
       mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
       mockPrisma.otpCode.update.mockResolvedValue({});
       await expect(service.verifyOtp(phone, '000000', clientId)).rejects.toThrow('Invalid OTP');
+      // Atomic increment (was a read-then-write `record.attempts + 1`): two concurrent wrong
+      // guesses can no longer both write the same value and under-count the attempt cap.
       expect(mockPrisma.otpCode.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ attempts: 1 }) }),
+        expect.objectContaining({ data: expect.objectContaining({ attempts: { increment: 1 } }) }),
       );
       // A wrong code never mints a session.
       expect(mockPrisma.userSession.create).not.toHaveBeenCalled();
@@ -341,13 +346,14 @@ describe('AuthService', () => {
       expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();       // no security event
     });
 
-    // ── FIX 1: benign rotation must NOT nuke ────────────────────────────────────
-    it('FIX-1 benign rotation: replay >grace WITH a live successor → 401, NO lineage kill', async () => {
+    // ── FIX 1: ambiguous rotation must NOT nuke, but is no longer SILENT ─────────
+    it('ambiguous rotation: replay >grace WITH a live successor → 401, NO lineage kill, but logs a security event', async () => {
       // Predecessor revoked 7s ago (outside the 5s grace) — but a LIVE successor descends from it.
       mockPrisma.userSession.findUnique.mockResolvedValue(liveSession({
         revokedAt: new Date(Date.now() - 7_000),
       }));
       mockPrisma.userSession.findFirst.mockResolvedValue({ id: 'succ' }); // live successor exists
+      mockPrisma.auditLog.create.mockResolvedValue({});
 
       await expect(service.refreshToken('rt')).rejects.toThrow('Session expired');
 
@@ -356,10 +362,18 @@ describe('AuthService', () => {
         where:  { rotatedFromId: 'sess_x', revokedAt: null },
         select: { id: true },
       });
-      // CRUCIAL: an active user is NOT logged out everywhere — no stamp, no revoke-all, no audit.
+      // CRUCIAL: an active user is NOT logged out everywhere — no stamp, no revoke-all lineage kill.
       expect(mockPrisma.user.update).not.toHaveBeenCalled();
       expect(mockPrisma.userSession.updateMany).not.toHaveBeenCalled();
-      expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
+      // BUT the ambiguous reuse is no longer silent: a SECURITY_EVENT is recorded for monitoring.
+      expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            entityType: 'SECURITY_EVENT',
+            metadata: expect.objectContaining({ event: 'refresh_token_reuse_ambiguous' }),
+          }),
+        }),
+      );
     });
 
     // ── FIX 1: true reuse (no live successor) still nukes ────────────────────────

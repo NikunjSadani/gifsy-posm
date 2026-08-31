@@ -105,17 +105,32 @@ export class PosmMediaService {
    * `ownerKind`/`ownerId` identify the owning submission ("RECCE" | "INSTALL" | "MANUAL" + its
    * id). The "seen elsewhere" check runs BEFORE the insert (and excludes this owner's own rows),
    * so a resubmit re-recording the same photo does not flag itself. Runs inside the caller's
-   * transaction. Hashes are de-duplicated within the call; the insert skips duplicates.
+   * transaction. Hashes are de-duplicated within the call.
+   *
+   * The DB carries `@@unique([clientId, hash])`, so an exact-byte reuse of a photo already owned
+   * by a DIFFERENT submission collides on insert. This method NEVER re-inserts a hash this SAME
+   * owner already recorded (a legitimate re-record, e.g. recce resubmit) — those are filtered out
+   * first, so the same-owner case never self-collides.
+   *
+   * `opts.hardBlock` selects how a cross-owner reuse of a fresh (not-own) hash is handled:
+   *   - hardBlock=false (DEFAULT, soft-flag lane, e.g. recce): the colliding insert is SKIPPED
+   *     and the reuse is surfaced only as a FLAG in `dupHashes` — the submission still succeeds.
+   *   - hardBlock=true (money path, e.g. installation): the insert is NOT skipped, so a
+   *     cross-owner reuse OR a concurrent same-hash insert raises Prisma P2002; the caller rolls
+   *     back the create and returns a 409. This is what closes the read-then-write duplicate race
+   *     that a pre-read dup check alone cannot (both racers read an empty dup-set, both would pass).
    */
   async recordImageHashes(
     tx: Prisma.TransactionClient,
     clientId: string,
     owner: { ownerKind: string; ownerId: string },
     hashes: string[],
+    opts?: { hardBlock?: boolean },
   ): Promise<{ dupHashes: string[] }> {
     const unique = [...new Set(hashes.filter((h) => typeof h === 'string' && h.length > 0))];
     if (unique.length === 0) return { dupHashes: [] };
 
+    // Cross-owner occurrences — the "seen elsewhere" duplicate signal (returned as a flag).
     const existing = await tx.imageHash.findMany({
       where: {
         clientId,
@@ -126,15 +141,37 @@ export class PosmMediaService {
     });
     const dupHashes = [...new Set(existing.map((r) => r.hash))];
 
-    await tx.imageHash.createMany({
-      data: unique.map((hash) => ({
+    // Hashes THIS owner already recorded (a legit re-record) must not be re-inserted — under the
+    // (clientId, hash) unique that would either self-conflict (hard mode) or be a silent no-op
+    // (skip mode). Filter them out so the same-owner re-record is always a clean no-op.
+    const own = await tx.imageHash.findMany({
+      where: {
         clientId,
+        hash: { in: unique },
         ownerKind: owner.ownerKind,
         ownerId: owner.ownerId,
-        hash,
-      })),
-      skipDuplicates: true,
+      },
+      select: { hash: true },
     });
+    const ownSet = new Set(own.map((r) => r.hash));
+    const toInsert = unique.filter((h) => !ownSet.has(h));
+    if (toInsert.length === 0) return { dupHashes };
+
+    const data = toInsert.map((hash) => ({
+      clientId,
+      ownerKind: owner.ownerKind,
+      ownerId: owner.ownerId,
+      hash,
+    }));
+
+    if (opts?.hardBlock) {
+      // Hard mode: a cross-owner reuse / concurrent duplicate collides on (clientId, hash) → P2002
+      // propagates → caller rolls back → 409. Do NOT skipDuplicates (that would swallow the block).
+      await tx.imageHash.createMany({ data });
+    } else {
+      // Soft mode: a duplicate is a FLAG only; the colliding row is skipped, submission succeeds.
+      await tx.imageHash.createMany({ data, skipDuplicates: true });
+    }
 
     return { dupHashes };
   }

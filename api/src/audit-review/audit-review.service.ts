@@ -172,25 +172,31 @@ export class AuditReviewService {
     const inst = await this.loadForMutation(user, id);
     this.assertSubmitted(inst.status);
 
+    // The state transition AND its append-only audit row must commit together — a settled
+    // installation must never exist with no audit row (nor an audit row for a rolled-back write).
+    // One $transaction wraps both.
     // A2 (double-pay TOCTOU): the `status: 'SUBMITTED'` predicate in the WRITE closes the window
     // between the load above and this update. Two concurrent audits both pass the pre-read guard,
-    // but only the row STILL SUBMITTED transitions; the loser matches 0 rows (Prisma P2025) → 409,
-    // so the audit-log APPROVE row is appended only on the winning path.
-    const updated = await this.prisma.installation
-      .update({
-        where: { id, status: 'SUBMITTED' },
-        data: {
-          status: 'AUDIT_APPROVED',
-          auditedById: user.sub,
-          auditedAt: new Date(),
-          rejectionReasonCode: null,
-          rejectionReason: null,
-        },
-      })
-      .catch((e) => this.conflictOnLostRace(e));
+    // but only the row STILL SUBMITTED transitions; the loser matches 0 rows (Prisma P2025) → 409
+    // (thrown inside the tx, rolling it back), so the audit-log APPROVE row is appended only on the
+    // winning path.
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.installation
+        .update({
+          where: { id, status: 'SUBMITTED' },
+          data: {
+            status: 'AUDIT_APPROVED',
+            auditedById: user.sub,
+            auditedAt: new Date(),
+            rejectionReasonCode: null,
+            rejectionReason: null,
+          },
+        })
+        .catch((e) => this.conflictOnLostRace(e));
 
-    await this.audit(user, 'APPROVE', id, { status: inst.status }, { status: 'AUDIT_APPROVED' });
-    return updated;
+      await this.audit(tx, user, 'APPROVE', id, { status: inst.status }, { status: 'AUDIT_APPROVED' });
+      return updated;
+    });
   }
 
   /** Installation SUBMITTED → AUDIT_REJECTED with a required reason code (+ optional note). */
@@ -198,30 +204,35 @@ export class AuditReviewService {
     const inst = await this.loadForMutation(user, id);
     this.assertSubmitted(inst.status);
 
-    // A2: same status-guarded write as approve. Because only a row STILL SUBMITTED transitions, a
-    // concurrent approve (which would have set auditedById + AUDIT_APPROVED) can never co-exist
-    // with this rejection — the loser gets a 409 and writes no second audit row.
-    const updated = await this.prisma.installation
-      .update({
-        where: { id, status: 'SUBMITTED' },
-        data: {
-          status: 'AUDIT_REJECTED',
-          auditedById: user.sub,
-          auditedAt: new Date(),
-          rejectionReasonCode: dto.reasonCode as RejectReasonCode,
-          rejectionReason: dto.reason ?? null,
-        },
-      })
-      .catch((e) => this.conflictOnLostRace(e));
+    // A2: same status-guarded write as approve, wrapped with its audit row in one $transaction so
+    // the state change and the append-only audit row commit atomically. Because only a row STILL
+    // SUBMITTED transitions, a concurrent approve (which would have set auditedById +
+    // AUDIT_APPROVED) can never co-exist with this rejection — the loser gets a 409 and writes no
+    // second audit row.
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.installation
+        .update({
+          where: { id, status: 'SUBMITTED' },
+          data: {
+            status: 'AUDIT_REJECTED',
+            auditedById: user.sub,
+            auditedAt: new Date(),
+            rejectionReasonCode: dto.reasonCode as RejectReasonCode,
+            rejectionReason: dto.reason ?? null,
+          },
+        })
+        .catch((e) => this.conflictOnLostRace(e));
 
-    await this.audit(
-      user,
-      'REJECT',
-      id,
-      { status: inst.status },
-      { status: 'AUDIT_REJECTED', reasonCode: dto.reasonCode, reason: dto.reason ?? null },
-    );
-    return updated;
+      await this.audit(
+        tx,
+        user,
+        'REJECT',
+        id,
+        { status: inst.status },
+        { status: 'AUDIT_REJECTED', reasonCode: dto.reasonCode, reason: dto.reason ?? null },
+      );
+      return updated;
+    });
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────────
@@ -273,14 +284,19 @@ export class AuditReviewService {
     return v != null ? Number(v) : null;
   }
 
+  /**
+   * Append-only audit write (chassis AuditLog pattern). Takes the transaction client so the audit
+   * row commits atomically with the state transition that precedes it.
+   */
   private audit(
+    client: Prisma.TransactionClient,
     user: JwtPayload,
     action: 'APPROVE' | 'REJECT',
     entityId: string,
     oldValues: unknown,
     newValues: unknown,
   ) {
-    return this.prisma.auditLog.create({
+    return client.auditLog.create({
       data: {
         actorId: user.sub,
         action,

@@ -62,6 +62,20 @@ describe('RecceService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it('rejects (400) two POSM lines that reuse the SAME photo — no write (parity with install lane)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    // Both lines carry the same hardcoded KEY → one photo can't fill two distinct POSM slots.
+    await expect(
+      service.create(vendorField, {
+        siteId: 's1',
+        posms: [line({ lat: 19.076, lng: 72.877 }), line({ lat: 19.076, lng: 72.877 })],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('FAIL-CLOSED: a foreign / other-vendor site is invisible (404), query carries the vendor pin', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(null);
     await expect(
