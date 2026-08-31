@@ -91,7 +91,7 @@ Source: `C:\Users\nikun\kwality-walls-microsite`. Red `#E3000F` (header + CTAs),
 - **before≠after (16×16 aHash)** catches lazy/identical reuse (identical → hard-block); a determined crop/rotate/re-compress evades perceptual hashing — auditor + geo-distance are the backstop.
 - **no cross-site PERCEPTUAL dedup** (exact-SHA cross-site only) — a re-compressed photo reused per site evades exact-dup. Candidate: store+compare aHash cross-site.
 - **media-view is tenant-scoped, not vendor-scoped** (mitigated: unguessable keys, no in-surface path to another vendor's key). Candidate hardening: vendor-scope the view.
-- **geo-fence DEFAULTS DISABLED on malformed/empty tenant settings** (deliberate — never hard-block a legit submit on misconfig). ⇒ the fence MUST be explicitly configured per tenant at go-live.
+- **geo-fence DEFAULTS DISABLED on malformed/empty tenant settings** (deliberate — never hard-block a legit submit on misconfig). ⇒ the fence MUST be explicitly configured per tenant at go-live — now done via the **admin portal** (`/admin/settings`, `GET`/`PUT /v1/settings/capture` → merges `Client.settings.posmCapture` through the same `posm-config.helper` the capture lanes read: enforce toggle + radius m [e.g. 500] + GPS-accuracy cap; runtime-verified round-trip; tenant-scoped; bounds-validated).
 
 **Wave 3b manual-workflow residuals (adversarial-audited 2026-08-28 — 2 HIGH + 1 MEDIUM fixed & runtime-verified; scoping/race/unique-constraint confirmed solid):**
 - FIXED HIGH: admin task-list & task-detail pages crashed on a FE↔BE shape mismatch (`counts`↔`submissionCounts`; `getTask` returns FLAT not `{task}`) — my under-specified agent contract; FE aligned to the tested backend + browser-verified.

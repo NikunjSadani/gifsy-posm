@@ -45,6 +45,7 @@ import { AnalyticsModule }    from './analytics/analytics.module';
 
 // Reports — per-tenant automated email digest (config + preview + send) + hourly cron
 import { ReportsModule }      from './reports/reports.module';
+import { SettingsModule }     from './settings/settings.module';
 
 /**
  * Chassis (Wave 0) + domain masters (Wave 1) + the field pipeline (Wave 2: recce → ASM
@@ -99,6 +100,7 @@ import { ReportsModule }      from './reports/reports.module';
 
     // Reports — per-tenant automated email digest + hourly cron
     ReportsModule,
+    SettingsModule,
   ],
   controllers: [AppController],
   providers: [
