@@ -19,12 +19,14 @@ export function GeoBadge({
   const status = geoStatus(geoFenceOk);
   const label = geoStatusLabel(geoFenceOk);
 
+  // Honest colour framing: inside = green (good), outside = amber (an advisory flag, NOT a
+  // proven fail), not-verified = gray/neutral (the backend never confirmed a fix).
   const styles =
     status === 'inside'
       ? 'bg-green-50 text-green-700 border-green-200'
       : status === 'outside'
-        ? 'bg-red-50 text-red-700 border-red-200'
-        : 'bg-amber-50 text-amber-700 border-amber-200';
+        ? 'bg-amber-50 text-amber-700 border-amber-200'
+        : 'bg-gray-100 text-gray-600 border-gray-200';
 
   const Icon = status === 'inside' ? MapPin : status === 'outside' ? MapPinOff : MapPinnedIcon;
 

@@ -45,7 +45,10 @@ export async function generateMetadata(): Promise<Metadata> {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
+  // Allow pinch-zoom (WCAG 1.4.4) — field users must be able to zoom to read small text or
+  // inspect a captured / ghost-overlay photo. (Previously maximumScale:1 disabled zoom.)
+  maximumScale: 5,
+  userScalable: true,
   // Extend under the iOS notch/home-indicator so an installed PWA can use the safe area.
   viewportFit: 'cover',
 };

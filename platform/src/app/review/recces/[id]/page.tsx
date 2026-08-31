@@ -23,7 +23,7 @@ import {
   AlertTriangle,
   ShieldCheck,
   ShieldAlert,
-  Copy,
+  ShieldQuestion,
 } from 'lucide-react';
 import {
   fetchRecce,
@@ -255,7 +255,11 @@ export default function RecceDetailPage() {
               <span className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-3 py-1.5">
                 <ShieldAlert className="h-4 w-4" /> Outside geo-fence
               </span>
-            ) : null}
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-3 py-1.5">
+                <ShieldQuestion className="h-4 w-4" /> Location not verified
+              </span>
+            )}
           </div>
         </div>
 
@@ -293,13 +297,6 @@ export default function RecceDetailPage() {
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {item.integrity.duplicatePhoto && (
-        <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          <Copy className="h-4 w-4 shrink-0" />
-          One or more photos in this recce match a photo submitted elsewhere.
         </div>
       )}
 

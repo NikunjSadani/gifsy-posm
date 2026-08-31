@@ -95,6 +95,35 @@ describe('SitesService.list — role scoping', () => {
     expect(where.name).toEqual({ contains: 'foo', mode: 'insensitive' });
     expect(where.town).toEqual({ contains: 'bar', mode: 'insensitive' });
   });
+
+  it('status filter scopes the query WITHIN the tenant where (never widens scope)', async () => {
+    const { prisma, findMany, count } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { status: 'INACTIVE' as any });
+    const where = findMany.mock.calls[0][0].where;
+    // Status is AND-ed onto the caller's scope, not applied in place of it.
+    expect(where.status).toBe('INACTIVE');
+    expect(where.clientId).toBe('c1');
+    // count() is issued with the SAME where so the header total matches what's reachable.
+    expect(count.mock.calls[0][0].where.status).toBe('INACTIVE');
+    expect(count.mock.calls[0][0].where.clientId).toBe('c1');
+  });
+
+  it('status filter cannot widen a vendor role beyond its vendor pin', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }), { status: 'ACTIVE' as any });
+    const where = findMany.mock.calls[0][0].where;
+    expect(where.status).toBe('ACTIVE');
+    expect(where.vendorId).toBe('v1');
+  });
+
+  it('absent status → no status filter (all statuses)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
+    expect(findMany.mock.calls[0][0].where.status).toBeUndefined();
+  });
 });
 
 // ── F8 — an un-assumed GIFSY_ADMIN cannot create a site (no tenant context) ────────

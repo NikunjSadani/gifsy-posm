@@ -8,9 +8,10 @@
  * disabled while the request is in flight to prevent a double-submit.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, XCircle } from 'lucide-react';
 import { REJECT_REASONS, type RejectBody, type RejectReasonCode } from '@/lib/audit/api';
+import { useFocusTrap } from '@/components/audit/use-focus-trap';
 
 const NOTE_MAX = 500;
 
@@ -29,6 +30,7 @@ export function RejectDialog({
 }) {
   const [reasonCode, setReasonCode] = useState<RejectReasonCode | ''>('');
   const [note, setNote] = useState('');
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Reset the form each time the dialog is (re)opened.
   useEffect(() => {
@@ -46,6 +48,9 @@ export function RejectDialog({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, loading, onCancel]);
+
+  // Move focus into the dialog on open, trap Tab, and return focus to the trigger on close.
+  useFocusTrap(open, dialogRef);
 
   if (!open) return null;
 
@@ -68,7 +73,9 @@ export function RejectDialog({
       onClick={() => !loading && onCancel()}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3">

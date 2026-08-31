@@ -12,7 +12,7 @@
  * under review) is surfaced honestly.
  */
 
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react';
@@ -39,6 +39,9 @@ export default function TaskFillerPage({ params }: { params: Promise<{ id: strin
   const [values, setValues] = useState<FormValues>({});
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  // Synchronous in-flight guard: a fast double-tap re-enters submit() before `submitting`
+  // (state) has re-rendered the disabled button, so guard on a ref set at entry.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -74,18 +77,25 @@ export default function TaskFillerPage({ params }: { params: Promise<{ id: strin
   const canSubmit = fillable && complete && !submitting;
 
   const submit = async () => {
+    if (inFlight.current || submitting) return; // synchronous double-tap guard
     if (!task || !canSubmit) return;
+    inFlight.current = true;
     setSubmitting(true);
-    const res = await submitTask(task.id, task.formSchema, values);
-    setSubmitting(false);
-    if (!res.success) {
-      // 409 = already submitted / under review; 400 = validation. Surface honestly.
-      toast.error(res.error || 'Could not submit. Please review your answers and try again.');
-      return;
+    try {
+      const res = await submitTask(task.id, task.formSchema, values);
+      if (!res.success) {
+        // 409 = already submitted / under review; 400 = validation. Surface honestly.
+        toast.error(res.error || 'Could not submit. Please review your answers and try again.');
+        return;
+      }
+      setDone(true);
+      toast.success('Submitted for review.');
+      setTimeout(() => router.push('/field/tasks'), 1200);
+    } finally {
+      // On success we've navigated away; resetting is harmless. On failure it re-enables submit.
+      setSubmitting(false);
+      inFlight.current = false;
     }
-    setDone(true);
-    toast.success('Submitted for review.');
-    setTimeout(() => router.push('/field/tasks'), 1200);
   };
 
   if (loading) {

@@ -10,7 +10,7 @@
  * refusals are surfaced in-dialog, never crash.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Plus, Pencil, Ban, RotateCcw, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -53,6 +53,8 @@ export default function UsersPage() {
   const [confirm, setConfirm] = useState<AdminUser | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+
+  const phoneId = useId();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -274,10 +276,11 @@ export default function UsersPage() {
           autoFocus
         />
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-gray-700">Mobile number</label>
+          <label htmlFor={phoneId} className="text-sm font-medium text-gray-700">Mobile number</label>
           <div className="flex items-stretch rounded-lg border border-gray-300 focus-within:border-[var(--brand-primary)] overflow-hidden">
             <span className="flex items-center px-3 text-gray-500 bg-gray-50 text-sm font-medium border-r border-gray-200">+91</span>
             <input
+              id={phoneId}
               type="tel"
               inputMode="numeric"
               maxLength={10}

@@ -124,6 +124,9 @@ export class SitesService {
     if (q.code) where.code = { contains: q.code, mode: 'insensitive' };
     if (q.town) where.town = { contains: q.town, mode: 'insensitive' };
     if (q.rsCode) where.rsCode = { contains: q.rsCode, mode: 'insensitive' };
+    // Status filter is applied server-side and scoped within the caller's `where` (validated
+    // to a SiteStatus enum value by the DTO). Absent = all statuses reachable by the caller.
+    if (q.status) where.status = q.status;
     // Apply the vendorId filter only when the caller is NOT already vendor-pinned —
     // otherwise it could override the security pin and leak a sibling vendor's fleet.
     if (q.vendorId && !this.isVendorRole(user)) where.vendorId = q.vendorId;

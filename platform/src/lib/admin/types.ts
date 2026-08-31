@@ -102,6 +102,8 @@ export interface SiteFilters {
   town?: string;
   rsCode?: string;
   vendorId?: string;
+  /** Server-side status filter; omit for all statuses. */
+  status?: SiteStatus;
   page?: number;
   limit?: number;
 }

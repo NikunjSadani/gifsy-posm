@@ -5,9 +5,9 @@
  * Excel bulk-upload panel. A site is soft-deleted (status → INACTIVE), never hard-deleted.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Ban, RotateCcw, Search } from 'lucide-react';
+import { Plus, Pencil, Ban, RotateCcw, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
@@ -23,6 +23,9 @@ import { formatCoords } from '@/lib/admin/format';
 
 type Editing = { mode: 'create' } | { mode: 'edit'; site: Site } | null;
 type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
+
+/** Server page size. The list is server-paginated so every row (any status, any page) is reachable. */
+const PAGE_SIZE = 50;
 
 const emptyForm = {
   code: '',
@@ -48,6 +51,10 @@ export default function SitesPage() {
   const [search, setSearch] = useState('');
   const [vendorFilter, setVendorFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  const [page, setPage] = useState(1);
+
+  // Stable id for label association on the (visually label-less) search box.
+  const searchId = useId();
 
   const [editing, setEditing] = useState<Editing>(null);
   const [form, setForm] = useState({ ...emptyForm });
@@ -71,7 +78,10 @@ export default function SitesPage() {
     const res = await sitesApi.list({
       name: search.trim() || undefined,
       vendorId: vendorFilter || undefined,
-      limit: 200,
+      // Status is filtered SERVER-SIDE so an inactive site on any page is reachable.
+      status: statusFilter === 'ALL' ? undefined : statusFilter,
+      page,
+      limit: PAGE_SIZE,
     });
     if (res.success) {
       setSites(res.data.sites);
@@ -83,13 +93,19 @@ export default function SitesPage() {
       setTotal(0);
     }
     setLoading(false);
-  }, [search, vendorFilter]);
+  }, [search, vendorFilter, statusFilter, page]);
 
   useEffect(() => {
     void loadRefs();
   }, [loadRefs]);
 
-  // Debounce the search/filter-driven reload.
+  // Any filter change returns to page 1 so the user never lands on an out-of-range page
+  // (e.g. was on page 5, then a filter narrows the result to a single page).
+  useEffect(() => {
+    setPage(1);
+  }, [search, vendorFilter, statusFilter]);
+
+  // Debounce the search/filter/page-driven reload.
   useEffect(() => {
     const t = setTimeout(() => void load(), 300);
     return () => clearTimeout(t);
@@ -119,11 +135,10 @@ export default function SitesPage() {
     [vendors],
   );
 
-  // Status is filtered client-side (the list endpoint has no status param).
-  const rows = useMemo(
-    () => (statusFilter === 'ALL' ? sites : sites.filter((s) => s.status === statusFilter)),
-    [sites, statusFilter],
-  );
+  // Rows are exactly what the server returned for this page — status is filtered server-side,
+  // so there is no client-side single-page narrowing that could hide a match on another page.
+  const rows = sites;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const openCreate = () => {
     setEditing({ mode: 'create' });
@@ -283,8 +298,10 @@ export default function SitesPage() {
         {/* Search + filters */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-200 px-3 py-2 focus-within:border-[var(--brand-primary)] transition-colors flex-1 min-w-[200px] max-w-sm">
-            <Search className="h-4 w-4 text-gray-400 shrink-0" />
+            <label htmlFor={searchId} className="sr-only">Search sites by name</label>
+            <Search className="h-4 w-4 text-gray-400 shrink-0" aria-hidden="true" />
             <input
+              id={searchId}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by name…"
@@ -293,6 +310,7 @@ export default function SitesPage() {
           </div>
           <div className="w-52">
             <Select
+              aria-label="Filter by vendor"
               placeholder="All vendors"
               options={vendorFilterOptions}
               value={vendorFilter}
@@ -301,6 +319,7 @@ export default function SitesPage() {
           </div>
           <div className="w-40">
             <Select
+              aria-label="Filter by status"
               placeholder="All statuses"
               options={[
                 { value: 'ALL', label: 'All statuses' },
@@ -327,6 +346,35 @@ export default function SitesPage() {
           }
           rowClassName={(s) => (s.status === 'ACTIVE' ? undefined : 'opacity-60')}
         />
+
+        {/* Server-side pagination */}
+        {!loading && !loadError && total > PAGE_SIZE && (
+          <div className="mt-3 flex items-center justify-between">
+            <p className="text-xs text-gray-500">
+              Showing {rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}
+              –{(page - 1) * PAGE_SIZE + rows.length} of {total.toLocaleString()}
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="inline-flex items-center gap-1 text-sm font-medium text-gray-700 disabled:text-gray-300 hover:text-gray-900"
+              >
+                <ChevronLeft className="h-4 w-4" /> Prev
+              </button>
+              <span className="text-xs text-gray-500">Page {page} of {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="inline-flex items-center gap-1 text-sm font-medium text-gray-700 disabled:text-gray-300 hover:text-gray-900"
+              >
+                Next <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <UploadPanel onUploaded={() => void load()} />

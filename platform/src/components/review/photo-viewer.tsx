@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, ImageOff, MapPin } from 'lucide-react';
 import type { ReccePosm } from '@/lib/review/api';
-import { mediaSrc } from '@/lib/review/api';
+import { mediaSrc, dimensionsLabel } from '@/lib/review/api';
 import { cn } from '@/lib/utils';
+import { useFocusTrap } from './use-focus-trap';
 
 /**
  * POSM photo grid for a recce, with a click-to-zoom lightbox. Each tile shows the auth-gated
@@ -14,6 +15,13 @@ import { cn } from '@/lib/utils';
  */
 export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
   const [zoomKey, setZoomKey] = useState<string | null>(null);
+  const [zoomErrored, setZoomErrored] = useState(false);
+  const lightboxRef = useRef<HTMLDivElement | null>(null);
+
+  // Fresh error state whenever a new photo is enlarged.
+  useEffect(() => {
+    setZoomErrored(false);
+  }, [zoomKey]);
 
   // Escape closes the lightbox.
   useEffect(() => {
@@ -24,6 +32,9 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [zoomKey]);
+
+  // Focus moves into the lightbox on open, is trapped, and returns to the tile on close.
+  useFocusTrap(zoomKey !== null, lightboxRef);
 
   if (posms.length === 0) {
     return (
@@ -43,7 +54,9 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
 
       {zoomKey && (
         <div
-          className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4"
+          ref={lightboxRef}
+          tabIndex={-1}
+          className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 outline-none"
           onClick={() => setZoomKey(null)}
           role="dialog"
           aria-modal="true"
@@ -56,13 +69,24 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
           >
             <X className="h-6 w-6" />
           </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={mediaSrc(zoomKey)}
-            alt="POSM photo (enlarged)"
-            className="max-h-[90vh] max-w-full rounded-lg object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
+          {zoomErrored ? (
+            <div
+              className="flex flex-col items-center text-white/80"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ImageOff className="h-10 w-10 mb-2" />
+              <span className="text-sm">Photo failed to load</span>
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={mediaSrc(zoomKey)}
+              alt="POSM photo (enlarged)"
+              className="max-h-[90vh] max-w-full rounded-lg object-contain"
+              onClick={(e) => e.stopPropagation()}
+              onError={() => setZoomErrored(true)}
+            />
+          )}
         </div>
       )}
     </>
@@ -72,15 +96,36 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
 function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => void }) {
   const [errored, setErrored] = useState(false);
   const photo = posm.photo;
+  const zoomable = !!photo && !errored;
+  const dims = dimensionsLabel(posm.dimensions);
+
+  const openZoom = () => {
+    if (zoomable && photo) onZoom(photo.key);
+  };
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden shadow-sm">
       <div
         className={cn(
-          'relative aspect-[4/3] bg-gray-100 flex items-center justify-center',
-          photo && !errored && 'cursor-zoom-in',
+          'relative aspect-[4/3] bg-gray-100 flex items-center justify-center outline-none',
+          zoomable && 'cursor-zoom-in focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)]',
         )}
-        onClick={() => photo && !errored && onZoom(photo.key)}
+        {...(zoomable
+          ? {
+              role: 'button' as const,
+              tabIndex: 0,
+              'aria-label': `Enlarge photo — slot ${posm.slotNo}${
+                posm.posmType ? ` (${posm.posmType.name})` : ''
+              }`,
+              onClick: openZoom,
+              onKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openZoom();
+                }
+              },
+            }
+          : {})}
       >
         {!photo ? (
           <div className="flex flex-col items-center text-gray-400">
@@ -114,8 +159,8 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => 
             <span className="ml-1 text-xs font-normal text-gray-400">({posm.posmType.code})</span>
           )}
         </p>
-        {posm.dimensions && (
-          <p className="text-xs text-gray-500 mt-0.5">Dimensions: {posm.dimensions}</p>
+        {dims && (
+          <p className="text-xs text-gray-500 mt-0.5">Dimensions: {dims}</p>
         )}
         {photo?.geo && (
           <p className="flex items-center gap-1 text-xs text-gray-500 mt-1">

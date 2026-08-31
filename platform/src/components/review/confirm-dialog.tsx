@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
+import { useFocusTrap } from './use-focus-trap';
 
 /**
  * A minimal, dependency-light confirm modal for a consequential action (e.g. Approve). The
@@ -28,6 +29,8 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -36,6 +39,8 @@ export function ConfirmDialog({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, loading, onCancel]);
+
+  useFocusTrap(open, panelRef);
 
   if (!open) return null;
 
@@ -48,7 +53,9 @@ export function ConfirmDialog({
       aria-label={title}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 fade-in"
+        ref={panelRef}
+        tabIndex={-1}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 fade-in outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-lg font-bold text-gray-900">{title}</h2>

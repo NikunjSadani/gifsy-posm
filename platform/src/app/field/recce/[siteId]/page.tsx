@@ -3,20 +3,23 @@
 /**
  * Recce capture flow — capture 1–2 POSM lines for a site, then submit the whole recce.
  *
+ * Two modes, resolved on load:
+ *   - CREATE   → a site with no recce yet: POST /api/recce { siteId, posms }.
+ *   - RESUBMIT → a REJECTED recce (reached via My Work "Re-capture", ?recceId=…, or detected
+ *                for the site): POST /api/recce/:id/resubmit { posms } — a fresh POST would 409.
+ *                The ASM's rejection reason is surfaced so the rep knows what to fix.
+ *   - BLOCKED  → the site already has a SUBMITTED/APPROVED (immutable) recce: no re-capture.
+ *
  * Each line (PosmCaptureCard): pick POSM type + dimensions, take a photo, auto-attach a GPS
- * fix, and upload to get a media key. On submit we POST the assembled recce to `/api/recce`:
- *
- *   { siteId, posms: [ { posmTypeId, dimensions:{width,height,unit}, photo:{ key, geo } } ] }
- *
- * (1–2 lines; dimensions + photo are required per line.) Submit is disabled until at least one
- * line is fully ready with a geo fix. Success routes to /field/work.
+ * fix, and upload to get a media key. Submit is disabled until at least one line is fully ready
+ * with a geo fix. Success routes to /field/work where the just-submitted item appears.
  *
  * The backend is the sole geo-fence authority: an out-of-fence or unverifiable fix comes back
  * as a 403 we surface honestly — this UI makes no "verified"/anti-spoof claims of its own.
  */
 
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Plus, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api-client';
@@ -25,6 +28,15 @@ import {
   type PosmTypeOption,
   type PosmCaptureState,
 } from '@/components/field/capture/PosmCaptureCard';
+import {
+  fetchMyRecces,
+  fetchRecce,
+  submitRecce,
+  resubmitRecce,
+  findSiteRecce,
+  rejectionLabel,
+  type RecceDetail,
+} from '@/lib/field/recce-api';
 
 interface PosmTypeApi {
   id: string;
@@ -35,18 +47,49 @@ interface PosmTypeApi {
 
 const EMPTY_STATE: PosmCaptureState = { started: false, line: null };
 
+type Mode = 'create' | 'resubmit' | 'blocked';
+
 export default function ReccePage({ params }: { params: Promise<{ siteId: string }> }) {
+  // useSearchParams requires a Suspense boundary in the App Router.
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <ReccePageInner params={params} />
+    </Suspense>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <div className="mt-6 flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      Loading…
+    </div>
+  );
+}
+
+function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
   const { siteId } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const recceIdParam = searchParams.get('recceId');
 
   const [posmTypes, setPosmTypes] = useState<PosmTypeOption[]>([]);
   const [typesLoading, setTypesLoading] = useState(true);
   const [typesError, setTypesError] = useState<string | null>(null);
 
+  // Recce context (create vs resubmit vs blocked) resolved on load.
+  const [ctxLoading, setCtxLoading] = useState(true);
+  const [mode, setMode] = useState<Mode>('create');
+  const [existing, setExisting] = useState<RecceDetail | null>(null);
+
   const [count, setCount] = useState(1); // number of POSM cards (1 or 2)
   const [states, setStates] = useState<PosmCaptureState[]>([EMPTY_STATE, EMPTY_STATE]);
   const [submitting, setSubmitting] = useState(false);
+  // Synchronous in-flight guard: a fast double-tap re-enters submit() before `submitting`
+  // (state) has re-rendered the disabled button, so guard on a ref set at entry.
+  const inFlight = useRef(false);
 
+  // Load the tenant's POSM types.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -70,6 +113,45 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
     };
   }, []);
 
+  // Resolve the recce context: an explicit ?recceId (from My Work "Re-capture"), or detect an
+  // existing recce for this site. A REJECTED recce → resubmit; SUBMITTED/APPROVED → blocked.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCtxLoading(true);
+      let detail: RecceDetail | null = null;
+
+      if (recceIdParam) {
+        const res = await fetchRecce(recceIdParam);
+        if (alive && res.success) detail = res.data;
+      } else {
+        const list = await fetchMyRecces();
+        if (alive && list.success) {
+          const row = findSiteRecce(list.data.recces, siteId);
+          if (row) {
+            const res = await fetchRecce(row.id);
+            if (alive && res.success) detail = res.data;
+          }
+        }
+        // A list failure is non-fatal: fall through as CREATE — the backend's one-live-recce
+        // constraint still guards (a genuine duplicate comes back as a 409 we surface).
+      }
+
+      if (!alive) return;
+      if (detail && detail.site.id === siteId) {
+        setExisting(detail);
+        setMode(detail.status === 'REJECTED' ? 'resubmit' : 'blocked');
+      } else {
+        setExisting(null);
+        setMode('create');
+      }
+      setCtxLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [recceIdParam, siteId]);
+
   const setStateAt = useCallback((i: number, s: PosmCaptureState) => {
     setStates((prev) => {
       const next = [...prev];
@@ -79,11 +161,16 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
   }, []);
 
   const active = states.slice(0, count);
-  const readyLines = useMemo(() => active.map((s) => s.line).filter((l): l is NonNullable<typeof l> => l !== null), [active]);
+  const readyLines = useMemo(
+    () => active.map((s) => s.line).filter((l): l is NonNullable<typeof l> => l !== null),
+    [active],
+  );
   const hasIncompleteStarted = active.some((s) => s.started && s.line === null);
-  const canSubmit = readyLines.length >= 1 && !submitting && !typesError;
+  const canSubmit = readyLines.length >= 1 && !submitting && !typesError && mode !== 'blocked';
 
   const submit = async () => {
+    if (inFlight.current || submitting) return; // synchronous double-tap guard
+    if (mode === 'blocked') return;
     if (readyLines.length < 1) {
       toast.error('Capture at least one POSM (type, dimensions, and a photo with location).');
       return;
@@ -92,18 +179,23 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
       toast.error('Finish or remove the incomplete POSM line before submitting.');
       return;
     }
+    inFlight.current = true;
     setSubmitting(true);
-    const res = await api.post<{ id: string; status: string }>('/api/recce', {
-      siteId,
-      posms: readyLines,
-    });
-    setSubmitting(false);
-    if (!res.success) {
-      toast.error(res.error || 'Could not submit the recce. Please try again.');
-      return;
+    try {
+      const isResubmit = mode === 'resubmit' && existing;
+      const res = isResubmit
+        ? await resubmitRecce(existing.id, readyLines)
+        : await submitRecce(siteId, readyLines);
+      if (!res.success) {
+        toast.error(res.error || 'Could not submit the recce. Please try again.');
+        return;
+      }
+      toast.success(isResubmit ? 'Recce re-submitted for approval.' : 'Recce submitted for approval.');
+      router.push('/field/work');
+    } finally {
+      setSubmitting(false);
+      inFlight.current = false;
     }
-    toast.success('Recce submitted for approval.');
-    router.push('/field/work');
   };
 
   const addSecond = () => setCount(2);
@@ -112,9 +204,13 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
     setCount(1);
   };
 
+  const rejectionText =
+    mode === 'resubmit' && existing
+      ? existing.rejectionReason?.trim() || rejectionLabel(existing.rejectionReasonCode)
+      : null;
+
   return (
     <div className="px-4 pt-4">
-
       <button
         onClick={() => router.back()}
         className="mb-4 inline-flex items-center gap-1.5 text-sm text-gray-600 active:scale-95 transition-transform"
@@ -123,8 +219,12 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
         Back
       </button>
 
-      <h1 className="text-lg font-bold text-gray-900">New recce</h1>
-      <p className="mt-1 text-sm text-gray-500">Capture 1–2 POSM lines for this site.</p>
+      <h1 className="text-lg font-bold text-gray-900">{mode === 'resubmit' ? 'Re-capture recce' : 'New recce'}</h1>
+      <p className="mt-1 text-sm text-gray-500">
+        {mode === 'resubmit'
+          ? 'Fix what the reviewer flagged, then re-submit this site’s recce.'
+          : 'Capture 1–2 POSM lines for this site.'}
+      </p>
 
       {typesError && (
         <div className="mt-4 flex items-start gap-2 rounded-2xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] p-4 text-sm text-gray-800">
@@ -133,12 +233,34 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
         </div>
       )}
 
-      {typesLoading ? (
-        <div className="mt-6 flex items-center justify-center gap-2 py-10 text-sm text-gray-400">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading POSM types…
+      {/* Resubmit: surface the ASM's rejection reason so the rep knows what to fix. */}
+      {rejectionText && (
+        <div className="mt-4 flex items-start gap-2 rounded-2xl bg-red-50 p-4 text-sm text-red-700">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <span className="font-semibold">Sent back:</span> {rejectionText}
+            <span className="mt-1 block text-xs text-red-600/80">Re-capture the POSM(s) and submit again.</span>
+          </span>
         </div>
-      ) : typesError ? null : (
+      )}
+
+      {/* Blocked: the site already has an immutable (submitted/approved) recce. */}
+      {mode === 'blocked' && existing && (
+        <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            This site already has a <span className="font-semibold">{existing.status.toLowerCase()}</span> recce, which
+            can’t be re-captured.{' '}
+            <button onClick={() => router.push('/field/work')} className="font-semibold underline">
+              Go to My Work
+            </button>
+          </span>
+        </div>
+      )}
+
+      {typesLoading || ctxLoading ? (
+        <LoadingScreen />
+      ) : typesError || mode === 'blocked' ? null : (
         <div className="mt-4 space-y-4">
           {Array.from({ length: count }).map((_, i) => (
             <PosmCaptureCard
@@ -163,27 +285,31 @@ export default function ReccePage({ params }: { params: Promise<{ siteId: string
         </div>
       )}
 
-      <div className="sticky bottom-0 -mx-4 mt-6 border-t border-gray-100 bg-gray-50/95 px-4 py-3 backdrop-blur">
-        <button
-          onClick={submit}
-          disabled={!canSubmit}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand-primary)] py-4 text-lg font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {submitting ? (
-            <>
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Submitting…
-            </>
-          ) : (
-            `Submit recce${readyLines.length ? ` (${readyLines.length})` : ''}`
+      {mode !== 'blocked' && !typesError && (
+        <div className="sticky bottom-0 -mx-4 mt-6 border-t border-gray-100 bg-gray-50/95 px-4 py-3 backdrop-blur">
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand-primary)] py-4 text-lg font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Submitting…
+              </>
+            ) : mode === 'resubmit' ? (
+              `Re-submit recce${readyLines.length ? ` (${readyLines.length})` : ''}`
+            ) : (
+              `Submit recce${readyLines.length ? ` (${readyLines.length})` : ''}`
+            )}
+          </button>
+          {!canSubmit && !submitting && (
+            <p className="mt-2 text-center text-xs text-gray-400">
+              Add a POSM type, dimensions, and a located photo to enable submit.
+            </p>
           )}
-        </button>
-        {!canSubmit && !submitting && !typesError && (
-          <p className="mt-2 text-center text-xs text-gray-400">
-            Add a POSM type, dimensions, and a located photo to enable submit.
-          </p>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

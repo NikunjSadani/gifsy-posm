@@ -7,9 +7,10 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, SlidersHorizontal, ClipboardCheck, RefreshCw } from 'lucide-react';
+import { Search, SlidersHorizontal, ClipboardCheck, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { InstallRow } from '@/components/audit/install-row';
+import { pageCount } from '@/components/audit/pagination';
 import { fetchAuditQueue, type QueueItem } from '@/lib/audit/api';
 
 const PAGE_SIZE = 50;
@@ -18,6 +19,7 @@ export default function AuditQueuePage() {
   const [siteCode, setSiteCode] = useState('');
   const [town, setTown] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [page, setPage] = useState(1);
 
   const [items, setItems] = useState<QueueItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -31,11 +33,17 @@ export default function AuditQueuePage() {
   );
   const filtersKey = JSON.stringify(filters);
 
+  // Changing the filters resets to the first page (otherwise a page-3 filter could land on an
+  // empty page). The fetch effect below then refetches page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [filtersKey]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     const t = setTimeout(async () => {
-      const res = await fetchAuditQueue({ ...filters, page: 1, limit: PAGE_SIZE });
+      const res = await fetchAuditQueue({ ...filters, page, limit: PAGE_SIZE });
       if (cancelled) return;
       if (res.success) {
         setItems(res.data.items);
@@ -53,9 +61,10 @@ export default function AuditQueuePage() {
       clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersKey, reloadKey]);
+  }, [filtersKey, page, reloadKey]);
 
   const activeFilterCount = [siteCode, town].filter((v) => v.trim()).length;
+  const totalPages = pageCount(total, PAGE_SIZE);
 
   return (
     <div className="fade-in">
@@ -65,7 +74,7 @@ export default function AuditQueuePage() {
           {!loading && !error && (
             <p className="text-sm text-gray-500 mt-0.5">
               {total} installation{total === 1 ? '' : 's'} awaiting audit
-              {total > PAGE_SIZE && ` · showing first ${PAGE_SIZE}`}
+              {totalPages > 1 && ` · page ${page} of ${totalPages}`}
             </p>
           )}
         </div>
@@ -154,11 +163,34 @@ export default function AuditQueuePage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-2.5">
-          {items.map((item) => (
-            <InstallRow key={item.id} item={item} />
-          ))}
-        </div>
+        <>
+          <div className="space-y-2.5">
+            {items.map((item) => (
+              <InstallRow key={item.id} item={item} />
+            ))}
+          </div>
+
+          {/* Pagination — the whole backlog must be reachable (auditor is a commercial gate). */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between gap-3 pt-3">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1 || loading}
+                className="flex items-center gap-1 text-sm font-medium text-gray-600 hover:text-gray-900 bg-white border border-gray-200 rounded-xl px-3 py-2 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="h-4 w-4" /> Previous
+              </button>
+              <span className="text-sm text-gray-500">Page {page} of {totalPages}</span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages || loading}
+                className="flex items-center gap-1 text-sm font-medium text-gray-600 hover:text-gray-900 bg-white border border-gray-200 rounded-xl px-3 py-2 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

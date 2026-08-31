@@ -9,9 +9,10 @@
  * integrity signal from the JSON payload alongside it.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ImageOff, Loader2, Maximize2 } from 'lucide-react';
 import { toApiMediaUrl, type MediaRef } from '@/lib/audit/api';
+import { useFocusTrap } from '@/components/audit/use-focus-trap';
 
 export function MediaImage({
   photo,
@@ -95,17 +96,60 @@ export function Lightbox({
   alt: string;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [errored, setErrored] = useState(false);
+  const open = !!src;
+
+  // Reset the error state whenever a new photo is shown.
+  useEffect(() => {
+    setErrored(false);
+  }, [src]);
+
+  // Escape-to-close (unconditional — the lightbox has no in-flight action to guard).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  // Move focus into the dialog on open, trap Tab, and return focus to the trigger on close.
+  useFocusTrap(open, dialogRef);
+
   if (!src) return null;
   return (
     <div
-      className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 fade-in"
+      ref={dialogRef}
+      tabIndex={-1}
+      className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 fade-in focus:outline-none"
       role="dialog"
       aria-modal="true"
       aria-label={alt}
       onClick={onClose}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated dynamic stream */}
-      <img src={src} alt={alt} className="max-h-full max-w-full object-contain rounded-lg" />
+      {errored ? (
+        <div
+          className="flex flex-col items-center justify-center text-gray-300 px-6 text-center"
+          role="img"
+          aria-label={`${alt} — could not be loaded`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ImageOff className="h-10 w-10 mb-2" />
+          <span className="text-sm font-medium">Photo could not be loaded</span>
+        </div>
+      ) : (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated dynamic stream */}
+          <img
+            src={src}
+            alt={alt}
+            onError={() => setErrored(true)}
+            className="max-h-full max-w-full object-contain rounded-lg"
+          />
+        </>
+      )}
       <button
         type="button"
         onClick={onClose}

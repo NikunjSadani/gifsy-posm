@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   REJECT_REASON_CODES,
@@ -8,6 +8,7 @@ import {
   type RejectReasonCode,
   type RejectBody,
 } from '@/lib/review/api';
+import { useFocusTrap } from './use-focus-trap';
 
 /**
  * Reject modal for a recce. A rejection REQUIRES a controlled reason code (the backend refuses
@@ -30,6 +31,7 @@ export function RejectDialog({
 }) {
   const [reasonCode, setReasonCode] = useState<RejectReasonCode | ''>('');
   const [reason, setReason] = useState('');
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   // Fresh state each open.
   useEffect(() => {
@@ -48,12 +50,17 @@ export function RejectDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, loading, onCancel]);
 
+  useFocusTrap(open, panelRef);
+
   if (!open) return null;
 
-  const canSubmit = reasonCode !== '' && !loading;
+  // A free-text note is mandatory when the reason is "Other" — the code alone says nothing.
+  const noteRequired = reasonCode === 'OTHER';
+  const noteOk = !noteRequired || reason.trim().length > 0;
+  const canSubmit = reasonCode !== '' && noteOk && !loading;
 
   const submit = () => {
-    if (reasonCode === '') return;
+    if (reasonCode === '' || !noteOk) return;
     const trimmed = reason.trim();
     onConfirm({ reasonCode, ...(trimmed ? { reason: trimmed } : {}) });
   };
@@ -67,7 +74,9 @@ export function RejectDialog({
       aria-label="Reject recce"
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 fade-in"
+        ref={panelRef}
+        tabIndex={-1}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 fade-in outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-lg font-bold text-gray-900">Reject recce</h2>
@@ -100,7 +109,12 @@ export function RejectDialog({
         </select>
 
         <label htmlFor="reject-reason-note" className="block text-sm font-medium text-gray-700 mt-4 mb-1.5">
-          Note <span className="font-normal text-gray-400">(optional)</span>
+          Note{' '}
+          {noteRequired ? (
+            <span className="text-[var(--brand-primary)]">*</span>
+          ) : (
+            <span className="font-normal text-gray-400">(optional)</span>
+          )}
         </label>
         <textarea
           id="reject-reason-note"
@@ -108,7 +122,11 @@ export function RejectDialog({
           onChange={(e) => setReason(e.target.value.slice(0, 500))}
           disabled={loading}
           rows={3}
-          placeholder="Add any detail that helps the vendor fix the recapture…"
+          placeholder={
+            noteRequired
+              ? 'Describe the issue (required for “Other”)'
+              : 'Add any detail that helps the vendor fix the recapture…'
+          }
           className="w-full rounded-xl border-2 border-gray-200 focus:border-[var(--brand-primary)] focus:outline-none px-3 py-2.5 text-sm text-gray-900 resize-none disabled:opacity-50"
         />
         <p className="text-xs text-gray-400 mt-1 text-right">{reason.length}/500</p>

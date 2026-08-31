@@ -6,8 +6,9 @@
  * action is in flight, and the backdrop/Escape are inert until it resolves.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
+import { useFocusTrap } from '@/components/audit/use-focus-trap';
 
 export function ConfirmDialog({
   open,
@@ -26,6 +27,8 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -34,6 +37,9 @@ export function ConfirmDialog({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, loading, onCancel]);
+
+  // Move focus into the dialog on open, trap Tab, and return focus to the trigger on close.
+  useFocusTrap(open, dialogRef);
 
   if (!open) return null;
 
@@ -46,7 +52,9 @@ export function ConfirmDialog({
       onClick={() => !loading && onCancel()}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3">

@@ -71,6 +71,9 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
   // Per-recce-POSM captured install photo (by reccePosmId).
   const [captured, setCaptured] = useState<Record<string, CapturedInstall>>({});
   const [submitting, setSubmitting] = useState(false);
+  // Synchronous in-flight guard: a fast double-tap re-enters submit() before `submitting`
+  // (state) has re-rendered the disabled button, so guard on a ref set at entry.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -110,26 +113,32 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
   const canSubmit = isApproved && allCaptured && !submitting;
 
   const submit = async () => {
+    if (inFlight.current || submitting) return; // synchronous double-tap guard
     if (!recce) return;
     if (!allCaptured) {
       toast.error('Capture an installed photo for every POSM before submitting.');
       return;
     }
+    inFlight.current = true;
     setSubmitting(true);
-    const res = await api.post<{ id: string; status: string }>('/api/installation', {
-      siteId: recce.site.id,
-      posms: posms.map((p) => ({
-        reccePosmId: p.id,
-        photo: { key: captured[p.id].key, geo: captured[p.id].geo },
-      })),
-    });
-    setSubmitting(false);
-    if (!res.success) {
-      toast.error(res.error || 'Could not submit the installation. Please try again.');
-      return;
+    try {
+      const res = await api.post<{ id: string; status: string }>('/api/installation', {
+        siteId: recce.site.id,
+        posms: posms.map((p) => ({
+          reccePosmId: p.id,
+          photo: { key: captured[p.id].key, geo: captured[p.id].geo },
+        })),
+      });
+      if (!res.success) {
+        toast.error(res.error || 'Could not submit the installation. Please try again.');
+        return;
+      }
+      toast.success('Installation submitted.');
+      router.push('/field/work');
+    } finally {
+      setSubmitting(false);
+      inFlight.current = false;
     }
-    toast.success('Installation submitted.');
-    router.push('/field/work');
   };
 
   return (

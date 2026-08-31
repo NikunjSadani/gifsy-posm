@@ -5,6 +5,8 @@ import {
   recceFlags,
   photoCount,
   summarizeQueue,
+  dimensionsLabel,
+  flaggedOnPageLabel,
   REJECT_REASON_CODES,
   REJECT_REASON_LABELS,
   type RecceQueueItem,
@@ -137,6 +139,44 @@ describe('summarizeQueue', () => {
       makeItem({ id: 'd', site: { id: 's4', code: 'K4', name: 'D', town: null, lat: null, lng: null } }),
     ];
     expect(summarizeQueue(items)).toEqual({ total: 4, flagged: 1, towns: 2 });
+  });
+});
+
+// ─── dimensionsLabel ────────────────────────────────────────────────────────────
+
+describe('dimensionsLabel', () => {
+  it('renders the backend {width,height,unit} object as a string (the crash case)', () => {
+    expect(dimensionsLabel({ width: 2, height: 3, unit: 'ft' })).toBe('2 × 3 ft');
+  });
+  it('renders width/height with no unit', () => {
+    expect(dimensionsLabel({ width: 4, height: 6 })).toBe('4 × 6');
+  });
+  it('accepts the short w/h keys', () => {
+    expect(dimensionsLabel({ w: 10, h: 20, unit: 'cm' })).toBe('10 × 20 cm');
+  });
+  it('passes a legacy string through, trimmed', () => {
+    expect(dimensionsLabel('  2x3  ')).toBe('2x3');
+  });
+  it('returns null for empty / missing / unrenderable values', () => {
+    expect(dimensionsLabel(null)).toBeNull();
+    expect(dimensionsLabel(undefined)).toBeNull();
+    expect(dimensionsLabel('')).toBeNull();
+    expect(dimensionsLabel('   ')).toBeNull();
+    expect(dimensionsLabel({})).toBeNull();
+    expect(dimensionsLabel({ width: 2 })).toBeNull();
+  });
+});
+
+// ─── flaggedOnPageLabel ─────────────────────────────────────────────────────────
+
+describe('flaggedOnPageLabel', () => {
+  it('is null when nothing on the page is flagged', () => {
+    expect(flaggedOnPageLabel(0)).toBeNull();
+    expect(flaggedOnPageLabel(-1)).toBeNull();
+  });
+  it('scopes the count honestly to the current page', () => {
+    expect(flaggedOnPageLabel(1)).toBe('1 flagged on this page');
+    expect(flaggedOnPageLabel(7)).toBe('7 flagged on this page');
   });
 });
 

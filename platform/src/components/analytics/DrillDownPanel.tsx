@@ -15,7 +15,7 @@
  * narrowing).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, ChevronLeft, ChevronRight, ImageOff, Loader2, AlertTriangle, Inbox } from 'lucide-react';
 import {
   fetchRecords,
@@ -108,12 +108,73 @@ function RecordRow({ r }: { r: AnalyticsRecord }) {
   );
 }
 
+/** All tabbable descendants of `root`, in DOM order (excludes disabled / hidden controls). */
+function getFocusable(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  const nodes = root.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  );
+  return Array.from(nodes).filter((el) => el.offsetParent !== null || el === document.activeElement);
+}
+
 export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null; onClose: () => void }) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<AnalyticsRecord[]>([]);
   const [total, setTotal] = useState(0);
+
+  const panelRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Latest onClose without re-running the open/close effect on every parent re-render.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // Escape-to-close + focus management + Tab focus-trap while the slide-over is open.
+  const open = target !== null;
+  useEffect(() => {
+    if (!open) return;
+    previouslyFocused.current = (document.activeElement as HTMLElement | null) ?? null;
+    // Move focus into the panel on open (first focusable, else the panel itself).
+    const panel = panelRef.current;
+    const focusables = getFocusable(panel);
+    (focusables[0] ?? panel)?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const nodes = getFocusable(panelRef.current);
+      if (nodes.length === 0) {
+        e.preventDefault();
+        panelRef.current?.focus();
+        return;
+      }
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === first || !panelRef.current?.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panelRef.current?.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      // Return focus to whatever opened the panel.
+      previouslyFocused.current?.focus?.();
+    };
+  }, [open]);
 
   // Reset to page 1 whenever a new target opens.
   const targetKey = target ? `${target.stage}|${target.status ?? ''}|${target.vendorId ?? ''}` : '';
@@ -148,8 +209,8 @@ export function DrillDownPanel({ target, onClose }: { target: DrillTarget | null
 
   return (
     <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true" aria-label={target.title}>
-      <button className="absolute inset-0 bg-black/40" aria-label="Close" onClick={onClose} />
-      <div className="relative h-full w-full max-w-md bg-white shadow-2xl flex flex-col fade-in">
+      <button className="absolute inset-0 bg-black/40" aria-label="Close" onClick={onClose} tabIndex={-1} />
+      <div ref={panelRef} tabIndex={-1} className="relative h-full w-full max-w-md bg-white shadow-2xl flex flex-col fade-in focus:outline-none">
         {/* Header */}
         <div className="px-5 py-4 border-b border-gray-200 flex items-start justify-between gap-3">
           <div className="min-w-0">

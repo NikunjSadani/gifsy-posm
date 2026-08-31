@@ -120,8 +120,9 @@ function siteQuery(filters: SiteFilters): string {
   if (filters.town) p.set('town', filters.town);
   if (filters.rsCode) p.set('rsCode', filters.rsCode);
   if (filters.vendorId) p.set('vendorId', filters.vendorId);
+  if (filters.status) p.set('status', filters.status);
   p.set('page', String(filters.page ?? 1));
-  p.set('limit', String(filters.limit ?? 200));
+  p.set('limit', String(filters.limit ?? 50));
   return p.toString();
 }
 

@@ -239,6 +239,7 @@ export default function PosmTypesPage() {
           <p className="text-sm font-medium text-gray-700 mb-1.5">Default dimensions <span className="font-normal text-gray-400">(optional)</span></p>
           <div className="grid grid-cols-3 gap-2">
             <Input
+              aria-label="Default width"
               placeholder="Width"
               type="number"
               inputMode="decimal"
@@ -247,6 +248,7 @@ export default function PosmTypesPage() {
               error={fieldErrors.width}
             />
             <Input
+              aria-label="Default height"
               placeholder="Height"
               type="number"
               inputMode="decimal"
@@ -255,6 +257,7 @@ export default function PosmTypesPage() {
               error={fieldErrors.height}
             />
             <Input
+              aria-label="Default dimension unit"
               placeholder="Unit (e.g. cm)"
               value={form.unit}
               onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}

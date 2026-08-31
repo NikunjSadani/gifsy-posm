@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useId } from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { ChevronDown, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -20,6 +20,8 @@ interface SelectProps {
   onValueChange?: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  /** Accessible name when there is no visible `label` (e.g. compact filter selects). */
+  'aria-label'?: string;
 }
 
 export function Select({
@@ -31,11 +33,19 @@ export function Select({
   onValueChange,
   disabled,
   className,
+  'aria-label': ariaLabel,
 }: SelectProps) {
+  // A stable id ties the visible <label> to the Radix trigger (which is not a native
+  // <select>, so `htmlFor` alone won't focus it — we also set aria-labelledby on the trigger).
+  const generatedId = useId();
+  const triggerId = `${generatedId}-trigger`;
+  const labelId = `${generatedId}-label`;
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       {label && (
-        <label className="text-sm font-medium text-gray-700">{label}</label>
+        <label id={labelId} htmlFor={triggerId} className="text-sm font-medium text-gray-700">
+          {label}
+        </label>
       )}
       <SelectPrimitive.Root
         value={value}
@@ -43,6 +53,9 @@ export function Select({
         disabled={disabled}
       >
         <SelectPrimitive.Trigger
+          id={triggerId}
+          aria-labelledby={label ? labelId : undefined}
+          aria-label={!label ? ariaLabel : undefined}
           className={cn(
             'flex items-center justify-between w-full rounded-lg border px-3 py-2.5 text-sm',
             'focus:outline-none focus:ring-2 focus:ring-offset-0',

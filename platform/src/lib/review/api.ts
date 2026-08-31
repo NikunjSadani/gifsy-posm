@@ -49,7 +49,12 @@ export interface ReccePosm {
   id: string;
   slotNo: number;
   posmType: { id: string; code: string; name: string } | null;
-  dimensions: string | null;
+  /**
+   * Raw stored dimensions — the backend returns whatever was captured, which is a JSON
+   * object `{ width, height, unit }` (not a string). Typed `unknown` so callers must go
+   * through `dimensionsLabel()` and never render the object as a React child.
+   */
+  dimensions: unknown;
   photo: MediaRef | null;
   markup: unknown | null;
 }
@@ -135,6 +140,37 @@ export interface RejectBody {
  */
 export function mediaSrc(key: string): string {
   return `/api/media/view?key=${encodeURIComponent(key)}`;
+}
+
+/**
+ * Best-effort human label for a recce POSM's stored dimensions. The backend stores this as a
+ * JSON object `{ width, height, unit }` (a string is also tolerated for legacy rows), so this
+ * MUST be used before rendering — passing the raw object into JSX crashes React with
+ * "Objects are not valid as a React child". Returns `null` when there's nothing renderable.
+ */
+export function dimensionsLabel(dimensions: unknown): string | null {
+  if (!dimensions) return null;
+  if (typeof dimensions === 'string') return dimensions.trim() || null;
+  if (typeof dimensions === 'object') {
+    const d = dimensions as Record<string, unknown>;
+    const w = d.width ?? d.w;
+    const h = d.height ?? d.h;
+    if (w != null && h != null) {
+      const unit = typeof d.unit === 'string' ? ` ${d.unit}` : '';
+      return `${String(w)} × ${String(h)}${unit}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Honest header sub-label for the page-scoped flagged count. `summarizeQueue` only sees the
+ * CURRENT page, so the label must say so — never imply it's the server-wide flagged total.
+ * Returns `null` when nothing on the page is flagged.
+ */
+export function flaggedOnPageLabel(flagged: number): string | null {
+  if (flagged <= 0) return null;
+  return `${flagged} flagged on this page`;
 }
 
 /**

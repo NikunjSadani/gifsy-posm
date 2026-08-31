@@ -1,5 +1,6 @@
-import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, Max, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SiteStatus } from '@prisma/client';
 
 /**
  * Query filters for GET /v1/sites. All optional; string filters are case-insensitive
@@ -27,6 +28,12 @@ export class ListSitesDto {
   @IsOptional()
   @IsString()
   vendorId?: string;
+
+  // Optional status filter. Validated against the SiteStatus enum (ACTIVE / INACTIVE);
+  // absent = all statuses. An unknown value is rejected (400) rather than silently ignored.
+  @IsOptional()
+  @IsEnum(SiteStatus)
+  status?: SiteStatus;
 
   // @Type is explicit (not relying on enableImplicitConversion) so a query string coerces
   // to a number deterministically before the @IsInt/@Min bounds run.

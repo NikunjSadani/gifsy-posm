@@ -14,6 +14,7 @@ import {
   fetchQueue,
   bulkApproveRecces,
   summarizeQueue,
+  flaggedOnPageLabel,
   type RecceQueueItem,
 } from '@/lib/review/api';
 import { RecceRow } from '@/components/review/recce-row';
@@ -137,7 +138,7 @@ export default function ReviewQueuePage() {
           <h1 className="text-xl font-bold text-gray-900">Approval queue</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {total} recce{total === 1 ? '' : 's'} awaiting review
-            {summary.flagged > 0 && <> · {summary.flagged} flagged</>}
+            {flaggedOnPageLabel(summary.flagged) && <> · {flaggedOnPageLabel(summary.flagged)}</>}
           </p>
         </div>
         <button

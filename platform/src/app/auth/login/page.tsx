@@ -32,6 +32,10 @@ function LoginInner() {
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // Synchronous in-flight guards: a fast double-tap re-enters the handler before `loading`
+  // (state) has re-rendered the disabled button, which would fire two OTP/verify requests.
+  const sendingRef = useRef(false);
+  const verifyingRef = useRef(false);
 
   // Surface a session-expiry bounce (proxy redirects here with ?expired=1).
   useEffect(() => {
@@ -47,6 +51,7 @@ function LoginInner() {
   }, [resendTimer]);
 
   const sendOtp = async () => {
+    if (sendingRef.current || loading) return; // synchronous double-tap guard
     if (!/^\d{10}$/.test(mobile)) {
       toast.error('Please enter a valid 10-digit mobile number');
       return;
@@ -55,22 +60,27 @@ function LoginInner() {
       toast.error('Login is not configured yet (missing client id). Please contact support.');
       return;
     }
+    sendingRef.current = true;
     setLoading(true);
-    const res = await api.post<{ success: boolean; expiresIn: number }>('/api/auth/send-otp', {
-      phone: mobile,
-      channel: 'SMS',
-      clientId: CLIENT_ID,
-    });
-    setLoading(false);
-    if (!res.success) {
-      toast.error(res.error || 'Could not send the OTP. Please try again.');
-      return;
+    try {
+      const res = await api.post<{ success: boolean; expiresIn: number }>('/api/auth/send-otp', {
+        phone: mobile,
+        channel: 'SMS',
+        clientId: CLIENT_ID,
+      });
+      if (!res.success) {
+        toast.error(res.error || 'Could not send the OTP. Please try again.');
+        return;
+      }
+      setStep('otp');
+      setOtp(['', '', '', '', '', '']);
+      setResendTimer(RESEND_SECONDS);
+      toast.success('OTP sent!');
+      setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    } finally {
+      setLoading(false);
+      sendingRef.current = false;
     }
-    setStep('otp');
-    setOtp(['', '', '', '', '', '']);
-    setResendTimer(RESEND_SECONDS);
-    toast.success('OTP sent!');
-    setTimeout(() => otpRefs.current[0]?.focus(), 50);
   };
 
   const onOtpChange = (i: number, value: string) => {
@@ -96,26 +106,33 @@ function LoginInner() {
   };
 
   const verify = async () => {
+    if (verifyingRef.current || loading) return; // synchronous double-tap guard
     const code = otp.join('');
     if (code.length !== 6) {
       toast.error('Please enter the complete 6-digit OTP');
       return;
     }
+    verifyingRef.current = true;
     setLoading(true);
-    const result = await loginAction(mobile, code, CLIENT_ID);
-    if (!result.ok) {
-      setLoading(false);
-      toast.error(result.error);
-      return;
-    }
-    // Persist only the NON-sensitive user (the real credential is the httpOnly cookie).
     try {
-      localStorage.setItem('user', JSON.stringify(result.user));
-    } catch {
-      /* private-mode / storage-blocked: the guard still relies on the cookie + backend */
+      const result = await loginAction(mobile, code, CLIENT_ID);
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      // Persist only the NON-sensitive user (the real credential is the httpOnly cookie).
+      try {
+        localStorage.setItem('user', JSON.stringify(result.user));
+      } catch {
+        /* private-mode / storage-blocked: the guard still relies on the cookie + backend */
+      }
+      toast.success('Signed in!');
+      router.replace(getRoleHome(result.user.role));
+    } finally {
+      // On success we navigate away; on failure this re-enables verify for another try.
+      setLoading(false);
+      verifyingRef.current = false;
     }
-    toast.success('Signed in!');
-    router.replace(getRoleHome(result.user.role));
   };
 
   return (
