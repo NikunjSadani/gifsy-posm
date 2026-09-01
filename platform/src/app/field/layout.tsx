@@ -14,6 +14,7 @@ import { MapPin, Compass, ClipboardList, ListChecks } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { NavBottom, type NavItem } from '@/components/layout/nav-bottom';
 import { FieldHeader } from '@/components/field/field-header';
+import { InstallPrompt } from '@/components/pwa/install-prompt';
 import { FIELD_ROLES } from '@/lib/field/config';
 
 const NAV: NavItem[] = [
@@ -35,6 +36,7 @@ export default function FieldLayout({ children }: { children: React.ReactNode })
           {children}
         </main>
         <NavBottom items={NAV} />
+        <InstallPrompt />
       </div>
     </RequireAuth>
   );

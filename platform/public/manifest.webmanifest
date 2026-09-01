@@ -10,22 +10,22 @@
   "theme_color": "#E3000F",
   "icons": [
     {
-      "src": "/kwality-walls-logo.png",
-      "sizes": "431x438",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/kwality-walls-logo.png",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/kwality-walls-logo.png",
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

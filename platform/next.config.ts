@@ -7,9 +7,17 @@ import path from "path";
 // `beforeFiles` runs BEFORE any local `src/app/api/*` handler, so the backend always wins.
 const BACKEND_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
+// A stable per-build id. The deploy pipeline can pin it via BUILD_ID (e.g. the git SHA);
+// otherwise each build gets a fresh timestamp so it always differs from the previous one. It is
+// baked into BOTH the client bundle (NEXT_PUBLIC_BUILD_ID) and Next's own asset build id, and the
+// live `/version` route echoes it — UpdateNudge compares the two to catch a stale open PWA tab
+// after a deploy (online-only; there is no service worker).
+const BUILD_ID = process.env.BUILD_ID || `t${Date.now()}`;
+
 const nextConfig: NextConfig = {
   // Required for the Docker standalone build (Cloud Run).
   output: "standalone",
+  generateBuildId: () => BUILD_ID,
   async rewrites() {
     return {
       beforeFiles: [
@@ -41,6 +49,7 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
+    NEXT_PUBLIC_BUILD_ID: BUILD_ID,
   },
   // Compress responses.
   compress: true,

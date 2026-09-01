@@ -9,7 +9,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, ListChecks, LogOut } from 'lucide-react';
+import { LayoutDashboard, ListChecks, HelpCircle, LogOut } from 'lucide-react';
 import { logout } from '@/lib/auth-client';
 
 const NAV = [
@@ -51,6 +51,14 @@ export function AuditHeader() {
               </Link>
             );
           })}
+          <Link
+            href="/help"
+            aria-label="Help & guides"
+            className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs sm:text-sm font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all ml-1"
+          >
+            <HelpCircle className="h-4 w-4" />
+            <span className="hidden sm:inline">Help</span>
+          </Link>
           <button
             onClick={() => logout()}
             aria-label="Log out"

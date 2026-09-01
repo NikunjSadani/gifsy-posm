@@ -33,6 +33,7 @@ const PUBLIC_PATHS = [
   '/auth/login',
   '/api/auth/send-otp',
   '/api/auth/verify-otp',
+  '/version', // build-id probe for the online-only UpdateNudge — exposes only an opaque token
   '/_next',
   '/favicon.ico',
 ]
@@ -173,6 +174,9 @@ function forwardAuthed(
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|logos/|favicons/|icons/|images/).*)',
+    // PWA assets are excluded so they serve WITHOUT the auth gate: `icons/` (install +
+    // maskable icons, apple-touch) and `manifest.webmanifest` — some browsers fetch the
+    // manifest with no credentials, and the icons must resolve for install regardless of session.
+    '/((?!_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|logos/|favicons/|icons/|images/).*)',
   ],
 }

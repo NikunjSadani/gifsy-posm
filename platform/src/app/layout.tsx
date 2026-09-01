@@ -7,6 +7,7 @@ import { getTenantConfig, getBrandStyle } from '@/lib/platform/server';
 import { ClientConfigProvider } from '@/lib/platform/client-config-context';
 import SessionExpiryGuard from '@/components/auth/SessionExpiryGuard';
 import PermissionDeniedToast from '@/components/rbac/permission-denied-toast';
+import { UpdateNudge } from '@/components/pwa/update-nudge';
 
 const geistSans = Geist({
   subsets: ['latin'],
@@ -36,8 +37,13 @@ export async function generateMetadata(): Promise<Metadata> {
       title: 'Kwality Field',
     },
     icons: {
-      icon: '/kwality-walls-logo.png',
-      apple: '/kwality-walls-logo.png',
+      // Purpose-built square icons (the logo centred on white). The manifest carries the Android
+      // install/maskable set; these drive the browser tab + the iOS home-screen icon.
+      icon: [
+        { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+        { url: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+      ],
+      apple: '/icons/apple-touch-icon.png',
     },
   };
 }
@@ -88,6 +94,9 @@ export default async function RootLayout({
         {/* Bounce to /auth/login on any /api 401 (expired/invalid token), after first
             attempting a silent refresh. App-wide. */}
         <SessionExpiryGuard />
+        {/* Online-only "new version available" nudge — compares the client's baked build id
+            against the live /version endpoint and offers a refresh after a deploy. No SW. */}
+        <UpdateNudge />
         {/* Single app-wide react-hot-toast surface. The login page and the field/review/
             audit/admin consoles all raise `toast(...)`; without ONE Toaster mounted here those
             calls render nothing, and more than one Toaster renders every toast twice. Kept

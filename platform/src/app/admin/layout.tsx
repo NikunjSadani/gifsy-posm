@@ -13,7 +13,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3, Mail, Settings } from 'lucide-react';
+import { LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3, Mail, Settings, HelpCircle } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { logout } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
@@ -57,13 +57,23 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => logout()}
-              className="shrink-0 flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Log out</span>
-            </button>
+            <div className="shrink-0 flex items-center gap-2">
+              <Link
+                href="/help"
+                aria-label="Help & guides"
+                className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+              >
+                <HelpCircle className="h-4 w-4" />
+                <span className="hidden sm:inline">Help</span>
+              </Link>
+              <button
+                onClick={() => logout()}
+                className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Log out</span>
+              </button>
+            </div>
           </div>
         </header>
 

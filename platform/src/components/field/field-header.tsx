@@ -1,7 +1,8 @@
 'use client';
 
 import Image from 'next/image';
-import { LogOut } from 'lucide-react';
+import Link from 'next/link';
+import { HelpCircle, LogOut } from 'lucide-react';
 import { logout } from '@/lib/auth-client';
 
 /**
@@ -25,13 +26,22 @@ export function FieldHeader() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => logout()}
-          aria-label="Log out"
-          className="shrink-0 flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
-        >
-          <LogOut className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Link
+            href="/help"
+            aria-label="Help & guides"
+            className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Link>
+          <button
+            onClick={() => logout()}
+            aria-label="Log out"
+            className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     </header>
   );

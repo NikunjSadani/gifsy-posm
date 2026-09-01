@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, ClipboardCheck, LogOut } from 'lucide-react';
+import { LayoutDashboard, ClipboardCheck, HelpCircle, LogOut } from 'lucide-react';
 import { logout } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
 
@@ -59,14 +59,24 @@ export function ReviewHeader() {
           ))}
         </nav>
 
-        <button
-          onClick={() => logout()}
-          aria-label="Log out"
-          className="shrink-0 flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
-        >
-          <LogOut className="h-4 w-4" />
-          <span className="hidden md:inline">Log out</span>
-        </button>
+        <div className="shrink-0 flex items-center gap-2">
+          <Link
+            href="/help"
+            aria-label="Help & guides"
+            className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+          >
+            <HelpCircle className="h-4 w-4" />
+            <span className="hidden md:inline">Help</span>
+          </Link>
+          <button
+            onClick={() => logout()}
+            aria-label="Log out"
+            className="flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="hidden md:inline">Log out</span>
+          </button>
+        </div>
       </div>
 
       {/* Mobile nav row */}

@@ -1,7 +1,8 @@
 'use client';
 
 import Image from 'next/image';
-import { LayoutDashboard, LogOut } from 'lucide-react';
+import Link from 'next/link';
+import { LayoutDashboard, HelpCircle, LogOut } from 'lucide-react';
 import { logout } from '@/lib/auth-client';
 
 /**
@@ -32,6 +33,14 @@ export function VendorHeader() {
             <LayoutDashboard className="h-4 w-4" />
             Fleet analytics
           </span>
+          <Link
+            href="/help"
+            aria-label="Help & guides"
+            className="shrink-0 flex items-center gap-1.5 text-white/90 hover:text-white text-xs font-medium bg-white/10 hover:bg-white/20 rounded-xl px-2.5 py-2 active:scale-95 transition-all"
+          >
+            <HelpCircle className="h-4 w-4" />
+            <span className="hidden md:inline">Help</span>
+          </Link>
           <button
             onClick={() => logout()}
             aria-label="Log out"
