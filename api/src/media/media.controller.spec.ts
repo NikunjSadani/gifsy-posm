@@ -42,7 +42,7 @@ describe('MediaController', () => {
     integrity = {
       // Default: a decodable image with no quality issues. Individual tests override.
       qualityFlags: jest.fn().mockResolvedValue({
-        blur: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false,
+        blur: false, blank: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false,
       }),
     };
     controller = new MediaController(
@@ -64,7 +64,7 @@ describe('MediaController', () => {
         fileSizeBytes: 3,
       });
       integrity.qualityFlags.mockResolvedValue({
-        blur: true, lowLight: false, overexposed: true, duplicate: false, lowAccuracy: false,
+        blur: true, blank: false, lowLight: false, overexposed: true, duplicate: false, lowAccuracy: false,
       });
 
       const res = await controller.upload(USER, file);
@@ -72,10 +72,11 @@ describe('MediaController', () => {
       expect(media.uploadMedia).toHaveBeenCalledWith(USER, file);
       // The uploaded bytes are analyzed; duplicate/accuracy are not known at upload time.
       expect(integrity.qualityFlags).toHaveBeenCalledWith(file.buffer, { duplicate: false, accuracy: null });
-      // PINNED upload contract: only blur/lowLight/overexposed are surfaced (no duplicate/lowAccuracy).
+      // PINNED upload contract: only image-content flags surfaced (blur/blank/lowLight/overexposed;
+      // no duplicate/lowAccuracy — those need submission/geo context not available at upload time).
       expect(res).toEqual({
         key: 'posm-media/c1/abc.jpg',
-        quality: { blur: true, lowLight: false, overexposed: true },
+        quality: { blur: true, blank: false, lowLight: false, overexposed: true },
       });
     });
   });

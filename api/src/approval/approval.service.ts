@@ -49,6 +49,7 @@ export interface MediaRef {
  */
 export interface ReccePosmQualityFlags {
   blur: boolean;
+  blank: boolean;
   lowLight: boolean;
   overexposed: boolean;
   lowAccuracy: boolean;
@@ -484,6 +485,7 @@ export class ApprovalService {
     const f = v as Record<string, unknown>;
     return {
       blur: f.blur === true,
+      blank: f.blank === true,
       lowLight: f.lowLight === true,
       overexposed: f.overexposed === true,
       lowAccuracy: f.lowAccuracy === true,

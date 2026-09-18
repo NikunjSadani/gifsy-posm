@@ -41,7 +41,7 @@ describe('InstallationService', () => {
     service = new InstallationService(mockPrisma as any, mockMedia as any, mockIntegrity as any);
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
     mockIntegrity.beforeAfterDiffOk.mockReturnValue(null);
-    mockIntegrity.qualityFlags.mockReturnValue({ blur: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false });
+    mockIntegrity.qualityFlags.mockReturnValue({ blur: false, blank: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false });
     mockIntegrity.isClockSkewed.mockReturnValue(false);
   });
 
@@ -103,7 +103,7 @@ describe('InstallationService', () => {
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
     mockIntegrity.hash.mockReturnValue('ihash-1');
     mockIntegrity.beforeAfterDiffOk.mockReturnValue(true);
-    mockIntegrity.qualityFlags.mockReturnValue({ blur: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false });
+    mockIntegrity.qualityFlags.mockReturnValue({ blur: false, blank: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false });
 
     const createdRow = {
       id: 'i1', status: 'SUBMITTED', version: 1, capturedAt: null, receivedAt: new Date(),

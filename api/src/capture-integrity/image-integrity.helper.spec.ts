@@ -210,6 +210,7 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
       const flags = await computeQualityFlags(dark, { duplicate: true, lowAccuracy: false });
       expect(flags).toEqual({
         blur: false, // solid frame is too flat to assess for focus → NOT called blurry
+        blank: true, // ...but a uniform frame IS flagged blank (nothing to review)
         lowLight: true, // dark → low light (this is the meaningful flag on a black frame)
         overexposed: false,
         duplicate: true, // passed through
@@ -221,6 +222,7 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
       const checker = await pngChecker(64, 64, 8);
       const flags = await computeQualityFlags(checker, { duplicate: false, lowAccuracy: false });
       expect(flags.blur).toBe(false);
+      expect(flags.blank).toBe(false); // high-contrast content → not blank
       expect(flags.lowLight).toBe(false);
       expect(flags.overexposed).toBe(false);
     });
@@ -228,14 +230,14 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
     it('a NON-IMAGE buffer yields all-neutral image flags (no throw)', async () => {
       const flags = await computeQualityFlags(notAnImage, { duplicate: false, lowAccuracy: false });
       expect(flags).toEqual({
-        blur: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false,
+        blur: false, blank: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false,
       });
     });
 
     it('null bytes → no image-derived flags', async () => {
       const flags = await computeQualityFlags(null, { duplicate: true, lowAccuracy: true });
       expect(flags).toEqual({
-        blur: false, lowLight: false, overexposed: false, duplicate: true, lowAccuracy: true,
+        blur: false, blank: false, lowLight: false, overexposed: false, duplicate: true, lowAccuracy: true,
       });
     });
   });

@@ -130,16 +130,18 @@ describe('posmQualityFlags', () => {
     expect(posmQualityFlags(undefined)).toEqual([]);
   });
   it('returns no labels when all flags are false', () => {
-    expect(posmQualityFlags({ blur: false, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual([]);
+    expect(posmQualityFlags({ blur: false, blank: false, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual([]);
   });
   it('maps each raised flag to its plain ASM label', () => {
-    expect(posmQualityFlags({ blur: true, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual(['Blurry']);
-    expect(posmQualityFlags({ blur: false, lowLight: true, overexposed: false, lowAccuracy: false })).toEqual(['Dark']);
-    expect(posmQualityFlags({ blur: false, lowLight: false, overexposed: true, lowAccuracy: false })).toEqual(['Too bright']);
-    expect(posmQualityFlags({ blur: false, lowLight: false, overexposed: false, lowAccuracy: true })).toEqual(['Weak GPS']);
+    expect(posmQualityFlags({ blur: false, blank: true, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual(['Blank']);
+    expect(posmQualityFlags({ blur: true, blank: false, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual(['Blurry']);
+    expect(posmQualityFlags({ blur: false, blank: false, lowLight: true, overexposed: false, lowAccuracy: false })).toEqual(['Dark']);
+    expect(posmQualityFlags({ blur: false, blank: false, lowLight: false, overexposed: true, lowAccuracy: false })).toEqual(['Too bright']);
+    expect(posmQualityFlags({ blur: false, blank: false, lowLight: false, overexposed: false, lowAccuracy: true })).toEqual(['Weak GPS']);
   });
-  it('returns raised labels in display order (blur → dark → too bright → weak GPS)', () => {
-    expect(posmQualityFlags({ blur: true, lowLight: true, overexposed: true, lowAccuracy: true })).toEqual([
+  it('returns raised labels in display order (blank → blur → dark → too bright → weak GPS)', () => {
+    expect(posmQualityFlags({ blur: true, blank: true, lowLight: true, overexposed: true, lowAccuracy: true })).toEqual([
+      'Blank',
       'Blurry',
       'Dark',
       'Too bright',

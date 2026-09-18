@@ -37,6 +37,7 @@ const mockIntegrity = {
     signals: { duplicate: boolean; accuracy: number | null | undefined },
   ) => ({
     blur: false,
+    blank: false,
     lowLight: false,
     overexposed: false,
     duplicate: signals.duplicate,
@@ -302,7 +303,7 @@ describe('RecceService', () => {
     });
 
     const persisted = tx.recce.create.mock.calls[0][0].data.posms.create[0].qualityFlags;
-    expect(persisted).toEqual({ blur: false, lowLight: false, overexposed: false, lowAccuracy: true });
+    expect(persisted).toEqual({ blur: false, blank: false, lowLight: false, overexposed: false, lowAccuracy: true });
     // The submission-level duplicate signal is NOT folded into the per-POSM object.
     expect(persisted).not.toHaveProperty('duplicate');
   });

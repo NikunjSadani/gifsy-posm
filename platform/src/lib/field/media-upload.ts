@@ -27,6 +27,7 @@ import type { GeoFix } from './geo';
 /** Best-effort per-frame quality flags returned by the upload endpoint. */
 export interface MediaQuality {
   blur: boolean;
+  blank: boolean;
   lowLight: boolean;
   overexposed: boolean;
 }
@@ -110,6 +111,7 @@ function parseQuality(raw: Partial<MediaQuality> | null | undefined): MediaQuali
   if (!raw || typeof raw !== 'object') return undefined;
   return {
     blur: raw.blur === true,
+    blank: raw.blank === true,
     lowLight: raw.lowLight === true,
     overexposed: raw.overexposed === true,
   };

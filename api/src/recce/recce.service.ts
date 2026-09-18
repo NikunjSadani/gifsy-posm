@@ -382,6 +382,7 @@ export class RecceService {
       });
       qualityFlags.push({
         blur: qf.blur,
+        blank: qf.blank,
         lowLight: qf.lowLight,
         overexposed: qf.overexposed,
         lowAccuracy: qf.lowAccuracy,

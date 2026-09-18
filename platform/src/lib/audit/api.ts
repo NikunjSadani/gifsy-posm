@@ -51,6 +51,7 @@ export type RejectReasonCode =
  */
 export interface QualityFlags {
   blur?: boolean;
+  blank?: boolean;
   lowLight?: boolean;
   overexposed?: boolean;
   duplicate?: boolean;
@@ -209,6 +210,7 @@ export function mediaUrlFromKey(key: string): string {
 /** The named soft-flag booleans, in display order, with human labels. */
 const FLAG_LABELS: { key: keyof QualityFlags; label: string }[] = [
   { key: 'blur', label: 'Blurry' },
+  { key: 'blank', label: 'Blank' },
   { key: 'lowLight', label: 'Low light' },
   { key: 'overexposed', label: 'Overexposed' },
   { key: 'duplicate', label: 'Duplicate' },

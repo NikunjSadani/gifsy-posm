@@ -334,6 +334,8 @@ export async function isOverexposed(
 /** The soft, reviewer-facing capture-quality flags persisted on an install POSM. */
 export interface QualityFlags {
   blur: boolean;
+  /** Near-uniform frame — a blank wall, covered lens, or solid colour (nothing to review). */
+  blank: boolean;
   lowLight: boolean;
   overexposed: boolean;
   duplicate: boolean;
@@ -357,6 +359,9 @@ export async function computeQualityFlags(
   const mean = grid ? meanOfGrid(grid) : null;
   return {
     blur: grid ? isBlurryGrid(grid) : false,
+    // A frame below the flatness floor is too uniform to hold a POSM — blank wall / covered lens
+    // / solid colour. Same boundary that makes it un-assessable for blur, surfaced as its own flag.
+    blank: grid ? stdDevOfGrid(grid) < BLUR_FLATNESS_STDDEV_MIN : false,
     lowLight: mean === null ? false : mean < LOW_LUMINANCE_THRESHOLD,
     overexposed: mean === null ? false : mean > HIGH_LUMINANCE_THRESHOLD,
     duplicate: signals.duplicate,

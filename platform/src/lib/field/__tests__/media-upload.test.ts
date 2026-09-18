@@ -61,11 +61,11 @@ describe('uploadMedia — response parsing (key + quality)', () => {
   it('returns the key and parsed quality flags when present', async () => {
     stubFetchJson({
       success: true,
-      data: { key: 'posm-media/c1/x.jpg', quality: { blur: true, lowLight: false, overexposed: true } },
+      data: { key: 'posm-media/c1/x.jpg', quality: { blur: true, blank: true, lowLight: false, overexposed: true } },
     });
     const result = await uploadMedia(makeFile());
     expect(result.key).toBe('posm-media/c1/x.jpg');
-    expect(result.quality).toEqual({ blur: true, lowLight: false, overexposed: true });
+    expect(result.quality).toEqual({ blur: true, blank: true, lowLight: false, overexposed: true });
   });
 
   it('leaves quality undefined when the backend omits it', async () => {
@@ -81,7 +81,7 @@ describe('uploadMedia — response parsing (key + quality)', () => {
       data: { key: 'posm-media/c1/z.jpg', quality: { blur: true } },
     });
     const result = await uploadMedia(makeFile());
-    expect(result.quality).toEqual({ blur: true, lowLight: false, overexposed: false });
+    expect(result.quality).toEqual({ blur: true, blank: false, lowLight: false, overexposed: false });
   });
 
   it('throws when the upload envelope reports failure', async () => {

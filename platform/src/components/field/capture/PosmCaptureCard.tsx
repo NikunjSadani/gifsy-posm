@@ -50,6 +50,7 @@ const UNITS = ['cm', 'in', 'ft', 'mm'] as const;
 function qualityWarning(quality: MediaQuality | null): string | null {
   if (!quality) return null;
   const parts: string[] = [];
+  if (quality.blank) parts.push('This photo looks blank — no POSM is visible');
   if (quality.blur) parts.push('This photo looks blurry');
   if (quality.lowLight) parts.push('This photo looks too dark');
   if (quality.overexposed) parts.push('This photo looks too bright');

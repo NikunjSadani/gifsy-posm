@@ -57,10 +57,10 @@ export class MediaController {
   async upload(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: Express.Multer.File,
-  ): Promise<{ key: string; quality: { blur: boolean; lowLight: boolean; overexposed: boolean } }> {
+  ): Promise<{ key: string; quality: { blur: boolean; blank: boolean; lowLight: boolean; overexposed: boolean } }> {
     const { key } = await this.media.uploadMedia(user, file);
     const qf = await this.integrity.qualityFlags(file.buffer, { duplicate: false, accuracy: null });
-    return { key, quality: { blur: qf.blur, lowLight: qf.lowLight, overexposed: qf.overexposed } };
+    return { key, quality: { blur: qf.blur, blank: qf.blank, lowLight: qf.lowLight, overexposed: qf.overexposed } };
   }
 
   @Get('view')

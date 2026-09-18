@@ -52,6 +52,7 @@ export interface RecceIntegrity {
  */
 export interface ReccePosmQualityFlags {
   blur: boolean;
+  blank: boolean;
   lowLight: boolean;
   overexposed: boolean;
   lowAccuracy: boolean;
@@ -232,6 +233,7 @@ export function recceFlags(item: RecceQueueItem): string[] {
  * copy is intentionally plainer/field-friendly.
  */
 const POSM_QUALITY_FLAG_LABELS: { key: keyof ReccePosmQualityFlags; label: string }[] = [
+  { key: 'blank', label: 'Blank' },
   { key: 'blur', label: 'Blurry' },
   { key: 'lowLight', label: 'Dark' },
   { key: 'overexposed', label: 'Too bright' },
