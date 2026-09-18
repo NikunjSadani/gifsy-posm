@@ -174,9 +174,11 @@ function forwardAuthed(
 
 export const config = {
   matcher: [
-    // PWA assets are excluded so they serve WITHOUT the auth gate: `icons/` (install +
-    // maskable icons, apple-touch) and `manifest.webmanifest` — some browsers fetch the
-    // manifest with no credentials, and the icons must resolve for install regardless of session.
-    '/((?!_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|logos/|favicons/|icons/|images/).*)',
+    // Static/brand assets are excluded so they serve WITHOUT the auth gate: `icons/` (install +
+    // maskable icons, apple-touch), `manifest.webmanifest` (browsers fetch it with no
+    // credentials), and the `kwality-walls-logo` brand mark — the login/header logo must render
+    // for UNAUTHENTICATED visitors too (otherwise the middleware 307-redirects the image request
+    // and it breaks on the login screen, and next/image optimisation 400s on the redirect).
+    '/((?!_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|kwality-walls-logo\\.|logos/|favicons/|icons/|images/).*)',
   ],
 }
