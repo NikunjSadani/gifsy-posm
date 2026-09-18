@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { buildUploadForm, mediaViewUrl } from '@/lib/field/media-upload';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { buildUploadForm, mediaViewUrl, uploadMedia } from '@/lib/field/media-upload';
 import type { GeoFix } from '@/lib/field/geo';
 
 function makeFile(): File {
@@ -43,5 +43,49 @@ describe('mediaViewUrl — auth-gated inline view path', () => {
     expect(mediaViewUrl('posm-media/client1/abc.jpg')).toBe(
       '/api/media/view?key=posm-media%2Fclient1%2Fabc.jpg',
     );
+  });
+});
+
+describe('uploadMedia — response parsing (key + quality)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetchJson(body: unknown, ok = true, status = 200) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok, status, json: async () => body }) as unknown as Response),
+    );
+  }
+
+  it('returns the key and parsed quality flags when present', async () => {
+    stubFetchJson({
+      success: true,
+      data: { key: 'posm-media/c1/x.jpg', quality: { blur: true, lowLight: false, overexposed: true } },
+    });
+    const result = await uploadMedia(makeFile());
+    expect(result.key).toBe('posm-media/c1/x.jpg');
+    expect(result.quality).toEqual({ blur: true, lowLight: false, overexposed: true });
+  });
+
+  it('leaves quality undefined when the backend omits it', async () => {
+    stubFetchJson({ success: true, data: { key: 'posm-media/c1/y.jpg' } });
+    const result = await uploadMedia(makeFile());
+    expect(result.key).toBe('posm-media/c1/y.jpg');
+    expect(result.quality).toBeUndefined();
+  });
+
+  it('defaults missing/non-boolean flags to false in a partial quality payload', async () => {
+    stubFetchJson({
+      success: true,
+      data: { key: 'posm-media/c1/z.jpg', quality: { blur: true } },
+    });
+    const result = await uploadMedia(makeFile());
+    expect(result.quality).toEqual({ blur: true, lowLight: false, overexposed: false });
+  });
+
+  it('throws when the upload envelope reports failure', async () => {
+    stubFetchJson({ success: false, error: 'nope' }, false, 400);
+    await expect(uploadMedia(makeFile())).rejects.toThrow('nope');
   });
 });

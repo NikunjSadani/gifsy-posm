@@ -78,6 +78,15 @@ export const BEFORE_AFTER_MIN_HAMMING = 32;
  */
 export const BLUR_VARIANCE_THRESHOLD = 60;
 
+/**
+ * Tonal-spread floor (stddev of the decoded luminance grid, 0..255) below which a frame is too
+ * UNIFORM to assess for focus — a blank wall, a covered lens, or a solid black/white frame has
+ * near-zero edge energy for the SAME reason a blurry photo does, so calling it "blurry" is a
+ * false positive. Below this floor we do NOT raise the blur flag (its emptiness is caught by the
+ * exposure flags and the human reviewer instead). A real (even low-detail) scene clears it.
+ */
+export const BLUR_FLATNESS_STDDEV_MIN = 8;
+
 /** Mean decoded luminance under this → underexposed (lowLight). */
 export const LOW_LUMINANCE_THRESHOLD = 50;
 
@@ -263,6 +272,28 @@ export function meanOfGrid(grid: number[]): number {
   return grid.reduce((a, b) => a + b, 0) / grid.length;
 }
 
+/** Standard deviation of an already-decoded luminance grid (tonal spread, 0..~128). Pure/sync. */
+export function stdDevOfGrid(grid: number[]): number {
+  if (grid.length === 0) return 0;
+  const m = meanOfGrid(grid);
+  return Math.sqrt(grid.reduce((a, b) => a + (b - m) ** 2, 0) / grid.length);
+}
+
+/**
+ * Blur verdict from a decoded luminance grid: TRUE only when the frame has enough tonal spread
+ * to judge focus (stddev ≥ BLUR_FLATNESS_STDDEV_MIN) AND its edge energy is low (Laplacian
+ * variance ≤ threshold). A near-flat frame (blank/covered lens, solid black/white) is NOT called
+ * blurry — it can't be assessed for focus. This is the verdict `computeQualityFlags` persists;
+ * the lower-level `isBlurry` (Laplacian-only) is left as a raw primitive. Pure/sync.
+ */
+export function isBlurryGrid(
+  grid: number[],
+  threshold: number = BLUR_VARIANCE_THRESHOLD,
+  flatFloor: number = BLUR_FLATNESS_STDDEV_MIN,
+): boolean {
+  return stdDevOfGrid(grid) >= flatFloor && laplacianVariance(grid, ANALYSIS_GRID) <= threshold;
+}
+
 /**
  * Decode a buffer to a 32×32 luminance grid and return its mean luminance (0..255), or `null`
  * when the buffer is missing/undecodable (unverifiable). Async (decode).
@@ -325,7 +356,7 @@ export async function computeQualityFlags(
   const grid = await decodeLumaGrid(bytes, ANALYSIS_GRID);
   const mean = grid ? meanOfGrid(grid) : null;
   return {
-    blur: grid ? laplacianVariance(grid, ANALYSIS_GRID) <= BLUR_VARIANCE_THRESHOLD : false,
+    blur: grid ? isBlurryGrid(grid) : false,
     lowLight: mean === null ? false : mean < LOW_LUMINANCE_THRESHOLD,
     overexposed: mean === null ? false : mean > HIGH_LUMINANCE_THRESHOLD,
     duplicate: signals.duplicate,

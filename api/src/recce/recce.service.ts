@@ -41,6 +41,7 @@ interface PreparedRecce {
     dimensions: Prisma.InputJsonValue;
     photo: Prisma.InputJsonValue;
     markup: Prisma.InputJsonValue | typeof Prisma.JsonNull;
+    qualityFlags: Prisma.InputJsonValue;
   }[];
   hashes: string[];
 }
@@ -363,12 +364,28 @@ export class RecceService {
     }
 
     // Content hashes for the cross-submission duplicate flag (best-effort: a missing object
-    // simply contributes no hash rather than failing the submission).
+    // simply contributes no hash rather than failing the submission). The SAME fetched bytes
+    // drive each POSM line's stored per-photo capture-quality flags (blur/lowLight/overexposed
+    // from the decoded pixels + lowAccuracy from that photo's own geo fix) — no double-fetch.
+    // `duplicate` is dropped here: the recce keeps its submission-level duplicate flag (recorded
+    // via recordImageHashes / recceDuplicate), so per-POSM stays byte-quality + geo-accuracy only.
+    // Order is preserved so `qualityFlags[i]` maps to `lines[i]` (and thus `posmCreate[i]`).
     const hashes: string[] = [];
+    const qualityFlags: Prisma.InputJsonValue[] = [];
     for (const l of lines) {
-      const { key } = readMediaValue(l.photo);
+      const { key, geo } = readMediaValue(l.photo);
       const bytes = await this.integrity.fetchImageBytes(key);
       if (bytes) hashes.push(this.integrity.hash(bytes));
+      const qf = await this.integrity.qualityFlags(bytes, {
+        duplicate: false,
+        accuracy: geo?.accuracy,
+      });
+      qualityFlags.push({
+        blur: qf.blur,
+        lowLight: qf.lowLight,
+        overexposed: qf.overexposed,
+        lowAccuracy: qf.lowAccuracy,
+      });
     }
 
     const capturedAt =
@@ -391,6 +408,7 @@ export class RecceService {
         dimensions: this.dimensionsJson(l.dimensions),
         photo: this.photoJson(l.photo),
         markup: l.markup ? (toJson(l.markup) as Prisma.InputJsonValue) : Prisma.JsonNull,
+        qualityFlags: qualityFlags[i],
       })),
       hashes,
     };
@@ -465,7 +483,7 @@ export class RecceService {
       rejectionReasonCode: unknown; rejectionReason: string | null;
       site: { id: string; code: string; name: string; town: string | null; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null };
       submittedBy: { id: string; name: string };
-      posms: { id: string; slotNo: number; posmTypeId: string; dimensions: unknown; photo: unknown; markup: unknown; posmType: { id: string; code: string; name: string } }[];
+      posms: { id: string; slotNo: number; posmTypeId: string; dimensions: unknown; photo: unknown; markup: unknown; qualityFlags: unknown; posmType: { id: string; code: string; name: string } }[];
     },
     flags: { duplicate?: boolean } = {},
   ) {
@@ -508,6 +526,10 @@ export class RecceService {
         dimensions: p.dimensions,
         photo: this.mediaRef(p.photo),
         markup: p.markup ?? null,
+        // Per-POSM stored capture-quality flags (blur/lowLight/overexposed/lowAccuracy), or null
+        // for a legacy row captured before this column existed. This is ADDITIVE — the recce-level
+        // `integrity.qualityFlags` block (lowAccuracy/clockSkew/duplicate) above is unchanged.
+        qualityFlags: p.qualityFlags ?? null,
       })),
     };
   }

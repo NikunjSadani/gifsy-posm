@@ -310,6 +310,31 @@ describe('ApprovalService.getRecce — scoped detail read (any status)', () => {
     expect(item.integrity.duplicatePhoto).toBe(false);
   });
 
+  it('maps per-POSM qualityFlags: normalises a stored object and yields null when absent/legacy', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue({
+      ...recceRow(),
+      posms: [
+        {
+          id: 'p1', slotNo: 1, posmType: { id: 't1', code: 'A', name: 'Board' },
+          dimensions: null, photo: null, markup: null,
+          qualityFlags: { blur: true, lowLight: false, overexposed: true, lowAccuracy: false },
+        },
+        // Legacy recce: column was NULL before the feature existed.
+        {
+          id: 'p2', slotNo: 2, posmType: { id: 't2', code: 'B', name: 'Shelf' },
+          dimensions: null, photo: null, markup: null, qualityFlags: null,
+        },
+      ],
+    });
+    const svc = new ApprovalService(prisma);
+    const item = await svc.getRecce(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'r1');
+    expect(item.posms[0].qualityFlags).toEqual({
+      blur: true, lowLight: false, overexposed: true, lowAccuracy: false,
+    });
+    expect(item.posms[1].qualityFlags).toBeNull();
+  });
+
   it('an id outside the caller scope (findFirst → null) → 404', async () => {
     const { prisma, fns } = makePrisma();
     fns.recce.findFirst.mockResolvedValue(null);

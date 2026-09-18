@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, RefreshCw, X, SwitchCamera, CircleAlert } from 'lucide-react';
+import { useFocusTrap } from '@/components/audit/use-focus-trap';
 
 interface CameraCaptureProps {
   /** The currently captured file, or null. */
@@ -59,6 +60,7 @@ export function CameraCapture({
   label = 'Take photo',
 }: CameraCaptureProps) {
   const [open, setOpen] = useState(false); // full-screen camera visible
+  const [viewerOpen, setViewerOpen] = useState(false); // full-screen image lightbox visible
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [facing, setFacing] = useState<Facing>('environment');
@@ -67,11 +69,14 @@ export function CameraCapture({
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraRef = useRef<HTMLDivElement>(null);
+  const viewerRef = useRef<HTMLDivElement>(null);
 
   // Object-URL preview of the captured file, revoked on change/unmount.
   useEffect(() => {
     if (!value) {
       setPreview(null);
+      setViewerOpen(false); // nothing to view once the photo is cleared
       return;
     }
     const url = URL.createObjectURL(value);
@@ -163,12 +168,36 @@ export function CameraCapture({
   // Release the camera if the component unmounts while open.
   useEffect(() => () => stopStream(), [stopStream]);
 
+  // A11y for both full-screen overlays: trap focus + restore on close (shared hook), and close
+  // on Escape (the hook leaves Escape to the caller). Matches the auditor/ASM lightboxes.
+  useFocusTrap(open, cameraRef);
+  useFocusTrap(viewerOpen, viewerRef);
+  useEffect(() => {
+    if (!open && !viewerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (viewerOpen) setViewerOpen(false);
+      else if (open) closeCamera();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, viewerOpen, closeCamera]);
+
   return (
     <div>
       {preview ? (
         <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-gray-100">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview} alt="Captured photo preview" className="max-h-72 w-full object-contain" />
+          {/* Tapping the thumbnail opens a full-screen lightbox (separate from the camera). */}
+          <button
+            type="button"
+            onClick={() => setViewerOpen(true)}
+            aria-label="View photo full screen"
+            title="Tap to view full screen"
+            className="block w-full cursor-zoom-in"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={preview} alt="Captured photo preview" className="max-h-72 w-full object-contain" />
+          </button>
           <button
             type="button"
             onClick={openCamera}
@@ -195,7 +224,7 @@ export function CameraCapture({
       )}
 
       {open && (
-        <div className="fixed inset-0 z-[70] flex flex-col bg-black" role="dialog" aria-modal="true" aria-label="Camera">
+        <div ref={cameraRef} tabIndex={-1} className="fixed inset-0 z-[70] flex flex-col bg-black outline-none" role="dialog" aria-modal="true" aria-label="Camera">
           {/* Live feed (or error) */}
           <div className="relative flex-1 overflow-hidden">
             <video
@@ -277,6 +306,36 @@ export function CameraCapture({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Full-screen image lightbox — separate from the live camera. Tap the scrim or Close
+          to dismiss; the underlying controlled value is untouched. */}
+      {viewerOpen && preview && (
+        <div
+          ref={viewerRef}
+          tabIndex={-1}
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black outline-none"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Photo full screen"
+          onClick={() => setViewerOpen(false)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={preview}
+            alt="Captured photo, full screen"
+            className="max-h-full max-w-full object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            onClick={() => setViewerOpen(false)}
+            aria-label="Close full screen photo"
+            className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.75rem)] flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white active:scale-95 transition-transform"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
       )}
     </div>

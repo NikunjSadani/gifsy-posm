@@ -8,6 +8,8 @@ import {
   laplacianVariance,
   varianceOfLaplacian,
   isBlurry,
+  isBlurryGrid,
+  stdDevOfGrid,
   meanOfGrid,
   meanLuminance,
   isLowLight,
@@ -145,6 +147,30 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
     });
   });
 
+  describe('isBlurryGrid (blur verdict = low edge energy AND enough tonal spread)', () => {
+    const N = ANALYSIS_GRID;
+    const flat = new Array(N * N).fill(120);
+    // A smooth horizontal ramp: high tonal spread, but a linear gradient has ~0 Laplacian → BLURRY.
+    const ramp = Array.from({ length: N * N }, (_, i) => Math.round(((i % N) / (N - 1)) * 255));
+    // A sharp checkerboard: high edge energy → NOT blurry.
+    const checker = Array.from({ length: N * N }, (_, i) => ((Math.floor(i / N) + (i % N)) % 2 ? 255 : 0));
+
+    it('a FLAT frame is NOT called blurry (too uniform to assess focus)', () => {
+      expect(stdDevOfGrid(flat)).toBeLessThan(1);
+      expect(isBlurryGrid(flat)).toBe(false);
+    });
+
+    it('a smooth high-spread gradient IS blurry (tonal content, no edges)', () => {
+      expect(stdDevOfGrid(ramp)).toBeGreaterThan(8);
+      expect(laplacianVariance(ramp, N)).toBeLessThanOrEqual(60);
+      expect(isBlurryGrid(ramp)).toBe(true);
+    });
+
+    it('a sharp checkerboard is NOT blurry (high edge energy)', () => {
+      expect(isBlurryGrid(checker)).toBe(false);
+    });
+  });
+
   describe('exposure (mean decoded luminance)', () => {
     it('a solid-black image is lowLight, not overexposed', async () => {
       const dark = await pngSolid(64, 64, 0, 0, 0);
@@ -179,12 +205,12 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
       expect(isLowAccuracy(undefined)).toBe(false);
     });
 
-    it('derives blur + lowLight from a decoded dark image; carries passed signals', async () => {
+    it('derives lowLight (not blur) from a decoded dark solid image; carries passed signals', async () => {
       const dark = await pngSolid(64, 64, 0, 0, 0);
       const flags = await computeQualityFlags(dark, { duplicate: true, lowAccuracy: false });
       expect(flags).toEqual({
-        blur: true, // solid image → flat → blurry
-        lowLight: true, // dark → low light
+        blur: false, // solid frame is too flat to assess for focus → NOT called blurry
+        lowLight: true, // dark → low light (this is the meaningful flag on a black frame)
         overexposed: false,
         duplicate: true, // passed through
         lowAccuracy: false,

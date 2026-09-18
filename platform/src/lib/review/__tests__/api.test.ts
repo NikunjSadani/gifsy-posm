@@ -4,6 +4,7 @@ import {
   queueQueryString,
   recceFlags,
   photoCount,
+  posmQualityFlags,
   summarizeQueue,
   dimensionsLabel,
   flaggedOnPageLabel,
@@ -35,8 +36,8 @@ function makeItem(overrides: Partial<RecceQueueItem> = {}): RecceQueueItem {
     receivedAt: '2026-08-01T10:05:00.000Z',
     integrity: { ...baseIntegrity },
     posms: [
-      { id: 'p1', slotNo: 1, posmType: { id: 't1', code: 'A', name: 'Board' }, dimensions: '2x3', photo: { key: 'k1', viewPath: '/v1/media/view?key=k1', geo: null }, markup: null },
-      { id: 'p2', slotNo: 2, posmType: null, dimensions: null, photo: null, markup: null },
+      { id: 'p1', slotNo: 1, posmType: { id: 't1', code: 'A', name: 'Board' }, dimensions: '2x3', photo: { key: 'k1', viewPath: '/v1/media/view?key=k1', geo: null }, markup: null, qualityFlags: null },
+      { id: 'p2', slotNo: 2, posmType: null, dimensions: null, photo: null, markup: null, qualityFlags: null },
     ],
     ...overrides,
   };
@@ -116,8 +117,34 @@ describe('photoCount', () => {
     expect(photoCount(makeItem())).toBe(1);
   });
   it('is zero when no line has a photo', () => {
-    const item = makeItem({ posms: [{ id: 'p', slotNo: 1, posmType: null, dimensions: null, photo: null, markup: null }] });
+    const item = makeItem({ posms: [{ id: 'p', slotNo: 1, posmType: null, dimensions: null, photo: null, markup: null, qualityFlags: null }] });
     expect(photoCount(item)).toBe(0);
+  });
+});
+
+// ─── posmQualityFlags ───────────────────────────────────────────────────────────
+
+describe('posmQualityFlags', () => {
+  it('returns no labels for null (legacy recce) or undefined flags', () => {
+    expect(posmQualityFlags(null)).toEqual([]);
+    expect(posmQualityFlags(undefined)).toEqual([]);
+  });
+  it('returns no labels when all flags are false', () => {
+    expect(posmQualityFlags({ blur: false, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual([]);
+  });
+  it('maps each raised flag to its plain ASM label', () => {
+    expect(posmQualityFlags({ blur: true, lowLight: false, overexposed: false, lowAccuracy: false })).toEqual(['Blurry']);
+    expect(posmQualityFlags({ blur: false, lowLight: true, overexposed: false, lowAccuracy: false })).toEqual(['Dark']);
+    expect(posmQualityFlags({ blur: false, lowLight: false, overexposed: true, lowAccuracy: false })).toEqual(['Too bright']);
+    expect(posmQualityFlags({ blur: false, lowLight: false, overexposed: false, lowAccuracy: true })).toEqual(['Weak GPS']);
+  });
+  it('returns raised labels in display order (blur → dark → too bright → weak GPS)', () => {
+    expect(posmQualityFlags({ blur: true, lowLight: true, overexposed: true, lowAccuracy: true })).toEqual([
+      'Blurry',
+      'Dark',
+      'Too bright',
+      'Weak GPS',
+    ]);
   });
 });
 

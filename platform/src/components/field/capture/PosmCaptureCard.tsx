@@ -12,10 +12,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw } from 'lucide-react';
 import { CameraCapture } from './CameraCapture';
 import { useGeo, formatFix, type GeoFix } from '@/lib/field/geo';
-import { uploadMedia } from '@/lib/field/media-upload';
+import { uploadMedia, type MediaQuality } from '@/lib/field/media-upload';
 
 export interface PosmTypeOption {
   id: string;
@@ -43,6 +43,20 @@ export interface PosmCaptureState {
 
 const UNITS = ['cm', 'in', 'ft', 'mm'] as const;
 
+/**
+ * Compose a plain-language advisory sentence from the set quality flags, or `null` when the
+ * photo looks fine. Advisory only — this never blocks submit.
+ */
+function qualityWarning(quality: MediaQuality | null): string | null {
+  if (!quality) return null;
+  const parts: string[] = [];
+  if (quality.blur) parts.push('This photo looks blurry');
+  if (quality.lowLight) parts.push('This photo looks too dark');
+  if (quality.overexposed) parts.push('This photo looks too bright');
+  if (parts.length === 0) return null;
+  return `${parts.join(', ')} — retake for a clearer shot.`;
+}
+
 interface PosmCaptureCardProps {
   /** 1-based slot number, for the card heading. */
   slot: number;
@@ -62,6 +76,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<{ key: string; geo: GeoFix } | null>(null);
+  const [quality, setQuality] = useState<MediaQuality | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Keep the latest onChange without retriggering the report effect on every parent render.
@@ -90,17 +105,20 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   const captureAndUpload = async (picked: File) => {
     setError(null);
     setUploaded(null);
+    setQuality(null);
     setUploading(true);
     try {
       // Grab the fix first so it is bound to THIS photo; geo failure blocks the line.
       const fix = await geo.capture();
-      const { key } = await uploadMedia(picked, fix);
+      const { key, quality: q } = await uploadMedia(picked, fix);
       setUploaded({ key, geo: fix });
+      setQuality(q ?? null); // advisory only — never blocks the line
     } catch (e) {
       const msg =
         (e as { message?: string })?.message ?? 'Could not attach location or upload the photo.';
       setError(msg);
       setUploaded(null);
+      setQuality(null);
     } finally {
       setUploading(false);
     }
@@ -109,6 +127,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   const onPhoto = (picked: File | null) => {
     setFile(picked);
     setUploaded(null);
+    setQuality(null);
     if (picked) void captureAndUpload(picked);
     else setError(null);
   };
@@ -116,6 +135,16 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   const retryGeoUpload = () => {
     if (file) void captureAndUpload(file);
   };
+
+  /** Discard the current photo so the capture zone reappears for a fresh shot. */
+  const retakePhoto = () => {
+    setFile(null);
+    setUploaded(null);
+    setQuality(null);
+    setError(null);
+  };
+
+  const warning = qualityWarning(quality);
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
@@ -218,6 +247,26 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
           </span>
         )}
       </div>
+
+      {/* Non-blocking quality advisory — the photo uploaded fine and the line stays
+          submittable; this only nudges the user to retake for a clearer shot. */}
+      {!uploading && !error && uploaded && warning && (
+        <div
+          role="status"
+          className="mt-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+        >
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <span className="flex-1">{warning}</span>
+          <button
+            type="button"
+            onClick={retakePhoto}
+            className="inline-flex shrink-0 items-center gap-1 font-semibold text-amber-800 underline active:scale-95 transition-transform"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retake
+          </button>
+        </div>
+      )}
     </div>
   );
 }

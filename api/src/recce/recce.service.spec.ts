@@ -28,6 +28,20 @@ const mockIntegrity = {
     const t = c instanceof Date ? c.getTime() : Date.parse(String(c));
     return !Number.isNaN(t) && Math.abs(t - r.getTime()) > 10 * 60 * 1000;
   },
+  // qualityFlags uses REAL-shaped logic so prepare()'s per-POSM stored flags are exercised:
+  // blur/lowLight/overexposed are false on our synthetic buffers (undecodable → neutral), and
+  // lowAccuracy is driven off the photo's own geo accuracy. `duplicate` is dropped by the recce
+  // lane before persist, so it never lands on the per-POSM object.
+  qualityFlags: async (
+    _bytes: Buffer | null,
+    signals: { duplicate: boolean; accuracy: number | null | undefined },
+  ) => ({
+    blur: false,
+    lowLight: false,
+    overexposed: false,
+    duplicate: signals.duplicate,
+    lowAccuracy: typeof signals.accuracy === 'number' && signals.accuracy > 100,
+  }),
 };
 
 const vendorField = {
@@ -253,5 +267,78 @@ describe('RecceService', () => {
 
     const res = await service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
     expect(res.integrity.qualityFlags.duplicate).toBe(true);
+  });
+
+  // ── Per-POSM stored quality flags (blur/lowLight/overexposed/lowAccuracy) ──────
+  it('prepare(): computes + persists per-POSM qualityFlags on the recce.create write (duplicate dropped)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
+    mockIntegrity.hash.mockReturnValue('hash-1');
+
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    // A poor-accuracy fix (500 m > 100 m cap) → per-POSM lowAccuracy true; image flags false.
+    await service.create(vendorField, {
+      siteId: 's1',
+      posms: [{ posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' }, photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771, accuracy: 500 } } } as any],
+    });
+
+    const persisted = tx.recce.create.mock.calls[0][0].data.posms.create[0].qualityFlags;
+    expect(persisted).toEqual({ blur: false, lowLight: false, overexposed: false, lowAccuracy: true });
+    // The submission-level duplicate signal is NOT folded into the per-POSM object.
+    expect(persisted).not.toHaveProperty('duplicate');
+  });
+
+  it('present(): surfaces each stored per-POSM qualityFlags on the read shape (null for a legacy row)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+
+    const storedQf = { blur: true, lowLight: false, overexposed: false, lowAccuracy: false };
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [
+        { id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: storedQf, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } },
+        { id: 'rp2', slotNo: 2, posmTypeId: 'pt1', dimensions: {}, photo: { key: `${KEY}-2` }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } },
+      ],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    const res = await service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.posms[0].qualityFlags).toEqual(storedQf);
+    expect(res.posms[1].qualityFlags).toBeNull(); // legacy row (no stored flags) → null
+    // The recce-level integrity block is unchanged/additive.
+    expect(res.integrity.qualityFlags).toMatchObject({ duplicate: false });
   });
 });

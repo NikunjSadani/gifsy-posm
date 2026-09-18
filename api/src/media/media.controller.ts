@@ -8,6 +8,7 @@ import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { PosmMediaService } from '../capture/posm-media.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CaptureIntegrityService } from '../capture-integrity/capture-integrity.service';
 import { readMediaValue } from '../capture/visibility-types';
 import { watermarkImage } from './watermark.util';
 
@@ -35,6 +36,7 @@ export class MediaController {
   constructor(
     private readonly media: PosmMediaService,
     private readonly prisma: PrismaService,
+    private readonly integrity: CaptureIntegrityService,
   ) {}
 
   /**
@@ -42,6 +44,12 @@ export class MediaController {
    * stored object key the submission JSON references. The client mimetype is untrusted:
    * PosmMediaService derives the real type from the leading bytes, caps at 5 MB, and tenant-folders
    * the key. Stores the ORIGINAL bytes (no watermark) — the integrity/dup controls depend on it.
+   *
+   * Also returns instant per-photo capture-quality flags (blur / low-light / overexposed) computed
+   * from the uploaded bytes via the CaptureIntegrityService, so the field UI can prompt for an
+   * immediate re-capture. These are SOFT/advisory (an undecodable buffer yields all-false), never a
+   * hard block, and the ORIGINAL bytes are still stored untouched. Duplicate/low-accuracy are NOT
+   * computed here (no owner/geo context at upload) — those surface at recce/install submit time.
    */
   @Roles('VENDOR_FIELD', 'ASM', 'AUDITOR', 'CLIENT_ADMIN', 'GIFSY_ADMIN')
   @Post('upload')
@@ -49,9 +57,10 @@ export class MediaController {
   async upload(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: Express.Multer.File,
-  ): Promise<{ key: string }> {
+  ): Promise<{ key: string; quality: { blur: boolean; lowLight: boolean; overexposed: boolean } }> {
     const { key } = await this.media.uploadMedia(user, file);
-    return { key };
+    const qf = await this.integrity.qualityFlags(file.buffer, { duplicate: false, accuracy: null });
+    return { key, quality: { blur: qf.blur, lowLight: qf.lowLight, overexposed: qf.overexposed } };
   }
 
   @Get('view')

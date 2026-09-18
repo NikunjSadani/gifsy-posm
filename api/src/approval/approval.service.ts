@@ -26,6 +26,9 @@ const RECCE_INCLUDE = {
   submittedBy: { select: { id: true, name: true } },
   posms: {
     orderBy: { slotNo: 'asc' },
+    // `include` (for the posmType relation) auto-selects every ReccePosm SCALAR — so the nullable
+    // `qualityFlags Json?` column rides along here without an explicit select (a scalar `true`
+    // cannot be added inside a Prisma relation `include`). It is surfaced per-POSM in mapRecceItem.
     include: { posmType: { select: { id: true, code: true, name: true } } },
   },
 } satisfies Prisma.RecceInclude;
@@ -37,6 +40,18 @@ export interface MediaRef {
   key: string;
   viewPath: string;
   geo: { lat: number; lng: number; accuracy?: number } | null;
+}
+
+/**
+ * Advisory per-POSM photo-quality signals computed at recce submit (mirrors the auditor's
+ * InstallPosm flags). Purely informational for the ASM — they never block approve/reject.
+ * Older recces predate the column, so the mapped value is `null` when nothing was stored.
+ */
+export interface ReccePosmQualityFlags {
+  blur: boolean;
+  lowLight: boolean;
+  overexposed: boolean;
+  lowAccuracy: boolean;
 }
 
 /**
@@ -179,6 +194,9 @@ export class ApprovalService {
         dimensions: p.dimensions,
         photo: this.mediaRef(p.photo),
         markup: p.markup ?? null,
+        // Advisory per-POSM photo-quality flags (blur/dark/too-bright/weak-GPS); `null` for
+        // older recces submitted before the column existed.
+        qualityFlags: this.qualityFlags(p.qualityFlags),
       })),
     };
   }
@@ -453,6 +471,22 @@ export class ApprovalService {
       // Relative path resolved by the auth-gated media-view endpoint (PosmMediaService.viewMedia).
       viewPath: `/v1/media/view?key=${encodeURIComponent(key)}`,
       geo: geo ? { lat: geo.lat, lng: geo.lng, accuracy: geo.accuracy } : null,
+    };
+  }
+
+  /**
+   * Normalise the stored `qualityFlags` JSON → the four advisory booleans the ASM UI reads, or
+   * `null` when absent/malformed (older recces, or a non-object value). Coerces each flag to a
+   * strict boolean so a missing/odd field never leaks a non-boolean into the response.
+   */
+  private qualityFlags(v: Prisma.JsonValue | null): ReccePosmQualityFlags | null {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const f = v as Record<string, unknown>;
+    return {
+      blur: f.blur === true,
+      lowLight: f.lowLight === true,
+      overexposed: f.overexposed === true,
+      lowAccuracy: f.lowAccuracy === true,
     };
   }
 

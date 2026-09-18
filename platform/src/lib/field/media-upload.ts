@@ -6,7 +6,11 @@
  *   - `POST /api/media/upload` (proxied to backend `/v1/media/upload`).
  *   - multipart/form-data with a single file part named **`file`**
  *     (`FileInterceptor('file')`), max 5 MB, image/PDF (magic-byte sniffed server-side).
- *   - success envelope `{ success: true, data: { key: string } }`.
+ *   - success envelope `{ success: true, data: { key: string, quality?: {...} } }`.
+ *
+ * The backend also returns a best-effort `quality` assessment of the uploaded frame
+ * (`{ blur, lowLight, overexposed }`). It is ADVISORY only — the upload still succeeds and
+ * a stored key is returned regardless; older backends may omit it, so we tolerate its absence.
  *
  * The upload endpoint stores ONLY the original bytes and returns `{ key }` — it does NOT
  * persist geo. The authoritative per-photo geotag is bound later, in the recce/installation
@@ -20,8 +24,17 @@
 
 import type { GeoFix } from './geo';
 
+/** Best-effort per-frame quality flags returned by the upload endpoint. */
+export interface MediaQuality {
+  blur: boolean;
+  lowLight: boolean;
+  overexposed: boolean;
+}
+
 export interface UploadResult {
   key: string;
+  /** Advisory quality assessment; absent on older backends. */
+  quality?: MediaQuality;
 }
 
 /**
@@ -60,7 +73,11 @@ export async function uploadMedia(file: File, geo?: GeoFix | null): Promise<Uplo
     throw new Error(e instanceof Error ? e.message : 'Network error while uploading the photo.');
   }
 
-  type UploadBody = { success?: boolean; data?: { key?: string }; error?: string };
+  type UploadBody = {
+    success?: boolean;
+    data?: { key?: string; quality?: Partial<MediaQuality> | null };
+    error?: string;
+  };
   let body: UploadBody | null = null;
   try {
     body = (await res.json()) as UploadBody;
@@ -81,5 +98,19 @@ export async function uploadMedia(file: File, geo?: GeoFix | null): Promise<Uplo
   if (typeof key !== 'string' || key.length === 0) {
     throw new Error('Upload succeeded but no media key was returned.');
   }
-  return { key };
+  return { key, quality: parseQuality(body.data?.quality) };
+}
+
+/**
+ * Normalise the optional `data.quality` object into a fully-populated `MediaQuality`, or
+ * `undefined` when the backend omitted it. Any missing/non-boolean flag defaults to false so
+ * a partial payload never surfaces a spurious warning.
+ */
+function parseQuality(raw: Partial<MediaQuality> | null | undefined): MediaQuality | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    blur: raw.blur === true,
+    lowLight: raw.lowLight === true,
+    overexposed: raw.overexposed === true,
+  };
 }

@@ -45,6 +45,18 @@ export interface RecceIntegrity {
   duplicatePhoto: boolean;
 }
 
+/**
+ * Advisory per-POSM photo-quality signals the backend computes at recce submit (mirrors the
+ * auditor's install flags). Purely informational for the ASM — they do NOT block approve/reject.
+ * `null` when the recce predates the feature (older submissions have no stored flags).
+ */
+export interface ReccePosmQualityFlags {
+  blur: boolean;
+  lowLight: boolean;
+  overexposed: boolean;
+  lowAccuracy: boolean;
+}
+
 export interface ReccePosm {
   id: string;
   slotNo: number;
@@ -57,6 +69,8 @@ export interface ReccePosm {
   dimensions: unknown;
   photo: MediaRef | null;
   markup: unknown | null;
+  /** Advisory per-photo quality flags (blur/dark/too-bright/weak-GPS); `null` for legacy recces. */
+  qualityFlags: ReccePosmQualityFlags | null;
 }
 
 export interface RecceQueueItem {
@@ -209,6 +223,29 @@ export function recceFlags(item: RecceQueueItem): string[] {
     flags.push(`Low GPS accuracy (±${Math.round(ig.captureAccuracy)} m)`);
   }
   return flags;
+}
+
+/**
+ * The named per-POSM quality-flag booleans, in display order, with the ASM's plain-language
+ * labels (blur→"Blurry", lowLight→"Dark", overexposed→"Too bright", lowAccuracy→"Weak GPS").
+ * Mirrors the auditor console's `activeQualityFlags` pattern (see `@/lib/audit/api`); the ASM
+ * copy is intentionally plainer/field-friendly.
+ */
+const POSM_QUALITY_FLAG_LABELS: { key: keyof ReccePosmQualityFlags; label: string }[] = [
+  { key: 'blur', label: 'Blurry' },
+  { key: 'lowLight', label: 'Dark' },
+  { key: 'overexposed', label: 'Too bright' },
+  { key: 'lowAccuracy', label: 'Weak GPS' },
+];
+
+/**
+ * The raised advisory quality flags for one POSM photo, as display labels (only the booleans
+ * strictly `true`). Empty array when nothing is flagged or the flags are `null` (legacy recce).
+ * Pure — unit-tested.
+ */
+export function posmQualityFlags(flags: ReccePosmQualityFlags | null | undefined): string[] {
+  if (!flags) return [];
+  return POSM_QUALITY_FLAG_LABELS.filter((f) => flags[f.key] === true).map((f) => f.label);
 }
 
 /** How many POSM photos a recce carries (some slots may have no photo). */

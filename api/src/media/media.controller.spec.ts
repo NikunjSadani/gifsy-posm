@@ -4,6 +4,7 @@ import { MediaController } from './media.controller';
 import { sniffImageMime } from './watermark.util';
 import type { PosmMediaService } from '../capture/posm-media.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { CaptureIntegrityService } from '../capture-integrity/capture-integrity.service';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 
 const USER: JwtPayload = { sub: 'u1', role: 'GIFSY_ADMIN', clientId: 'c1', phone: '', name: 'Op' };
@@ -27,6 +28,7 @@ describe('MediaController', () => {
     reccePosm: { findFirst: jest.Mock };
     installPosm: { findFirst: jest.Mock };
   };
+  let integrity: jest.Mocked<Pick<CaptureIntegrityService, 'qualityFlags'>>;
 
   beforeEach(() => {
     media = {
@@ -37,16 +39,23 @@ describe('MediaController', () => {
       reccePosm: { findFirst: jest.fn().mockResolvedValue(null) },
       installPosm: { findFirst: jest.fn().mockResolvedValue(null) },
     };
+    integrity = {
+      // Default: a decodable image with no quality issues. Individual tests override.
+      qualityFlags: jest.fn().mockResolvedValue({
+        blur: false, lowLight: false, overexposed: false, duplicate: false, lowAccuracy: false,
+      }),
+    };
     controller = new MediaController(
       media as unknown as PosmMediaService,
       prisma as unknown as PrismaService,
+      integrity as unknown as CaptureIntegrityService,
     );
   });
 
   // ── Upload ────────────────────────────────────────────────────────────────
 
   describe('upload', () => {
-    it('passes the file through to uploadMedia and returns { key }', async () => {
+    it('passes the file through to uploadMedia and returns { key, quality } from the integrity service', async () => {
       const file = { buffer: Buffer.from([0xff, 0xd8, 0xff]), size: 3, originalname: 'p.jpg' } as Express.Multer.File;
       media.uploadMedia.mockResolvedValue({
         key: 'posm-media/c1/abc.jpg',
@@ -54,11 +63,20 @@ describe('MediaController', () => {
         mimeType: 'image/jpeg',
         fileSizeBytes: 3,
       });
+      integrity.qualityFlags.mockResolvedValue({
+        blur: true, lowLight: false, overexposed: true, duplicate: false, lowAccuracy: false,
+      });
 
       const res = await controller.upload(USER, file);
 
       expect(media.uploadMedia).toHaveBeenCalledWith(USER, file);
-      expect(res).toEqual({ key: 'posm-media/c1/abc.jpg' });
+      // The uploaded bytes are analyzed; duplicate/accuracy are not known at upload time.
+      expect(integrity.qualityFlags).toHaveBeenCalledWith(file.buffer, { duplicate: false, accuracy: null });
+      // PINNED upload contract: only blur/lowLight/overexposed are surfaced (no duplicate/lowAccuracy).
+      expect(res).toEqual({
+        key: 'posm-media/c1/abc.jpg',
+        quality: { blur: true, lowLight: false, overexposed: true },
+      });
     });
   });
 

@@ -340,6 +340,7 @@ model ReccePosm {
   dimensions Json                               // {width,height,unit} entered by the rep (numeric)
   photo      Json                               // MediaValue {key, geo?} — the marked recce photo
   markup     Json?                              // the on-image marked install-area annotation
+  qualityFlags Json?                            // {blur,lowLight,overexposed,lowAccuracy} — soft, computed at submit (duplicate stays a recce-level flag)
 
   recce      Recce      @relation(fields: [recceId], references: [id], onDelete: Cascade)
   posmType   PosmType   @relation(fields: [posmTypeId], references: [id])

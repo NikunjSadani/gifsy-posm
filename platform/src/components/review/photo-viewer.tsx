@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, ImageOff, MapPin } from 'lucide-react';
+import { X, ImageOff, MapPin, AlertTriangle } from 'lucide-react';
 import type { ReccePosm } from '@/lib/review/api';
-import { mediaSrc, dimensionsLabel } from '@/lib/review/api';
+import { mediaSrc, dimensionsLabel, posmQualityFlags } from '@/lib/review/api';
 import { cn } from '@/lib/utils';
 import { useFocusTrap } from './use-focus-trap';
 
@@ -98,6 +98,8 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => 
   const photo = posm.photo;
   const zoomable = !!photo && !errored;
   const dims = dimensionsLabel(posm.dimensions);
+  // Advisory per-photo quality flags — informational only; they never block approve/reject.
+  const qualityFlags = posmQualityFlags(posm.qualityFlags);
 
   const openZoom = () => {
     if (zoomable && photo) onZoom(photo.key);
@@ -168,6 +170,20 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => 
             {photo.geo.lat.toFixed(5)}, {photo.geo.lng.toFixed(5)}
             {photo.geo.accuracy != null && ` (±${Math.round(photo.geo.accuracy)} m)`}
           </p>
+        )}
+        {/* Advisory photo-quality chips (same amber pattern as the auditor's install review). */}
+        {qualityFlags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {qualityFlags.map((f) => (
+              <span
+                key={f}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700"
+              >
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                {f}
+              </span>
+            ))}
+          </div>
         )}
       </div>
     </div>
