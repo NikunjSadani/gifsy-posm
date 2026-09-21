@@ -54,8 +54,18 @@ import { Jimp, defaultFormats } from 'jimp';
  */
 export const HASH_GRID = 16;
 
-/** Side of the blur/exposure analysis grid (decoded luminance is pooled to this size). */
+/** Side of the exposure/flatness analysis grid (mean luminance + tonal spread pool to this). */
 export const ANALYSIS_GRID = 32;
+
+/**
+ * Side of the BLUR analysis grid. Focus/sharpness lives in FINE detail — shrinking a photo to
+ * 32×32 is itself a heavy blur that erases it, so at 32px a sharp and an out-of-focus photo look
+ * identical (both dominated by large light/dark blocks). Blur is therefore measured on a much
+ * larger decode where fine detail survives. Empirically (a real out-of-focus capture): 32px →
+ * varlap 1753 (reads "sharp"); 256px → 50 (reads "blurry"), while a sharp frame stays in the
+ * thousands+ at 256px — a clean separation only visible at this resolution.
+ */
+export const BLUR_ANALYSIS_GRID = 256;
 
 /**
  * Minimum Hamming distance (of 256 bits) an INSTALL photo must differ from its linked RECCE
@@ -71,12 +81,14 @@ export const ANALYSIS_GRID = 32;
 export const BEFORE_AFTER_MIN_HAMMING = 32;
 
 /**
- * Variance-of-Laplacian at/under this reads as BLURRY. Measured over a 32×32 decoded
- * luminance grid (0..255): a flat / smooth / out-of-focus frame produces near-zero second
- * derivatives → low variance; an in-focus, high-detail frame produces a high variance.
- * Calibrated on the 32×32 luminance domain (a uniform frame ≈ 0; a sharp edge-rich frame ≫ 60).
+ * Variance-of-Laplacian at/under this reads as BLURRY — measured on the BLUR_ANALYSIS_GRID
+ * (256×256), NOT 32×32 (see BLUR_ANALYSIS_GRID). A clearly out-of-focus real capture scores ~50
+ * at 256px; a mildly-soft frame ~hundreds; a sharp frame thousands+. 150 sits in the gap: it
+ * flags clear blur with margin above a real blurry sample (~50) while leaving sharp/mildly-soft
+ * photos alone. Advisory only — never blocks; err toward under-flagging to avoid nagging on good
+ * photos. (Pending a real SHARP calibration sample to lock the upper margin.)
  */
-export const BLUR_VARIANCE_THRESHOLD = 60;
+export const BLUR_VARIANCE_THRESHOLD = 150;
 
 /**
  * Tonal-spread floor (stddev of the decoded luminance grid, 0..255) below which a frame is too
@@ -291,7 +303,8 @@ export function isBlurryGrid(
   threshold: number = BLUR_VARIANCE_THRESHOLD,
   flatFloor: number = BLUR_FLATNESS_STDDEV_MIN,
 ): boolean {
-  return stdDevOfGrid(grid) >= flatFloor && laplacianVariance(grid, ANALYSIS_GRID) <= threshold;
+  const size = Math.round(Math.sqrt(grid.length)); // grid is square; infer its side
+  return stdDevOfGrid(grid) >= flatFloor && laplacianVariance(grid, size) <= threshold;
 }
 
 /**
@@ -354,14 +367,20 @@ export async function computeQualityFlags(
   bytes: Buffer | null | undefined,
   signals: { duplicate: boolean; lowAccuracy: boolean },
 ): Promise<QualityFlags> {
-  // Decode ONCE at the analysis grid; derive blur + exposure from the same luminance grid.
+  // Exposure + flatness/blank come from a small 32×32 pool (large-scale luminance). Blur needs a
+  // MUCH larger grid — fine focus detail is erased by a 32px shrink (see BLUR_ANALYSIS_GRID) — so
+  // decode a second, high-res grid for the Laplacian. Both decodes degrade gracefully to null.
   const grid = await decodeLumaGrid(bytes, ANALYSIS_GRID);
+  const blurGrid = await decodeLumaGrid(bytes, BLUR_ANALYSIS_GRID);
   const mean = grid ? meanOfGrid(grid) : null;
+  const blank = grid ? stdDevOfGrid(grid) < BLUR_FLATNESS_STDDEV_MIN : false;
   return {
-    blur: grid ? isBlurryGrid(grid) : false,
+    // Blurry = low fine-detail edge energy at high resolution, AND not a blank/uniform frame
+    // (a blank frame is reported as `blank`, never `blurry`).
+    blur: blurGrid && !blank ? laplacianVariance(blurGrid, BLUR_ANALYSIS_GRID) <= BLUR_VARIANCE_THRESHOLD : false,
     // A frame below the flatness floor is too uniform to hold a POSM — blank wall / covered lens
     // / solid colour. Same boundary that makes it un-assessable for blur, surfaced as its own flag.
-    blank: grid ? stdDevOfGrid(grid) < BLUR_FLATNESS_STDDEV_MIN : false,
+    blank,
     lowLight: mean === null ? false : mean < LOW_LUMINANCE_THRESHOLD,
     overexposed: mean === null ? false : mean > HIGH_LUMINANCE_THRESHOLD,
     duplicate: signals.duplicate,

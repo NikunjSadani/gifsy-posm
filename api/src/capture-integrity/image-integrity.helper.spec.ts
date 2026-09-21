@@ -205,6 +205,31 @@ describe('image-integrity.helper (real pixel-domain analysis)', () => {
       expect(isLowAccuracy(undefined)).toBe(false);
     });
 
+    it('flags a genuinely BLURRED detailed photo but not the sharp original (high-res analysis)', async () => {
+      // Build a detail-rich 16px checker in-memory (Jimp.read isn't available under the jest VM),
+      // optionally blurred. Blur is assessed on the high-res BLUR_ANALYSIS_GRID, where a 32px
+      // thumbnail would have erased the detail and mis-read both frames as identical.
+      const build = async (blurRadius: number): Promise<Buffer> => {
+        const img = new Jimp({ width: 256, height: 256, color: rgba(20, 20, 20) });
+        for (let y = 0; y < 256; y++) {
+          for (let x = 0; x < 256; x++) {
+            if ((Math.floor(x / 16) + Math.floor(y / 16)) % 2 === 0) {
+              img.setPixelColor(rgba(235, 235, 235), x, y);
+            }
+          }
+        }
+        if (blurRadius > 0) img.blur(blurRadius);
+        return img.getBuffer('image/png');
+      };
+      const sharpFlags = await computeQualityFlags(await build(0), { duplicate: false, lowAccuracy: false });
+      expect(sharpFlags.blur).toBe(false); // sharp edges → high edge energy
+      expect(sharpFlags.blank).toBe(false);
+
+      const blurredFlags = await computeQualityFlags(await build(6), { duplicate: false, lowAccuracy: false });
+      expect(blurredFlags.blur).toBe(true); // softened edges → low edge energy → blurry
+      expect(blurredFlags.blank).toBe(false); // still tonal variation → not blank
+    });
+
     it('derives lowLight (not blur) from a decoded dark solid image; carries passed signals', async () => {
       const dark = await pngSolid(64, 64, 0, 0, 0);
       const flags = await computeQualityFlags(dark, { duplicate: true, lowAccuracy: false });
