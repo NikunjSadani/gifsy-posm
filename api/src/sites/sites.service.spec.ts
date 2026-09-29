@@ -96,6 +96,23 @@ describe('SitesService.list — role scoping', () => {
     expect(where.town).toEqual({ contains: 'bar', mode: 'insensitive' });
   });
 
+  it('pendingRecce=true filters to outlets with NO recce (recces: none), AND-ed onto scope', async () => {
+    const { prisma, findMany, count } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }), { pendingRecce: true });
+    const where = findMany.mock.calls[0][0].where;
+    expect(where.recces).toEqual({ none: {} }); // only sites that still owe a recce
+    expect(where.vendorId).toBe('v1'); // still hard-pinned to the caller's vendor
+    expect(count.mock.calls[0][0].where.recces).toEqual({ none: {} }); // same filter on the total
+  });
+
+  it('pendingRecce absent/false leaves the recce filter off (all reachable sites)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }), { pendingRecce: false });
+    expect(findMany.mock.calls[0][0].where.recces).toBeUndefined();
+  });
+
   it('status filter scopes the query WITHIN the tenant where (never widens scope)', async () => {
     const { prisma, findMany, count } = makePrisma();
     const svc = new SitesService(prisma);

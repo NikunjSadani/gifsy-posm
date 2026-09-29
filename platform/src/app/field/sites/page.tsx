@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * My Sites — the vendor-scoped site list. Search + filters (name / code / town / rsCode),
+ * Recce to do — the vendor's outlets that still owe a recce (backend filters to sites with no
+ * recce yet). Search + filters (name / code / town / rsCode),
  * tappable cards, and a bottom-sheet detail with directions + "Start recce".
  */
 
@@ -27,7 +28,8 @@ export default function SitesPage() {
 
   // Debounce the filter set so typing doesn't fire a request per keystroke.
   const filters: SiteFilters = useMemo(
-    () => ({ name: query.trim(), code: code.trim(), town: town.trim(), rsCode: rsCode.trim() }),
+    // "Recce to do": only outlets that still owe a recce (backend filters on no existing recce).
+    () => ({ name: query.trim(), code: code.trim(), town: town.trim(), rsCode: rsCode.trim(), pendingRecce: true }),
     [query, code, town, rsCode],
   );
   const filtersKey = JSON.stringify(filters);
@@ -62,9 +64,9 @@ export default function SitesPage() {
   return (
     <div className="px-4 pt-4">
       <div className="flex items-center justify-between mb-3">
-        <h1 className="text-lg font-bold text-gray-900">My Sites</h1>
+        <h1 className="text-lg font-bold text-gray-900">Recce to do</h1>
         {!loading && !error && (
-          <span className="text-xs text-gray-500">{total} total</span>
+          <span className="text-xs text-gray-500">{total} to do</span>
         )}
       </div>
 
@@ -135,9 +137,13 @@ export default function SitesPage() {
           <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center">
             <MapPin className="h-6 w-6 text-gray-400" />
           </div>
-          <p className="text-sm font-medium text-gray-700">No sites found</p>
+          <p className="text-sm font-medium text-gray-700">
+            {query || activeFilterCount ? 'No matching outlets' : 'No recces pending'}
+          </p>
           <p className="text-xs text-gray-500 mt-1">
-            {query || activeFilterCount ? 'Try a different search or filter.' : 'No sites are assigned to you yet.'}
+            {query || activeFilterCount
+              ? 'Try a different search or filter.'
+              : 'You’re all caught up — every assigned outlet has a recce.'}
           </p>
         </div>
       ) : (

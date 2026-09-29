@@ -130,6 +130,10 @@ export class SitesService {
     // Apply the vendorId filter only when the caller is NOT already vendor-pinned —
     // otherwise it could override the security pin and leak a sibling vendor's fleet.
     if (q.vendorId && !this.isVendorRole(user)) where.vendorId = q.vendorId;
+    // "Recce to do": only outlets that still owe a recce — i.e. no recce row exists yet. A site
+    // whose recce is submitted/approved/rejected already has one (rejected re-capture lives in
+    // the Installation screen), so it drops off this list. Applied to both findMany and count.
+    if (q.pendingRecce) where.recces = { none: {} };
 
     const [sites, total] = await Promise.all([
       this.prisma.site.findMany({

@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsInt, Min, Max, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsInt, Min, Max, IsEnum, IsBoolean } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { SiteStatus } from '@prisma/client';
 
 /**
@@ -34,6 +34,14 @@ export class ListSitesDto {
   @IsOptional()
   @IsEnum(SiteStatus)
   status?: SiteStatus;
+
+  // "Recce to do" filter: when true, only outlets with NO recce yet (a fresh recce is still
+  // owed) are returned. Explicit transform (NOT enableImplicitConversion) so only the literal
+  // 'true' enables it — any other value is false, never fail-open.
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  pendingRecce?: boolean;
 
   // @Type is explicit (not relying on enableImplicitConversion) so a query string coerces
   // to a number deterministically before the @IsInt/@Min bounds run.

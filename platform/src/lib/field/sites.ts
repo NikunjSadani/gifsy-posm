@@ -44,6 +44,8 @@ export interface SiteFilters {
   code?: string;
   town?: string;
   rsCode?: string;
+  /** "Recce to do": only outlets that still owe a recce (no recce yet). */
+  pendingRecce?: boolean;
   page?: number;
   limit?: number;
 }
@@ -58,6 +60,7 @@ export function fetchSites(filters: SiteFilters = {}) {
   if (filters.code) params.set('code', filters.code);
   if (filters.town) params.set('town', filters.town);
   if (filters.rsCode) params.set('rsCode', filters.rsCode);
+  if (filters.pendingRecce) params.set('pendingRecce', 'true');
   params.set('page', String(filters.page ?? 1));
   params.set('limit', String(filters.limit ?? 200));
   const qs = params.toString();

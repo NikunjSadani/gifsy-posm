@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * My Work — the vendor field user's own recce/install jobs, grouped by status with the right
+ * Installation — the vendor field user's own recce/install jobs, grouped by status with the right
  * action per recce:
  *
  *   REJECTED  → the ASM's reason + a "Re-capture" action → /field/recce/[siteId]?recceId=…
@@ -60,7 +60,7 @@ export default function MyWorkPage() {
     } else {
       setError(
         res.status === 403
-          ? 'My Work is not available for your account. Please ask your admin to grant access.'
+          ? 'Installation is not available for your account. Please ask your admin to grant access.'
           : res.error || 'Could not load your work. Please try again.',
       );
       setRecces(null);
@@ -76,7 +76,7 @@ export default function MyWorkPage() {
 
   return (
     <div className="px-4 pt-4">
-      <h1 className="mb-4 text-lg font-bold text-gray-900">My Work</h1>
+      <h1 className="mb-4 text-lg font-bold text-gray-900">Installation</h1>
 
       {loading && (
         <div className="mt-6 flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
