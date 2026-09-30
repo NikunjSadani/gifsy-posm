@@ -92,3 +92,28 @@ Site = the outlet master. One report row per Site (coverage report; filterable).
   Installation.isDirect (the column is wired + reads "No" until then); (2) owner populates the
   6 master fields + promoter codes in the real outlet/user masters (only A8/A9 + 2 users seeded
   as samples locally).
+
+## Follow-on: User bulk upload (2026-09-30)
+
+Owner asked how users are created (answer: single-record UI only, no bulk) and to add bulk upload
+— so promoter codes can be backfilled across the fleet by Excel rather than one form at a time.
+
+- **`POST /v1/users/bulk-upload`** (FileInterceptor, 5 MB) mirrors the sites upload: case-insensitive
+  headers `phone,name,role,vendor_code,promoter_code` (req: phone/name/role), per-row validation,
+  base64 rejection report, 5 MB / 5000-row caps, one `$transaction` + IMPORT audit row.
+- **Auth-safety difference (deliberate):** upsert by (clientId, phone) — a NEW phone is CREATED with
+  full role/vendor/promoter; an EXISTING phone updates **name + promoterCode ONLY** (promoter
+  present-gated). role / vendorId / isActive are NEVER written on the update branch, so a bulk
+  upload can't trigger mass session-eviction or a last-admin lock-out. Use Edit for role/vendor.
+- Validation: 10-digit Indian mobile → E.164; role ∈ MANAGED_ROLES; vendor-linkage (VENDOR_* need an
+  active tenant vendor_code, others must be blank); promoter_code unique per tenant (within-file +
+  vs existing, different-owner) + within-file phone de-dup. Vendors + existing users preloaded once.
+- FE: `UploadPanel` generalised to props (title/description/headers/requiredHeaders/hint/upload) and
+  reused on BOTH Sites and Users; `usersApi.bulkUpload`; `USER_UPLOAD_HEADERS`.
+- Files: api `users.constants.ts` (new), `users.service.ts` (+bulkUpload/buildUserErrorFile),
+  `users.controller.ts` (+route), `users-bulk-upload.spec.ts` (new, 8 tests); FE `upload-panel.tsx`,
+  `lib/admin/{api,types}.ts`, `admin/{sites,users}/page.tsx`.
+- Gates: api jest 387 (users 36, +8), FE vitest 281, both tsc 0. Runtime-proven through the
+  authenticated proxy with a real .xlsx: created a new ASM, updated an existing user's promoter
+  code, and a row attempting to change an existing auditor's role → role stayed AUDITOR (auth-safety).
+  ⚠️ demo mutation: created user `9800000055` (Bulk ASM) + set auditor `9000000002` promoter=`PAUD`.
