@@ -73,6 +73,7 @@ model User {
   name      String
   role      UserRole
   vendorId  String?                          // set for VENDOR_FIELD / VENDOR_HO
+  promoterCode String?                        // field-user promoter/employee code (report ID column); owner-supplied
   isActive  Boolean  @default(true)
   // Session kill-switch authority (chassis auth pattern, ported from loyalty). When a
   // "log out everywhere" / deactivation / refresh-reuse stamps this to `now`, every session
@@ -92,8 +93,12 @@ model User {
   submittedRecces   Recce[]        @relation("RecceSubmitter")
   auditedInstalls   Installation[] @relation("InstallAuditor")
   submittedInstalls Installation[] @relation("InstallSubmitter")
+  hoReviewedInstalls Installation[] @relation("InstallHoReviewer")
 
   @@unique([clientId, phone])                 // one active login per (tenant, phone)
+  // Promoter code is unique per tenant when set. Postgres treats NULLs as distinct, so the many
+  // existing users with a null code do not collide — only a duplicate non-null code is rejected.
+  @@unique([clientId, promoterCode])
   @@index([clientId, role])
   @@index([vendorId])
   @@map("users")
@@ -227,6 +232,14 @@ model Site {
   lng       Decimal?   @db.Decimal(11, 8)
   town      String?
   rsCode    String?                          // "RS" filter dimension from the brief
+  // Outlet-master geography/classification (added for the Outlet Execution Report). All
+  // nullable + populated from the outlet upload / create-edit form; report columns.
+  region    String?
+  state     String?
+  cluster   String?
+  beatName  String?
+  channel   String?                          // trade channel (e.g. GT / MT / …)
+  address   String?
   vendorId  String?                          // the vendor whose fleet services this site
   asmUserId String?                          // approving ASM
   status    SiteStatus @default(ACTIVE)
@@ -277,6 +290,21 @@ enum InstallationStatus {
   SUBMITTED
   AUDIT_APPROVED
   AUDIT_REJECTED
+}
+
+/// HO/Admin escalation outcome for an installation. Orthogonal to InstallationStatus: it is only
+/// meaningful AFTER the auditor rejects (AUDIT_REJECTED), at which point the row escalates to HO.
+/// The auditor's AUDIT_REJECTED is never rewritten — the report shows Audit Status and HO Approval
+/// Status independently (owner decision 2026-09-30).
+///   NONE     — not escalated (auditor approved, or not yet audited)
+///   PENDING  — auditor rejected → awaiting HO/Admin review
+///   APPROVED — HO overruled the audit reject → final approved
+///   REJECTED — HO upheld the reject → terminal rejected
+enum HoReviewStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 /// Controlled reject-reason vocabulary (chassis reject-code pattern). Used by
@@ -368,6 +396,17 @@ model Installation {
   rejectionReasonCode RejectReasonCode?
   rejectionReason    String?
 
+  // HO/Admin escalation (owner decision 2026-09-30): on an audit REJECT the row escalates to HO;
+  // HO approve → APPROVED (overrides the audit reject), HO reject → REJECTED (terminal).
+  hoReviewStatus     HoReviewStatus     @default(NONE)
+  hoReviewedById     String?                             // CLIENT_ADMIN / GIFSY_ADMIN
+  hoReviewedAt       DateTime?
+  hoRejectionReason  String?
+
+  // Direct installation flag — set by the future manual direct-install workflow. Default false so
+  // the report's "Direct Installation" column reads "No" for the normal recce→install path today.
+  isDirect           Boolean            @default(false)
+
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -376,9 +415,11 @@ model Installation {
   recce       Recce    @relation(fields: [recceId], references: [id])
   submittedBy User     @relation("InstallSubmitter", fields: [submittedById], references: [id])
   auditedBy   User?    @relation("InstallAuditor", fields: [auditedById], references: [id])
+  hoReviewedBy User?   @relation("InstallHoReviewer", fields: [hoReviewedById], references: [id])
   posms       InstallPosm[]
 
   @@index([clientId, status])
+  @@index([clientId, hoReviewStatus])
   @@map("installations")
 }
 
