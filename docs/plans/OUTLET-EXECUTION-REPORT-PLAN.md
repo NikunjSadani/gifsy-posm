@@ -74,3 +74,21 @@ Site = the outlet master. One report row per Site (coverage report; filterable).
 
 ## Status log
 - 2026-09-30: plan written; forks resolved with owner. Starting Phase 1.
+- 2026-09-30: **ALL 7 PHASES COMPLETE, gated + runtime-verified + adversarially audited.**
+  Commits: schema+migration → sites master fields → promoter code → HO stage (backend) →
+  HO console (FE) → report (API+FE+xlsx). Gates green throughout (api jest 379, FE vitest 281).
+  Runtime-verified (real endpoints, real CLIENT_ADMIN auth):
+    - Report: 36 columns, correct values (A8: vendor/promoter/master/latlng/element/status all ✓).
+    - HO escalation BOTH branches: auditor reject → escalate (PENDING) → HO **approve** leaves
+      Audit=Rejected + HO=Approved (independence proven); HO **uphold** → Audit=Rejected +
+      HO=Rejected; both re-decide → 409 (idempotent). Two-element outlet (A5) maps both elements.
+    - xlsx export: valid file (200, correct type+disposition, PK-zip); jsonToSheetSafe = formula-
+      injection safe for user-supplied outlet names/addresses.
+    - New-Site form renders all 6 master fields; users form has promoter code.
+  Adversarial audit found NO defects (escalation design + guards + scoping all sound).
+  ⚠️ Runtime verification MUTATED local demo data: A8 = AUDIT_REJECTED + HO APPROVED (override
+  example); A5 = AUDIT_REJECTED + HO REJECTED (uphold example). Reset via re-seed if needed.
+  ▶ OWNER-GATED next steps (not built): (1) the manual DIRECT-INSTALL workflow that flips
+  Installation.isDirect (the column is wired + reads "No" until then); (2) owner populates the
+  6 master fields + promoter codes in the real outlet/user masters (only A8/A9 + 2 users seeded
+  as samples locally).
