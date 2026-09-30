@@ -89,6 +89,7 @@ export const usersApi = {
   /** Soft-deactivate + evict all live sessions (backend blocks self / last-admin). */
   deactivate: (id: string) => api.del<AdminUser>(`/api/users/${id}`),
   reactivate: (id: string) => api.patch<AdminUser>(`/api/users/${id}`, { isActive: true }),
+  bulkUpload: (file: File) => bulkUploadUsers(file),
 };
 
 // ── Sites ─────────────────────────────────────────────────────────────────────
@@ -159,11 +160,20 @@ export const sitesApi = {
  * the correct multipart boundary automatically. Returns the same ApiResponse envelope the
  * rest of the client uses so pages branch on `.success` uniformly.
  */
-export async function bulkUploadSites(file: File): Promise<ApiResponse<BulkUploadResult>> {
+export function bulkUploadSites(file: File): Promise<ApiResponse<BulkUploadResult>> {
+  return bulkUploadFile('/api/sites/bulk-upload', file);
+}
+
+/** Bulk-upload users (same multipart contract as sites). */
+export function bulkUploadUsers(file: File): Promise<ApiResponse<BulkUploadResult>> {
+  return bulkUploadFile('/api/users/bulk-upload', file);
+}
+
+async function bulkUploadFile(endpoint: string, file: File): Promise<ApiResponse<BulkUploadResult>> {
   const form = new FormData();
   form.append('file', file);
   try {
-    const res = await fetch('/api/sites/bulk-upload', { method: 'POST', body: form });
+    const res = await fetch(endpoint, { method: 'POST', body: form });
     type Envelope = { success?: boolean; data?: BulkUploadResult; error?: string };
     let body: Envelope | null = null;
     try {

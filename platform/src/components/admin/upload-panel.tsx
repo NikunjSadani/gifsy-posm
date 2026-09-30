@@ -3,20 +3,36 @@
 import { useRef, useState } from 'react';
 import { UploadCloud, FileSpreadsheet, Download, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { sitesApi } from '@/lib/admin/api';
+import type { ApiResponse } from '@/lib/api-client';
 import { summarizeUpload, downloadErrorReport } from '@/lib/admin/format';
-import { SITE_UPLOAD_HEADERS, SITE_UPLOAD_REQUIRED_HEADERS, type BulkUploadResult } from '@/lib/admin/types';
+import type { BulkUploadResult } from '@/lib/admin/types';
 import { cn } from '@/lib/utils';
 
 const MAX_BYTES = 5 * 1024 * 1024; // mirrors the backend Multer cap (F2)
 
 /**
- * Sites bulk-upload panel. Renders the exact template contract, enforces the 5 MB client
- * pre-check (the backend also caps at 5 MB / 5000 rows), then reports EXACTLY what the
- * backend returned — created / updated (upserted) count, rejected count, and a downloadable
- * per-row rejection report. It never fabricates success.
+ * Generic Excel bulk-upload panel (shared by the Sites and Users masters). Renders the exact
+ * template contract for the given `headers`, enforces the 5 MB client pre-check (the backend also
+ * caps at 5 MB / 5000 rows), then reports EXACTLY what the backend returned — imported / rejected
+ * counts + a downloadable per-row rejection report. It never fabricates success.
  */
-export function UploadPanel({ onUploaded }: { onUploaded?: () => void }) {
+export function UploadPanel({
+  title,
+  description,
+  headers,
+  requiredHeaders,
+  hint,
+  upload,
+  onUploaded,
+}: {
+  title: string;
+  description: React.ReactNode;
+  headers: readonly string[];
+  requiredHeaders: readonly string[];
+  hint?: React.ReactNode;
+  upload: (file: File) => Promise<ApiResponse<BulkUploadResult>>;
+  onUploaded?: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -44,12 +60,12 @@ export function UploadPanel({ onUploaded }: { onUploaded?: () => void }) {
     setFile(f);
   };
 
-  const upload = async () => {
+  const doUpload = async () => {
     if (!file) return;
     setUploading(true);
     setError(null);
     setResult(null);
-    const res = await sitesApi.bulkUpload(file);
+    const res = await upload(file);
     setUploading(false);
     if (!res.success) {
       setError(res.error || 'Upload failed. Please try again.');
@@ -68,19 +84,16 @@ export function UploadPanel({ onUploaded }: { onUploaded?: () => void }) {
     <div className="rounded-2xl border border-gray-200 bg-white p-5">
       <div className="flex items-center gap-2 mb-1">
         <FileSpreadsheet className="h-5 w-5 text-[var(--brand-primary)]" />
-        <h2 className="text-base font-semibold text-gray-900">Bulk upload sites (Excel)</h2>
+        <h2 className="text-base font-semibold text-gray-900">{title}</h2>
       </div>
-      <p className="text-sm text-gray-500 mb-4">
-        Upload an .xlsx / .xls file. Existing sites (matched by <code className="text-xs">code</code>) are
-        updated; new codes are created. Max 5 MB / 5000 rows per file.
-      </p>
+      <p className="text-sm text-gray-500 mb-4">{description}</p>
 
       {/* Template contract */}
       <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 mb-4">
         <p className="text-xs font-medium text-gray-600 mb-1.5">Template columns (header row 1):</p>
         <div className="flex flex-wrap gap-1.5">
-          {SITE_UPLOAD_HEADERS.map((h) => {
-            const required = (SITE_UPLOAD_REQUIRED_HEADERS as readonly string[]).includes(h);
+          {headers.map((h) => {
+            const required = (requiredHeaders as readonly string[]).includes(h);
             return (
               <span
                 key={h}
@@ -97,10 +110,7 @@ export function UploadPanel({ onUploaded }: { onUploaded?: () => void }) {
             );
           })}
         </div>
-        <p className="text-[11px] text-gray-500 mt-2">
-          <code>vendor_code</code> resolves to a vendor and <code>asm_phone</code> to an ASM user in this
-          tenant; <code>lat</code>/<code>lng</code> must be supplied together; <code>status</code> is ACTIVE or INACTIVE.
-        </p>
+        {hint && <p className="text-[11px] text-gray-500 mt-2">{hint}</p>}
       </div>
 
       {/* File picker */}
@@ -112,7 +122,7 @@ export function UploadPanel({ onUploaded }: { onUploaded?: () => void }) {
           onChange={(e) => pick(e.target.files?.[0] ?? null)}
           className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-gray-700 hover:file:bg-gray-200"
         />
-        <Button variant="primary" onClick={upload} disabled={!file} loading={uploading} className="shrink-0">
+        <Button variant="primary" onClick={doUpload} disabled={!file} loading={uploading} className="shrink-0">
           <UploadCloud className="h-4 w-4" />
           Upload
         </Button>

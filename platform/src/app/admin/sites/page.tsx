@@ -17,7 +17,7 @@ import { ConfirmDialog } from '@/components/admin/confirm-dialog';
 import { StatusBadge } from '@/components/admin/status-badge';
 import { UploadPanel } from '@/components/admin/upload-panel';
 import { sitesApi, vendorsApi, usersApi, type SiteCreate, type SiteUpdate } from '@/lib/admin/api';
-import type { Site, SiteStatus, Vendor, AdminUser } from '@/lib/admin/types';
+import { SITE_UPLOAD_HEADERS, SITE_UPLOAD_REQUIRED_HEADERS, type Site, type SiteStatus, type Vendor, type AdminUser } from '@/lib/admin/types';
 import { validateSite, isValid, type FieldErrors } from '@/lib/admin/validation';
 import { formatCoords } from '@/lib/admin/format';
 
@@ -401,7 +401,23 @@ export default function SitesPage() {
         )}
       </div>
 
-      <UploadPanel onUploaded={() => void load()} />
+      <UploadPanel
+        title="Bulk upload sites (Excel)"
+        description={
+          <>Upload an .xlsx / .xls file. Existing sites (matched by <code className="text-xs">code</code>) are
+          updated; new codes are created. Max 5 MB / 5000 rows per file.</>
+        }
+        headers={SITE_UPLOAD_HEADERS}
+        requiredHeaders={SITE_UPLOAD_REQUIRED_HEADERS}
+        hint={
+          <>
+            <code>vendor_code</code> resolves to a vendor and <code>asm_phone</code> to an ASM user in this
+            tenant; <code>lat</code>/<code>lng</code> must be supplied together; <code>status</code> is ACTIVE or INACTIVE.
+          </>
+        }
+        upload={sitesApi.bulkUpload}
+        onUploaded={() => void load()}
+      />
 
       <FormDialog
         open={editing !== null}

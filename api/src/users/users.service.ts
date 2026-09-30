@@ -6,13 +6,31 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, platformWide } from '../common/tenant-scope';
 import { normalizeIndianPhone } from '../common/phone';
-import { CreateUserDto, ManagedRole } from './dto/create-user.dto';
+import { aoaToSheetSafe } from '../common/xlsx';
+import { CreateUserDto, ManagedRole, MANAGED_ROLES } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { USER_UPLOAD_REQUIRED_HEADERS, USER_ERROR_HEADERS } from './users.constants';
+
+/** A rejected bulk-upload row — echoes the source cells plus the reason. */
+interface UserErrorRow {
+  rowNumber: number;
+  phone: string;
+  name: string;
+  role: string;
+  vendor_code: string;
+  promoter_code: string;
+  error_remarks: string;
+}
+
+/** F2: hard cap on data rows per bulk upload — bounds per-request work on an untrusted file. */
+const MAX_USER_UPLOAD_ROWS = 5000;
 
 const VENDOR_ROLES: ReadonlySet<string> = new Set(['VENDOR_FIELD', 'VENDOR_HO']);
 const isVendorRole = (role: string) => VENDOR_ROLES.has(role);
@@ -179,6 +197,214 @@ export class UsersService {
     const revoked = await this.authService.invalidateAllSessions(updated.id);
     this.logger.log(`Deactivated user ${updated.id} — ${revoked} live session(s) revoked`);
     return updated;
+  }
+
+  // ── Bulk upload (Excel) ────────────────────────────────────────────────────────
+
+  /**
+   * Excel bulk-ingestion of logins. Mirrors the sites bulk-upload (case-insensitive headers,
+   * per-row validation, base64 rejection report, 5 MB / 5000-row caps, one $transaction).
+   *
+   * KEY SAFETY DIFFERENCE (auth-sensitive path): this is an UPSERT by (clientId, phone), but for an
+   * EXISTING phone it writes ONLY `name` + `promoterCode` — role, vendor and active-state are NEVER
+   * changed by upload. That avoids the mass session-eviction / last-admin-lockout hazards the
+   * single-record update guards against (WoW: find WHERE a bulk guard must live). New phones are
+   * created with the full role/vendor/promoter payload.
+   */
+  async bulkUpload(user: JwtPayload, file: Express.Multer.File | undefined) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    this.assertTenantContext(user);
+    if (!file) {
+      throw new BadRequestException(
+        'No file provided. Attach an .xlsx or .xls file with the field name "file".',
+      );
+    }
+    const clientId = user.clientId;
+    const extension = (file.originalname.split('.').pop() ?? '').toLowerCase();
+    if (!['xlsx', 'xls'].includes(extension)) {
+      throw new BadRequestException(
+        'Invalid file type. Please upload an .xlsx or .xls file using the downloaded template.',
+      );
+    }
+
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: false });
+    } catch {
+      throw new BadRequestException('Could not parse the Excel file. Please use the template.');
+    }
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) throw new BadRequestException('The Excel file appears to be empty.');
+
+    const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(
+      workbook.Sheets[sheetName],
+      { raw: true, defval: '' },
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException('The Excel file has no data rows (only a header row found).');
+    }
+
+    const fileKeys = Object.keys(rows[0]).map((k) => k.trim().toLowerCase());
+    const missing = USER_UPLOAD_REQUIRED_HEADERS.filter((h) => !fileKeys.includes(h));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Missing required columns: ${missing.join(', ')}. Please use the downloaded template.`,
+      );
+    }
+    if (rows.length > MAX_USER_UPLOAD_ROWS) {
+      throw new BadRequestException(
+        `Too many rows (${rows.length}). The maximum per upload is ${MAX_USER_UPLOAD_ROWS}. ` +
+          'Please split the file and upload in batches.',
+      );
+    }
+
+    // Preload the tenant's vendors + existing logins ONCE — so per-row resolution and the
+    // phone/promoter-code collision checks are in-memory (not N queries), and we can tell a
+    // create from an update.
+    const [vendors, existingUsers] = await Promise.all([
+      this.prisma.vendor.findMany({ where: { clientId }, select: { id: true, code: true, isActive: true } }),
+      this.prisma.user.findMany({
+        where: { clientId, role: { not: 'GIFSY_ADMIN' } },
+        select: { phone: true, promoterCode: true },
+      }),
+    ]);
+    const vendorByCode = new Map(vendors.map((v) => [v.code.toLowerCase(), v]));
+    const existingPhones = new Set(existingUsers.map((u) => u.phone));
+    const promoterOwner = new Map<string, string>(); // promoterCode(lower) → phone
+    for (const u of existingUsers) if (u.promoterCode) promoterOwner.set(u.promoterCode.toLowerCase(), u.phone);
+
+    interface Ok {
+      phone: string; name: string; role: ManagedRole; vendorId: string | null;
+      promoterCode: string | null; promoterPresent: boolean;
+    }
+    const successRows: Ok[] = [];
+    const errorRows: UserErrorRow[] = [];
+    const seenPhones = new Set<string>();
+    const seenPromoters = new Set<string>();
+
+    for (let i = 0; i < rows.length; i++) {
+      const rowNumber = i + 2; // row 1 = header
+      const lower: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rows[i])) lower[k.trim().toLowerCase()] = v;
+      const get = (key: string): string => String(lower[key] ?? '').trim();
+
+      const phoneRaw = get('phone');
+      const name = get('name');
+      const roleRaw = get('role');
+      const vendorCode = get('vendor_code');
+      const promoterCode = get('promoter_code');
+
+      const addError = (reason: string) =>
+        errorRows.push({
+          rowNumber, phone: phoneRaw, name, role: roleRaw,
+          vendor_code: vendorCode, promoter_code: promoterCode, error_remarks: reason,
+        });
+
+      if (!phoneRaw) { addError('phone is required'); continue; }
+      // Validate as a 10-digit Indian mobile (mirrors the DTO's @IsMobilePhone('en-IN')), then
+      // canonicalise to E.164 exactly as normalizeIndianPhone does.
+      const digits = phoneRaw.replace(/\D/g, '');
+      const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+      if (last10.length !== 10 || !/^[6-9]/.test(last10)) {
+        addError(`Invalid phone "${phoneRaw}" (must be a 10-digit Indian mobile)`); continue;
+      }
+      const phone = normalizeIndianPhone(phoneRaw);
+      if (!name) { addError('name is required'); continue; }
+      if (!roleRaw) { addError('role is required'); continue; }
+      const role = roleRaw.toUpperCase();
+      if (!(MANAGED_ROLES as readonly string[]).includes(role)) {
+        addError(`Invalid role "${roleRaw}" (allowed: ${MANAGED_ROLES.join(', ')})`); continue;
+      }
+
+      if (seenPhones.has(phone)) {
+        addError(`Duplicate phone "${phoneRaw}" appears more than once in this file`); continue;
+      }
+
+      // Vendor-linkage invariant: vendor roles REQUIRE an active tenant vendor; others must not.
+      const isVendor = role === 'VENDOR_FIELD' || role === 'VENDOR_HO';
+      let vendorId: string | null = null;
+      if (isVendor) {
+        if (!vendorCode) { addError(`A ${role} user requires vendor_code`); continue; }
+        const v = vendorByCode.get(vendorCode.toLowerCase());
+        if (!v) { addError(`Vendor code "${vendorCode}" not found in this tenant`); continue; }
+        if (!v.isActive) { addError(`Vendor code "${vendorCode}" is inactive`); continue; }
+        vendorId = v.id;
+      } else if (vendorCode) {
+        addError(`A ${role} user must not have a vendor_code`); continue;
+      }
+
+      // Promoter code: within-file de-dup + collision with a DIFFERENT existing user.
+      let promoter: string | null = null;
+      if (promoterCode) {
+        const key = promoterCode.toLowerCase();
+        if (seenPromoters.has(key)) {
+          addError(`Duplicate promoter_code "${promoterCode}" appears more than once in this file`); continue;
+        }
+        const owner = promoterOwner.get(key);
+        if (owner && owner !== phone) {
+          addError(`Promoter code "${promoterCode}" is already assigned to another user in this tenant`); continue;
+        }
+        promoter = promoterCode;
+      }
+
+      seenPhones.add(phone);
+      if (promoter) seenPromoters.add(promoter.toLowerCase());
+      successRows.push({
+        phone, name, role: role as ManagedRole, vendorId,
+        promoterCode: promoter, promoterPresent: promoterCode !== '',
+      });
+    }
+
+    const batchId = randomUUID();
+    const auditData: Prisma.AuditLogCreateInput = {
+      action: 'IMPORT', entityType: 'USER', entityId: batchId, actorId: user.sub,
+      metadata: {
+        event: 'USER_BULK_UPLOAD', clientId, fileName: file.originalname,
+        rowCount: rows.length, successCount: successRows.length, errorCount: errorRows.length,
+      } as Prisma.InputJsonValue,
+    };
+
+    if (successRows.length > 0) {
+      const ops: Prisma.PrismaPromise<unknown>[] = successRows.map((r) =>
+        this.prisma.user.upsert({
+          where: { clientId_phone: { clientId, phone: r.phone } },
+          create: {
+            clientId, phone: r.phone, name: r.name, role: r.role,
+            vendorId: r.vendorId, promoterCode: r.promoterCode,
+          },
+          // SAFETY: an existing login is updated for name + promoter code ONLY (promoter is
+          // present-gated so a blank cell preserves the current code). role / vendor / isActive
+          // are intentionally never written here.
+          update: { name: r.name, ...(r.promoterPresent ? { promoterCode: r.promoterCode } : {}) },
+        }),
+      );
+      ops.push(this.prisma.auditLog.create({ data: auditData }));
+      await this.prisma.$transaction(ops);
+    } else {
+      await this.prisma.auditLog.create({ data: auditData });
+    }
+
+    return {
+      batchId,
+      rowCount: rows.length,
+      successCount: successRows.length,
+      errorCount: errorRows.length,
+      errorFileBase64: errorRows.length > 0 ? this.buildUserErrorFile(errorRows) : null,
+    };
+  }
+
+  /** Build the base64 rejection report — CSV-injection-safe via aoaToSheetSafe. */
+  private buildUserErrorFile(errorRows: UserErrorRow[]): string {
+    const headers = [...USER_ERROR_HEADERS];
+    const data = errorRows.map((r) => [
+      r.rowNumber, r.phone, r.name, r.role, r.vendor_code, r.promoter_code, r.error_remarks,
+    ]);
+    const ws = aoaToSheetSafe([headers, ...data]);
+    ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 6 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Errors');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    return buf.toString('base64');
   }
 
   // ── Internals ────────────────────────────────────────────────────────────────

@@ -145,4 +145,14 @@ export const SITE_UPLOAD_HEADERS = [
   'status',
 ] as const;
 
+/** The user bulk-upload template columns. Mirrors api USER_UPLOAD_HEADERS. */
+export const USER_UPLOAD_HEADERS = [
+  'phone',
+  'name',
+  'role',
+  'vendor_code',
+  'promoter_code',
+] as const;
+export const USER_UPLOAD_REQUIRED_HEADERS = ['phone', 'name', 'role'] as const;
+
 export const SITE_UPLOAD_REQUIRED_HEADERS = ['code', 'name'] as const;

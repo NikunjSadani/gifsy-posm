@@ -8,7 +8,10 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
@@ -33,6 +36,18 @@ export class UsersController {
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.users.get(user, id);
+  }
+
+  /**
+   * POST /v1/users/bulk-upload — Excel bulk-ingestion with a base64 rejection report. New phones
+   * are created; an existing phone updates ONLY name + promoter code (role/vendor never change).
+   */
+  @Post('bulk-upload')
+  @HttpCode(HttpStatus.OK)
+  // F2: cap the raw upload at 5 MB before it reaches the parser.
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  bulkUpload(@CurrentUser() user: JwtPayload, @UploadedFile() file: Express.Multer.File) {
+    return this.users.bulkUpload(user, file);
   }
 
   @Post()

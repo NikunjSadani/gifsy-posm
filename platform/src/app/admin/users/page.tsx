@@ -21,10 +21,13 @@ import { DataTable, type Column } from '@/components/admin/data-table';
 import { FormDialog } from '@/components/admin/form-dialog';
 import { ConfirmDialog } from '@/components/admin/confirm-dialog';
 import { StatusBadge } from '@/components/admin/status-badge';
+import { UploadPanel } from '@/components/admin/upload-panel';
 import { usersApi, vendorsApi, type UserCreate, type UserUpdate } from '@/lib/admin/api';
 import {
   MANAGED_ROLES,
   ROLE_LABELS,
+  USER_UPLOAD_HEADERS,
+  USER_UPLOAD_REQUIRED_HEADERS,
   isVendorRole,
   type AdminUser,
   type ManagedRole,
@@ -270,6 +273,28 @@ export default function UsersPage() {
         emptyDescription={search ? 'Try a different search.' : 'Create your first user to get started.'}
         rowClassName={(u) => (u.isActive ? undefined : 'opacity-60')}
       />
+
+      <div className="mt-6">
+        <UploadPanel
+          title="Bulk upload users (Excel)"
+          description={
+            <>Upload an .xlsx / .xls file. A new <code className="text-xs">phone</code> creates a login;
+            an existing phone updates only its name &amp; promoter code (role/vendor never change — use
+            Edit for that). Max 5 MB / 5000 rows per file.</>
+          }
+          headers={USER_UPLOAD_HEADERS}
+          requiredHeaders={USER_UPLOAD_REQUIRED_HEADERS}
+          hint={
+            <>
+              <code>role</code> is CLIENT_ADMIN / ASM / AUDITOR / VENDOR_HO / VENDOR_FIELD;{' '}
+              <code>vendor_code</code> is required for VENDOR_* roles (and must be empty otherwise);{' '}
+              <code>promoter_code</code> is optional and unique per tenant.
+            </>
+          }
+          upload={usersApi.bulkUpload}
+          onUploaded={() => void load()}
+        />
+      </div>
 
       <FormDialog
         open={editing !== null}
