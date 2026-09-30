@@ -1,6 +1,6 @@
 import {
   IsArray, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min,
-  ArrayMinSize, ArrayMaxSize, ValidateNested, IsISO8601, Equals,
+  ArrayMinSize, ArrayMaxSize, ValidateNested, IsISO8601, Equals, IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -60,18 +60,41 @@ export class DimensionsDto {
   unit: string;
 }
 
-/** One highlight rectangle of the on-image markup — normalised 0..1 to the image content box. */
-export class MarkupRectDto {
+/** One point of a freehand path — normalised 0..1 to the image content box. */
+export class MarkupPointDto {
   @IsNumber() @Min(0) @Max(1) x: number;
   @IsNumber() @Min(0) @Max(1) y: number;
-  @IsNumber() @Min(0) @Max(1) w: number;
-  @IsNumber() @Min(0) @Max(1) h: number;
 }
 
 /**
- * The field executive's on-image annotation marking WHERE the POSM install is proposed. Bounded
- * (≤10 normalised rects) so the stored blob can't grow unbounded — mirrors the FE `RecceMarkup`
- * (platform src/lib/markup.ts). Was a free-form object; tightened safely (no producer existed).
+ * One markup shape: a RECTANGLE box (type 'rect' + x/y/w/h) OR a FREEHAND path (type 'path' +
+ * points). All coordinates are normalised 0..1; a path is bounded to ≤400 points. The rect
+ * fields / `points` are optional at this level (a rect carries x/y/w/h, a path carries points) —
+ * completeness is enforced by the shared defensive `parseMarkup` on render (platform
+ * src/lib/markup.ts); this DTO's job is to type-restrict + BOUND the blob so it can't grow huge.
+ * The accept-set is a strict superset of the previous rect-only DTO.
+ */
+export class MarkupShapeDto {
+  @IsIn(['rect', 'path'])
+  type: 'rect' | 'path';
+
+  @IsOptional() @IsNumber() @Min(0) @Max(1) x?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) y?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) w?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) h?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(400, { message: 'A freehand path may have at most 400 points' })
+  @ValidateNested({ each: true })
+  @Type(() => MarkupPointDto)
+  points?: MarkupPointDto[];
+}
+
+/**
+ * The field executive's on-image annotation marking WHERE the POSM install is proposed — rectangle
+ * and/or freehand shapes. Bounded (≤10 shapes) so the stored blob can't grow unbounded — mirrors
+ * the FE `RecceMarkup` (platform src/lib/markup.ts).
  */
 export class MarkupDto {
   @Equals(1)
@@ -81,8 +104,8 @@ export class MarkupDto {
   @ArrayMinSize(1, { message: 'Markup must have at least 1 shape' })
   @ArrayMaxSize(10, { message: 'At most 10 markup shapes' })
   @ValidateNested({ each: true })
-  @Type(() => MarkupRectDto)
-  shapes: MarkupRectDto[];
+  @Type(() => MarkupShapeDto)
+  shapes: MarkupShapeDto[];
 }
 
 /** One planned POSM line at a site during recce. */

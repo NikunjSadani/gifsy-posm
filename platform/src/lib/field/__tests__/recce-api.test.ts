@@ -106,7 +106,7 @@ describe('rejectionLabel', () => {
 });
 
 describe('submit body carries markup', () => {
-  const markup: RecceMarkup = { version: 1, shapes: [{ x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] };
+  const markup: RecceMarkup = { version: 1, shapes: [{ type: 'rect', x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] };
 
   function line(overrides: Partial<CapturedReccePosm> = {}): CapturedReccePosm {
     return {
