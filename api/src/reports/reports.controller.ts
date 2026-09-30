@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Put, Query, StreamableFile } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ReportsService } from './reports.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
+import { ListOutletReportDto } from './dto/list-outlet-report.dto';
 
 /**
  * Reports console — per-tenant automated email digest configuration + preview + manual test send.
@@ -51,5 +52,32 @@ export class ReportsController {
   @HttpCode(HttpStatus.OK)
   sendNow(@CurrentUser() user: JwtPayload) {
     return this.reports.sendNow(user);
+  }
+
+  /**
+   * GET /v1/reports/outlet-execution — one paginated page of the Outlet Execution Report
+   * ({ columns, rows, total, page, limit }) for the on-screen table. Tenant-scoped in the service.
+   */
+  @Get('outlet-execution')
+  outletExecution(@CurrentUser() user: JwtPayload, @Query() query: ListOutletReportDto) {
+    return this.reports.outletExecution(user, query);
+  }
+
+  /**
+   * GET /v1/reports/outlet-execution.xlsx — the same report as a downloadable .xlsx (every matching
+   * row up to the server cap). Returned as a StreamableFile (passed through the global interceptor
+   * unwrapped) with an attachment disposition.
+   */
+  @Get('outlet-execution.xlsx')
+  async outletExecutionXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: ListOutletReportDto,
+  ): Promise<StreamableFile> {
+    const buffer = await this.reports.outletExecutionXlsx(user, query);
+    const stamp = new Date().toISOString().slice(0, 10);
+    return new StreamableFile(buffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="outlet-execution-${stamp}.xlsx"`,
+    });
   }
 }

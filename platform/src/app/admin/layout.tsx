@@ -13,7 +13,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3, Mail, Settings, HelpCircle, ShieldCheck } from 'lucide-react';
+import { LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3, Mail, Settings, HelpCircle, ShieldCheck, FileSpreadsheet } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { logout } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
@@ -29,6 +29,7 @@ const TABS = [
   { href: '/admin/manual', label: 'Manual tasks', icon: ClipboardList },
   { href: '/admin/ho-review', label: 'HO review', icon: ShieldCheck },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/admin/execution-report', label: 'Execution report', icon: FileSpreadsheet },
   { href: '/admin/reports', label: 'Email reports', icon: Mail },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];

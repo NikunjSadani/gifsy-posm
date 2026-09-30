@@ -10,6 +10,34 @@ import {
 } from './reports.config';
 import { istDateLabel, istDateOnlyUtc, istHour } from './reports.time';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
+import { ListOutletReportDto } from './dto/list-outlet-report.dto';
+import { tenantScope } from '../common/tenant-scope';
+import { buildXlsx } from '../common/xlsx';
+import {
+  OUTLET_REPORT_COLUMNS,
+  buildOutletExecutionRow,
+  type RepSite,
+} from './outlet-execution.helper';
+
+/** Hard cap on rows returned by the Outlet Execution xlsx export (bounds untrusted-scope work). */
+const OUTLET_REPORT_MAX_ROWS = 20_000;
+
+/** Prisma include that feeds the Outlet Execution row builder (one live recce + its install). */
+const OUTLET_REPORT_INCLUDE = {
+  vendor: { select: { name: true } },
+  recces: {
+    include: {
+      submittedBy: { select: { name: true, promoterCode: true } },
+      posms: { include: { posmType: { select: { name: true } } } },
+    },
+  },
+  installs: {
+    include: {
+      submittedBy: { select: { name: true, promoterCode: true } },
+      posms: { select: { reccePosmId: true, captureLat: true, captureLng: true, distanceFromRecce: true } },
+    },
+  },
+} satisfies Prisma.SiteInclude;
 
 /** The raw digest counts for one tenant (all tenant-scoped, never cross-tenant). */
 export interface DigestCounts {
@@ -400,5 +428,63 @@ export class ReportsService {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // ── Outlet Execution Report (owner spec 2026-09-30) ─────────────────────────────────
+
+  /**
+   * The tenant/vendor `where` for the report. Tenant-scoped like the admin dashboards: a
+   * CLIENT_ADMIN / assumed operator is pinned to their tenant; an un-assumed GIFSY_ADMIN is
+   * platform-wide (scope === undefined ⇒ no clientId filter). Text filters are ci-`contains`.
+   */
+  private outletReportWhere(user: JwtPayload, q: ListOutletReportDto): Prisma.SiteWhereInput {
+    const where: Prisma.SiteWhereInput = {};
+    const scope = tenantScope(user);
+    if (scope !== undefined) where.clientId = scope;
+    if (q.siteCode) where.code = { contains: q.siteCode, mode: 'insensitive' };
+    if (q.town) where.town = { contains: q.town, mode: 'insensitive' };
+    if (q.region) where.region = { contains: q.region, mode: 'insensitive' };
+    if (q.state) where.state = { contains: q.state, mode: 'insensitive' };
+    if (q.vendorId) where.vendorId = q.vendorId;
+    return where;
+  }
+
+  /** Load matching sites (with the report include) and map each to an ordered report row. */
+  private async loadOutletRows(
+    user: JwtPayload,
+    q: ListOutletReportDto,
+    skip: number,
+    take: number,
+  ): Promise<{ rows: Record<string, string>[]; total: number }> {
+    const where = this.outletReportWhere(user, q);
+    const [sites, total] = await Promise.all([
+      this.prisma.site.findMany({
+        where,
+        orderBy: [{ code: 'asc' }],
+        skip,
+        take,
+        include: OUTLET_REPORT_INCLUDE,
+      }),
+      this.prisma.site.count({ where }),
+    ]);
+    const rows = sites.map((s) => buildOutletExecutionRow(s as unknown as RepSite));
+    return { rows, total };
+  }
+
+  /** GET /v1/reports/outlet-execution — one paginated page of the report for the on-screen table. */
+  async outletExecution(user: JwtPayload, q: ListOutletReportDto) {
+    const page = Math.max(1, q.page ?? 1);
+    const limit = Math.min(500, Math.max(1, q.limit ?? 50));
+    const { rows, total } = await this.loadOutletRows(user, q, (page - 1) * limit, limit);
+    return { columns: [...OUTLET_REPORT_COLUMNS], rows, total, page, limit };
+  }
+
+  /** GET /v1/reports/outlet-execution.xlsx — every matching row (up to the cap) as an .xlsx buffer. */
+  async outletExecutionXlsx(user: JwtPayload, q: ListOutletReportDto): Promise<Buffer> {
+    const { rows } = await this.loadOutletRows(user, q, 0, OUTLET_REPORT_MAX_ROWS);
+    // A header-only sheet when there are no rows still carries the column contract (jsonToSheetSafe
+    // derives headers from the first row, so seed one all-empty row to keep the header present).
+    const sheetRows = rows.length > 0 ? rows : [Object.fromEntries(OUTLET_REPORT_COLUMNS.map((c) => [c, '']))];
+    return buildXlsx([{ name: 'Outlet Execution', rows: sheetRows }]);
   }
 }
