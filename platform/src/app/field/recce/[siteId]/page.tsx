@@ -12,7 +12,8 @@
  *
  * Each line (PosmCaptureCard): pick POSM type + dimensions, take a photo, auto-attach a GPS
  * fix, and upload to get a media key. Submit is disabled until at least one line is fully ready
- * with a geo fix. Success routes to /field/work where the just-submitted item appears.
+ * with a geo fix. Success returns to /field/sites (Recce to do) — the just-submitted site drops
+ * off that list — so the rep can pick the next outlet (not the Installation screen).
  *
  * The backend is the sole geo-fence authority: an out-of-fence or unverifiable fix comes back
  * as a 403 we surface honestly — this UI makes no "verified"/anti-spoof claims of its own.
@@ -191,7 +192,9 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
         return;
       }
       toast.success(isResubmit ? 'Recce re-submitted for approval.' : 'Recce submitted for approval.');
-      router.push('/field/work');
+      // Return to "Recce to do" (the just-submitted site drops off the list) so the rep can pick
+      // the next outlet — NOT the Installation screen.
+      router.push('/field/sites');
     } finally {
       setSubmitting(false);
       inFlight.current = false;
@@ -251,8 +254,8 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
           <span>
             This site already has a <span className="font-semibold">{existing.status.toLowerCase()}</span> recce, which
             can’t be re-captured.{' '}
-            <button onClick={() => router.push('/field/work')} className="font-semibold underline">
-              Go to My Work
+            <button onClick={() => router.push('/field/sites')} className="font-semibold underline">
+              Back to Recce to do
             </button>
           </span>
         </div>
