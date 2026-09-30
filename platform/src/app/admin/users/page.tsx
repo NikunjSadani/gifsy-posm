@@ -35,7 +35,7 @@ import { displayPhone } from '@/lib/admin/format';
 
 type Editing = { mode: 'create' } | { mode: 'edit'; user: AdminUser } | null;
 
-const emptyForm = { name: '', phone: '', role: '' as '' | ManagedRole, vendorId: '' };
+const emptyForm = { name: '', phone: '', role: '' as '' | ManagedRole, vendorId: '', promoterCode: '' };
 
 export default function UsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -108,14 +108,20 @@ export default function UsersPage() {
     setEditing({ mode: 'edit', user: u });
     // Stored phone is +91XXXXXXXXXX — show the bare 10 digits for editing.
     const bare = /^\+91(\d{10})$/.exec(u.phone)?.[1] ?? u.phone;
-    setForm({ name: u.name, phone: bare, role: u.role, vendorId: u.vendorId ?? '' });
+    setForm({ name: u.name, phone: bare, role: u.role, vendorId: u.vendorId ?? '', promoterCode: u.promoterCode ?? '' });
     setFieldErrors({});
     setFormError(null);
   };
 
-  // When the role flips away from a vendor role, drop any stale vendorId selection.
+  // When the role flips away from a vendor role, drop any stale vendorId + promoter code (a
+  // promoter code is a field-user identifier — it only applies to vendor logins).
   const onRoleChange = (role: string) => {
-    setForm((f) => ({ ...f, role: role as ManagedRole, vendorId: isVendorRole(role) ? f.vendorId : '' }));
+    setForm((f) => ({
+      ...f,
+      role: role as ManagedRole,
+      vendorId: isVendorRole(role) ? f.vendorId : '',
+      promoterCode: isVendorRole(role) ? f.promoterCode : '',
+    }));
   };
 
   const submit = async () => {
@@ -136,6 +142,8 @@ export default function UsersPage() {
         role,
         // A vendor role sends its vendorId; a non-vendor role clears the link (null).
         vendorId: vendorLinked ? form.vendorId : null,
+        // Send the promoter code for vendor logins; a non-vendor role sends "" to clear it.
+        promoterCode: vendorLinked ? form.promoterCode.trim() : '',
       };
       res = await usersApi.update(editing.user.id, body);
     } else {
@@ -144,6 +152,7 @@ export default function UsersPage() {
         phone: form.phone.trim(),
         role,
         ...(vendorLinked ? { vendorId: form.vendorId } : {}),
+        ...(vendorLinked && form.promoterCode.trim() ? { promoterCode: form.promoterCode.trim() } : {}),
       };
       res = await usersApi.create(body);
     }
@@ -193,6 +202,11 @@ export default function UsersPage() {
       key: 'vendor',
       header: 'Vendor',
       render: (u) => <span className="text-gray-600">{u.vendorId ? vendorName.get(u.vendorId) ?? '—' : '—'}</span>,
+    },
+    {
+      key: 'promoterCode',
+      header: 'Promoter code',
+      render: (u) => <span className="font-mono text-gray-600">{u.promoterCode || '—'}</span>,
     },
     { key: 'status', header: 'Status', render: (u) => <StatusBadge active={u.isActive} /> },
     {
@@ -301,14 +315,23 @@ export default function UsersPage() {
           error={fieldErrors.role}
         />
         {showVendorPicker && (
-          <Select
-            label="Vendor"
-            placeholder={vendorOptions.length ? 'Select a vendor' : 'No active vendors — create one first'}
-            options={vendorOptions}
-            value={form.vendorId || undefined}
-            onValueChange={(v) => setForm((f) => ({ ...f, vendorId: v }))}
-            error={fieldErrors.vendorId}
-          />
+          <>
+            <Select
+              label="Vendor"
+              placeholder={vendorOptions.length ? 'Select a vendor' : 'No active vendors — create one first'}
+              options={vendorOptions}
+              value={form.vendorId || undefined}
+              onValueChange={(v) => setForm((f) => ({ ...f, vendorId: v }))}
+              error={fieldErrors.vendorId}
+            />
+            <Input
+              label="Promoter code"
+              placeholder="Optional — field-user promoter/employee ID"
+              value={form.promoterCode}
+              onChange={(e) => setForm((f) => ({ ...f, promoterCode: e.target.value }))}
+              maxLength={60}
+            />
+          </>
         )}
       </FormDialog>
 

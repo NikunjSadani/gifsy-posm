@@ -36,6 +36,12 @@ export class UpdateUserDto {
   @IsString()
   vendorId?: string | null;
 
+  /** Promoter/employee code; "" clears it. Absence (undefined) leaves it unchanged. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  promoterCode?: string;
+
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;

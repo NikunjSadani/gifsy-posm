@@ -29,6 +29,7 @@ const PUBLIC_SELECT = {
   name: true,
   role: true,
   vendorId: true,
+  promoterCode: true,
   isActive: true,
   createdAt: true,
   updatedAt: true,
@@ -94,13 +95,14 @@ export class UsersService {
           name: dto.name,
           role: dto.role,
           vendorId: dto.vendorId ?? null,
+          promoterCode: this.cleanPromoterCode(dto.promoterCode),
         },
         select: PUBLIC_SELECT,
       });
       await this.audit(user, 'CREATE', created.id, undefined, created);
       return created;
     } catch (e) {
-      this.rethrowDuplicate(e, phone);
+      this.rethrowDuplicate(e, phone, this.cleanPromoterCode(dto.promoterCode));
     }
   }
 
@@ -134,6 +136,9 @@ export class UsersService {
           ...(dto.name !== undefined ? { name: dto.name } : {}),
           ...(dto.role !== undefined ? { role: dto.role } : {}),
           ...(dto.vendorId !== undefined ? { vendorId: dto.vendorId } : {}),
+          ...(dto.promoterCode !== undefined
+            ? { promoterCode: this.cleanPromoterCode(dto.promoterCode) }
+            : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
         },
         select: PUBLIC_SELECT,
@@ -152,7 +157,7 @@ export class UsersService {
       }
       return updated;
     } catch (e) {
-      this.rethrowDuplicate(e, nextPhone ?? existing.phone);
+      this.rethrowDuplicate(e, nextPhone ?? existing.phone, this.cleanPromoterCode(dto.promoterCode));
     }
   }
 
@@ -260,8 +265,33 @@ export class UsersService {
     return target;
   }
 
-  private rethrowDuplicate(e: unknown, phone: string): never {
+  /**
+   * Normalise a promoter code: trim, and treat an empty string as "cleared" (null). Keeping empty
+   * → null means a blank field never trips the (clientId, promoterCode) unique against another
+   * blank (Postgres NULLs are distinct) and the column stays truly absent rather than "".
+   */
+  private cleanPromoterCode(raw: string | undefined): string | null {
+    if (raw === undefined) return null;
+    const t = raw.trim();
+    return t === '' ? null : t;
+  }
+
+  /**
+   * Map a Prisma P2002 to a friendly 409. There are TWO tenant-unique constraints on User —
+   * (clientId, phone) and (clientId, promoterCode) — so disambiguate by the violated target and
+   * name the right field (a promoter-code clash must not be reported as a phone clash).
+   */
+  private rethrowDuplicate(e: unknown, phone: string, promoterCode: string | null): never {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      const target = e.meta?.target;
+      const hitPromoter = Array.isArray(target)
+        ? target.includes('promoterCode')
+        : typeof target === 'string' && target.includes('promoterCode');
+      if (hitPromoter) {
+        throw new ConflictException(
+          `Promoter code "${promoterCode ?? ''}" is already assigned to another user in this tenant.`,
+        );
+      }
       throw new ConflictException(
         `A user with phone ${phone} already exists in this tenant.`,
       );

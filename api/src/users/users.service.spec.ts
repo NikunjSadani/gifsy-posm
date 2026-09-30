@@ -109,6 +109,26 @@ describe('UsersService', () => {
         service.create(clientAdmin, { phone: '9876543210', name: 'A', role: 'ASM' } as any),
       ).rejects.toBeInstanceOf(ConflictException);
     });
+
+    it('persists a promoter code on a vendor login', async () => {
+      mockPrisma.vendor.findFirst.mockResolvedValue({ id: 'ven1' });
+      mockPrisma.user.create.mockResolvedValue({ id: 'u1', clientId: 'kwality', role: 'VENDOR_FIELD', vendorId: 'ven1', promoterCode: 'P100', isActive: true, createdAt: new Date(), updatedAt: new Date() });
+      await service.create(clientAdmin, { phone: '9876543210', name: 'F', role: 'VENDOR_FIELD', vendorId: 'ven1', promoterCode: ' P100 ' } as any);
+      // trimmed to a clean code
+      expect(mockPrisma.user.create.mock.calls[0][0].data.promoterCode).toBe('P100');
+    });
+
+    it('a duplicate (clientId, promoterCode) is reported as a PROMOTER-CODE clash, not a phone clash', async () => {
+      mockPrisma.vendor.findFirst.mockResolvedValue({ id: 'ven1' });
+      // P2002 whose meta.target names the promoter-code unique index.
+      const promoterDup = new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002', clientVersion: 'x', meta: { target: ['clientId', 'promoterCode'] },
+      } as any);
+      mockPrisma.user.create.mockRejectedValue(promoterDup);
+      await expect(
+        service.create(clientAdmin, { phone: '9876543210', name: 'F', role: 'VENDOR_FIELD', vendorId: 'ven1', promoterCode: 'P100' } as any),
+      ).rejects.toThrow(/promoter code .* already assigned/i);
+    });
   });
 
   describe('update — invariant re-checked against the resulting role', () => {

@@ -44,4 +44,13 @@ export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
   vendorId?: string;
+
+  /**
+   * Field-user promoter/employee code (the report's "Promoter ID" column). Optional and owner-
+   * supplied; unique per tenant when set. An empty string is treated as "no code" by the service.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  promoterCode?: string;
 }

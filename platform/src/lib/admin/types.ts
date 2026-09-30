@@ -64,6 +64,7 @@ export interface AdminUser {
   name: string;
   role: ManagedRole;
   vendorId: string | null;
+  promoterCode: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

@@ -68,6 +68,8 @@ export interface UserCreate {
   role: ManagedRole;
   /** Required for VENDOR_* roles; must be absent otherwise. */
   vendorId?: string;
+  /** Optional promoter/employee code (report "Promoter ID"); unique per tenant when set. */
+  promoterCode?: string;
 }
 export interface UserUpdate {
   name?: string;
@@ -75,6 +77,8 @@ export interface UserUpdate {
   role?: ManagedRole;
   /** A vendor id, or null to clear the link; undefined leaves it unchanged. */
   vendorId?: string | null;
+  /** Promoter code; "" clears it; undefined leaves it unchanged. */
+  promoterCode?: string;
   isActive?: boolean;
 }
 
