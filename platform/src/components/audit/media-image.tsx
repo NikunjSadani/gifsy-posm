@@ -77,7 +77,14 @@ export function MediaImage({
   }
 
   return (
-    <div className={`relative overflow-hidden bg-gray-100 ${className}`}>
+    <div
+      className={`relative overflow-hidden bg-gray-100 ${
+        // Natural-aspect images have no height until decoded, so while loading reserve a 4:3 box
+        // (the tile shape) — the spinner stays visible and the before/after row doesn't collapse.
+        // Once loaded, natural aspect governs; the recce/install photos are 4:3, so there's no jump.
+        natural && !loaded ? 'aspect-[4/3]' : ''
+      } ${className}`}
+    >
       {!loaded && (
         <div className="absolute inset-0 flex items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
