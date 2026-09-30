@@ -16,7 +16,7 @@ import { normalizeIndianPhone } from '../common/phone';
 import { aoaToSheetSafe } from '../common/xlsx';
 import { CreateUserDto, ManagedRole, MANAGED_ROLES } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { USER_UPLOAD_REQUIRED_HEADERS, USER_ERROR_HEADERS } from './users.constants';
+import { USER_UPLOAD_HEADERS, USER_UPLOAD_REQUIRED_HEADERS, USER_ERROR_HEADERS } from './users.constants';
 
 /** A rejected bulk-upload row — echoes the source cells plus the reason. */
 interface UserErrorRow {
@@ -391,6 +391,21 @@ export class UsersService {
       errorCount: errorRows.length,
       errorFileBase64: errorRows.length > 0 ? this.buildUserErrorFile(errorRows) : null,
     };
+  }
+
+  /**
+   * Build a blank bulk-upload template — a single sheet whose only row is the header contract
+   * (the user fills data from row 2). Header-only, so `jsonToSheetSafe` can't be used (it derives
+   * headers from the first DATA row); `aoaToSheetSafe` writes the header row directly and keeps the
+   * CSV-injection guard. Returned as a Buffer for the controller's StreamableFile.
+   */
+  buildUploadTemplate(): Buffer {
+    const headers = [...USER_UPLOAD_HEADERS];
+    const ws = aoaToSheetSafe([headers]);
+    ws['!cols'] = headers.map((h) => ({ wch: h.length + 8 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Users');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
   /** Build the base64 rejection report — CSV-injection-safe via aoaToSheetSafe. */

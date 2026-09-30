@@ -10,6 +10,7 @@ import {
   HttpStatus,
   UploadedFile,
   UseInterceptors,
+  StreamableFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -36,6 +37,19 @@ export class UsersController {
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.users.get(user, id);
+  }
+
+  /**
+   * GET /v1/users/bulk-upload/template — a blank .xlsx (header row only) to fill and re-upload.
+   * Declared before the POST so it is unambiguous; served as a StreamableFile with an attachment
+   * disposition (the global interceptor passes StreamableFile through unwrapped).
+   */
+  @Get('bulk-upload/template')
+  template(): StreamableFile {
+    return new StreamableFile(this.users.buildUploadTemplate(), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="user-upload-template.xlsx"',
+    });
   }
 
   /**

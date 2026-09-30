@@ -171,6 +171,19 @@ describe('UsersService.bulkUpload', () => {
     ).rejects.toThrow(/Missing required columns/i);
   });
 
+  it('buildUploadTemplate returns a valid .xlsx whose only row is the header contract', () => {
+    const { prisma, auth } = makePrisma();
+    const svc = new UsersService(prisma, auth);
+    const buf = svc.buildUploadTemplate();
+    // PK zip magic → a real xlsx.
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4b);
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json<string[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: false }) as string[][];
+    expect(rows).toHaveLength(1); // header row only, no data rows
+    expect(rows[0]).toEqual(['phone', 'name', 'role', 'vendor_code', 'promoter_code']);
+  });
+
   it('F8: an un-assumed GIFSY_ADMIN is refused (400), no parsing/DB work', async () => {
     const { prisma, auth, upsert } = makePrisma();
     const svc = new UsersService(prisma, auth);

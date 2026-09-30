@@ -23,6 +23,8 @@ export function UploadPanel({
   requiredHeaders,
   hint,
   upload,
+  templateUrl,
+  templateFileName = 'upload-template.xlsx',
   onUploaded,
 }: {
   title: string;
@@ -31,13 +33,43 @@ export function UploadPanel({
   requiredHeaders: readonly string[];
   hint?: React.ReactNode;
   upload: (file: File) => Promise<ApiResponse<BulkUploadResult>>;
+  /** When set, shows a "Download template" button that fetches this auth-gated blank .xlsx. */
+  templateUrl?: string;
+  templateFileName?: string;
   onUploaded?: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkUploadResult | null>(null);
+
+  const downloadTemplate = async () => {
+    if (!templateUrl) return;
+    setDownloadingTemplate(true);
+    setError(null);
+    try {
+      const res = await fetch(templateUrl, { method: 'GET', credentials: 'include' });
+      if (!res.ok) {
+        setError(res.status === 403 ? 'You are not allowed to download the template.' : `Template download failed (${res.status}).`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = templateFileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch {
+      setError('Could not download the template. Please try again.');
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  };
 
   const pick = (f: File | null) => {
     setError(null);
@@ -90,7 +122,20 @@ export function UploadPanel({
 
       {/* Template contract */}
       <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 mb-4">
-        <p className="text-xs font-medium text-gray-600 mb-1.5">Template columns (header row 1):</p>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <p className="text-xs font-medium text-gray-600">Template columns (header row 1):</p>
+          {templateUrl && (
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              disabled={downloadingTemplate}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 active:scale-95 transition-all"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {downloadingTemplate ? 'Preparing…' : 'Download template'}
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {headers.map((h) => {
             const required = (requiredHeaders as readonly string[]).includes(h);

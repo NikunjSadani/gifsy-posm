@@ -292,6 +292,8 @@ export default function UsersPage() {
             </>
           }
           upload={usersApi.bulkUpload}
+          templateUrl="/api/users/bulk-upload/template"
+          templateFileName="user-upload-template.xlsx"
           onUploaded={() => void load()}
         />
       </div>
