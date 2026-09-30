@@ -54,7 +54,7 @@ export default function AuditDetailPage({ params }: { params: Promise<{ id: stri
   const [rejectOpen, setRejectOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string; markup?: unknown } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -199,7 +199,7 @@ export default function AuditDetailPage({ params }: { params: Promise<{ id: stri
                 key={row.installPosmId}
                 row={row}
                 index={i + 1}
-                onEnlarge={(src, alt) => setLightbox({ src, alt })}
+                onEnlarge={(src, alt, markup) => setLightbox({ src, alt, markup })}
               />
             ))}
           </div>
@@ -246,7 +246,7 @@ export default function AuditDetailPage({ params }: { params: Promise<{ id: stri
         </>
       )}
 
-      <Lightbox src={lightbox?.src ?? null} alt={lightbox?.alt ?? ''} onClose={() => setLightbox(null)} />
+      <Lightbox src={lightbox?.src ?? null} alt={lightbox?.alt ?? ''} markup={lightbox?.markup} onClose={() => setLightbox(null)} />
     </div>
   );
 }

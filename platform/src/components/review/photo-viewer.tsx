@@ -15,27 +15,28 @@ import { useFocusTrap } from './use-focus-trap';
  * placeholder; a photo that fails to load shows a broken-image state rather than a blank box.
  */
 export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
-  const [zoomKey, setZoomKey] = useState<string | null>(null);
+  // The enlarged photo carries its markup so the lightbox shows the field's markings too.
+  const [zoom, setZoom] = useState<{ key: string; markup: unknown } | null>(null);
   const [zoomErrored, setZoomErrored] = useState(false);
   const lightboxRef = useRef<HTMLDivElement | null>(null);
 
   // Fresh error state whenever a new photo is enlarged.
   useEffect(() => {
     setZoomErrored(false);
-  }, [zoomKey]);
+  }, [zoom]);
 
   // Escape closes the lightbox.
   useEffect(() => {
-    if (!zoomKey) return;
+    if (!zoom) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setZoomKey(null);
+      if (e.key === 'Escape') setZoom(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zoomKey]);
+  }, [zoom]);
 
   // Focus moves into the lightbox on open, is trapped, and returns to the tile on close.
-  useFocusTrap(zoomKey !== null, lightboxRef);
+  useFocusTrap(zoom !== null, lightboxRef);
 
   if (posms.length === 0) {
     return (
@@ -49,24 +50,24 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
     <>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {posms.map((p) => (
-          <PosmTile key={p.id} posm={p} onZoom={setZoomKey} />
+          <PosmTile key={p.id} posm={p} onZoom={(key, markup) => setZoom({ key, markup })} />
         ))}
       </div>
 
-      {zoomKey && (
+      {zoom && (
         <div
           ref={lightboxRef}
           tabIndex={-1}
           className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 outline-none"
-          onClick={() => setZoomKey(null)}
+          onClick={() => setZoom(null)}
           role="dialog"
           aria-modal="true"
           aria-label="Enlarged photo"
         >
           <button
-            onClick={() => setZoomKey(null)}
+            onClick={() => setZoom(null)}
             aria-label="Close"
-            className="absolute top-4 right-4 text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-full p-2 active:scale-95 transition-all"
+            className="absolute top-4 right-4 z-10 text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-full p-2 active:scale-95 transition-all"
           >
             <X className="h-6 w-6" />
           </button>
@@ -79,14 +80,18 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
               <span className="text-sm">Photo failed to load</span>
             </div>
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={mediaSrc(zoomKey)}
-              alt="POSM photo (enlarged)"
-              className="max-h-[90vh] max-w-full rounded-lg object-contain"
-              onClick={(e) => e.stopPropagation()}
-              onError={() => setZoomErrored(true)}
-            />
+            // The img sizes to its natural aspect (capped to the viewport, no object-contain), so
+            // this relative wrapper's box equals the image box and the markup overlay aligns.
+            <div className="relative inline-block" onClick={(e) => e.stopPropagation()}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={mediaSrc(zoom.key)}
+                alt="POSM photo (enlarged)"
+                className="block max-h-[90vh] max-w-[92vw] rounded-lg"
+                onError={() => setZoomErrored(true)}
+              />
+              <MarkupOverlay markup={zoom.markup} />
+            </div>
           )}
         </div>
       )}
@@ -94,7 +99,7 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
   );
 }
 
-function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => void }) {
+function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string, markup: unknown) => void }) {
   const [errored, setErrored] = useState(false);
   const photo = posm.photo;
   const zoomable = !!photo && !errored;
@@ -103,7 +108,7 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => 
   const qualityFlags = posmQualityFlags(posm.qualityFlags);
 
   const openZoom = () => {
-    if (zoomable && photo) onZoom(photo.key);
+    if (zoomable && photo) onZoom(photo.key, posm.markup);
   };
 
   return (
