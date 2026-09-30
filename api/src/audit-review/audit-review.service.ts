@@ -219,6 +219,9 @@ export class AuditReviewService {
             auditedAt: new Date(),
             rejectionReasonCode: dto.reasonCode as RejectReasonCode,
             rejectionReason: dto.reason ?? null,
+            // Escalate to HO/Admin: an audit rejection is not terminal — it awaits HO review
+            // (owner decision 2026-09-30). HO approve overrides this reject; HO reject upholds it.
+            hoReviewStatus: 'PENDING',
           },
         })
         .catch((e) => this.conflictOnLostRace(e));
@@ -229,7 +232,12 @@ export class AuditReviewService {
         'REJECT',
         id,
         { status: inst.status },
-        { status: 'AUDIT_REJECTED', reasonCode: dto.reasonCode, reason: dto.reason ?? null },
+        {
+          status: 'AUDIT_REJECTED',
+          reasonCode: dto.reasonCode,
+          reason: dto.reason ?? null,
+          hoReviewStatus: 'PENDING',
+        },
       );
       return updated;
     });

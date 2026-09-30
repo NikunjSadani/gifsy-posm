@@ -178,6 +178,8 @@ describe('AuditReviewService.approve/reject — transitions', () => {
     const data = fns.installation.update.mock.calls[0][0].data;
     expect(data.status).toBe('AUDIT_REJECTED');
     expect(data.rejectionReasonCode).toBe('POSM_NOT_VISIBLE');
+    // Escalation: an audit reject is not terminal — it stamps hoReviewStatus PENDING for HO review.
+    expect(data.hoReviewStatus).toBe('PENDING');
     expect(fns.auditLog.create.mock.calls[0][0].data.action).toBe('REJECT');
   });
 

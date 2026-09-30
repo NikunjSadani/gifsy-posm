@@ -35,6 +35,7 @@ import { RecceModule }        from './recce/recce.module';
 import { InstallationModule } from './installation/installation.module';
 import { ApprovalModule }     from './approval/approval.module';
 import { AuditReviewModule }  from './audit-review/audit-review.module';
+import { HoReviewModule }     from './ho-review/ho-review.module';
 import { MediaModule }        from './media/media.module';
 
 // Manual workflow — ad-hoc admin-defined task pipeline (separate from recce→install)
@@ -90,6 +91,7 @@ import { SettingsModule }     from './settings/settings.module';
     InstallationModule,
     ApprovalModule,
     AuditReviewModule,
+    HoReviewModule,
     MediaModule,
 
     // Manual workflow — ad-hoc admin-defined task pipeline
