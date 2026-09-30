@@ -1,6 +1,6 @@
 import {
-  IsArray, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Max, MaxLength, Min,
-  ArrayMinSize, ArrayMaxSize, ValidateNested, IsISO8601,
+  IsArray, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min,
+  ArrayMinSize, ArrayMaxSize, ValidateNested, IsISO8601, Equals,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -60,6 +60,31 @@ export class DimensionsDto {
   unit: string;
 }
 
+/** One highlight rectangle of the on-image markup — normalised 0..1 to the image content box. */
+export class MarkupRectDto {
+  @IsNumber() @Min(0) @Max(1) x: number;
+  @IsNumber() @Min(0) @Max(1) y: number;
+  @IsNumber() @Min(0) @Max(1) w: number;
+  @IsNumber() @Min(0) @Max(1) h: number;
+}
+
+/**
+ * The field executive's on-image annotation marking WHERE the POSM install is proposed. Bounded
+ * (≤10 normalised rects) so the stored blob can't grow unbounded — mirrors the FE `RecceMarkup`
+ * (platform src/lib/markup.ts). Was a free-form object; tightened safely (no producer existed).
+ */
+export class MarkupDto {
+  @Equals(1)
+  version: 1;
+
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Markup must have at least 1 shape' })
+  @ArrayMaxSize(10, { message: 'At most 10 markup shapes' })
+  @ValidateNested({ each: true })
+  @Type(() => MarkupRectDto)
+  shapes: MarkupRectDto[];
+}
+
 /** One planned POSM line at a site during recce. */
 export class ReccePosmLineDto {
   /** A PosmType id in THIS tenant (validated server-side). */
@@ -75,10 +100,11 @@ export class ReccePosmLineDto {
   @Type(() => PhotoDto)
   photo: PhotoDto;
 
-  /** Optional on-image marked install-area annotation (free-form JSON blob). */
+  /** Optional on-image annotation marking where the POSM install is proposed. */
   @IsOptional()
-  @IsObject()
-  markup?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => MarkupDto)
+  markup?: MarkupDto;
 }
 
 /**

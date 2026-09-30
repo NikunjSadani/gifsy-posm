@@ -15,6 +15,7 @@
 
 import { api } from '@/lib/api-client';
 import type { CapturedReccePosm } from '@/components/field/capture/PosmCaptureCard';
+import type { RecceMarkup } from '@/lib/markup';
 
 /** The recce lifecycle status (mirrors the backend `RecceStatus` enum). */
 export type RecceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
@@ -104,9 +105,37 @@ export function fetchRecce(id: string) {
   return api.get<RecceDetail>(`/api/recce/${encodeURIComponent(id)}`);
 }
 
+/**
+ * One `posms[]` entry of the recce POST body (create + resubmit). Mirrors the backend
+ * `CreateRecceDto`/`ResubmitRecceDto` POSM shape: the required capture fields plus the OPTIONAL
+ * `markup` blob (present only when the field user annotated the photo).
+ */
+export interface ReccePosmBody {
+  posmTypeId: string;
+  dimensions: { width: number; height: number; unit: string };
+  photo: { key: string; geo: CapturedReccePosm['photo']['geo'] };
+  markup?: RecceMarkup;
+}
+
+/**
+ * Map a captured line to its POST-body entry, passing `markup` through only when set (an
+ * un-annotated line omits the key entirely rather than sending `undefined`/null).
+ */
+function toPosmBody(p: CapturedReccePosm): ReccePosmBody {
+  return {
+    posmTypeId: p.posmTypeId,
+    dimensions: p.dimensions,
+    photo: p.photo,
+    ...(p.markup ? { markup: p.markup } : {}),
+  };
+}
+
 /** Submit a fresh recce for a site (∅ → SUBMITTED). */
 export function submitRecce(siteId: string, posms: CapturedReccePosm[]) {
-  return api.post<{ id: string; status: RecceStatus }>('/api/recce', { siteId, posms });
+  return api.post<{ id: string; status: RecceStatus }>('/api/recce', {
+    siteId,
+    posms: posms.map(toPosmBody),
+  });
 }
 
 /**
@@ -116,7 +145,7 @@ export function submitRecce(siteId: string, posms: CapturedReccePosm[]) {
 export function resubmitRecce(recceId: string, posms: CapturedReccePosm[]) {
   return api.post<{ id: string; status: RecceStatus }>(
     `/api/recce/${encodeURIComponent(recceId)}/resubmit`,
-    { posms },
+    { posms: posms.map(toPosmBody) },
   );
 }
 

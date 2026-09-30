@@ -5,6 +5,7 @@ import { X, ImageOff, MapPin, AlertTriangle } from 'lucide-react';
 import type { ReccePosm } from '@/lib/review/api';
 import { mediaSrc, dimensionsLabel, posmQualityFlags } from '@/lib/review/api';
 import { cn } from '@/lib/utils';
+import { MarkupOverlay } from '@/components/ui/markup-overlay';
 import { useFocusTrap } from './use-focus-trap';
 
 /**
@@ -109,7 +110,10 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => 
     <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden shadow-sm">
       <div
         className={cn(
-          'relative aspect-[4/3] bg-gray-100 flex items-center justify-center outline-none',
+          'relative bg-gray-100 outline-none',
+          // Placeholder states keep the stable 4:3 tile; a real photo renders at its natural
+          // aspect (block w-full h-auto) so the markup overlay's content box matches the image.
+          !zoomable && 'aspect-[4/3] flex items-center justify-center',
           zoomable && 'cursor-zoom-in focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)]',
         )}
         {...(zoomable
@@ -140,14 +144,19 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string) => 
             <span className="text-xs">Photo failed to load</span>
           </div>
         ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={mediaSrc(photo.key)}
-            alt={`POSM slot ${posm.slotNo}${posm.posmType ? ` — ${posm.posmType.name}` : ''}`}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            onError={() => setErrored(true)}
-          />
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={mediaSrc(photo.key)}
+              alt={`POSM slot ${posm.slotNo}${posm.posmType ? ` — ${posm.posmType.name}` : ''}`}
+              className="block w-full h-auto"
+              loading="lazy"
+              onError={() => setErrored(true)}
+            />
+            {/* Recce markup — WHERE the install is proposed. Sibling of the img so the
+                0..1 coords map to the image content box (img is w-full h-auto = the box). */}
+            <MarkupOverlay markup={posm.markup} />
+          </>
         )}
         <span className="absolute top-2 left-2 bg-black/60 text-white text-xs font-semibold rounded-md px-2 py-0.5">
           Slot {posm.slotNo}

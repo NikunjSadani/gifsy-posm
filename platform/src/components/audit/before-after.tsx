@@ -8,6 +8,7 @@
 
 import { Ruler, AlertTriangle } from 'lucide-react';
 import { MediaImage } from './media-image';
+import { MarkupOverlay } from '@/components/ui/markup-overlay';
 import { GeoBadge } from './geo-badge';
 import {
   activeQualityFlags,
@@ -83,8 +84,11 @@ export function BeforeAfter({
           <MediaImage
             photo={row.reccePhoto}
             alt={`Recce photo for ${row.posmType.name}`}
-            className="aspect-[4/3] m-2 rounded-xl"
+            /* No fixed aspect: overlay mode renders the recce photo at its natural aspect so
+               the markup (WHERE the POSM install is proposed) aligns to the image content box. */
+            className="m-2 rounded-xl"
             onEnlarge={onEnlarge}
+            overlay={<MarkupOverlay markup={row.recceMarkup} />}
           />
           <p className="px-3 pb-2.5 text-[11px] text-gray-500 font-mono truncate">
             {recceCoords ?? 'No geotag'}
@@ -100,7 +104,10 @@ export function BeforeAfter({
           <MediaImage
             photo={row.installPhoto}
             alt={`Installation photo for ${row.posmType.name}`}
-            className="aspect-[4/3] m-2 rounded-xl"
+            /* Natural aspect (no fixed aspect-*) so it sizes identically to the overlaid recce
+               photo on the left — a fixed 4/3 here would mismatch the before/after columns. */
+            className="m-2 rounded-xl"
+            fitToWidth
             onEnlarge={onEnlarge}
           />
           <p className="px-3 pb-2.5 text-[11px] text-gray-500 font-mono truncate">

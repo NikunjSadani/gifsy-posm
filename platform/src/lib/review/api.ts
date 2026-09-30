@@ -16,6 +16,7 @@
 ─────────────────────────────────────────────────────────────────────────────── */
 
 import { api, type ApiResponse } from '@/lib/api-client';
+import type { RecceMarkup } from '@/lib/markup';
 
 // ─── Domain types (mirror ApprovalService response shapes) ─────────────────────
 
@@ -69,7 +70,13 @@ export interface ReccePosm {
    */
   dimensions: unknown;
   photo: MediaRef | null;
-  markup: unknown | null;
+  /**
+   * Raw stored recce markup (WHERE the install is proposed) or null. Declared as the parsed
+   * shape for documentation, but the value is UNVALIDATED off the wire — always render it via
+   * `<MarkupOverlay>`, whose `parseMarkup` is the single validation point (a legacy/garbage
+   * value degrades to no overlay rather than a crash). Never trust the fields without parsing.
+   */
+  markup: RecceMarkup | null;
   /** Advisory per-photo quality flags (blur/dark/too-bright/weak-GPS); `null` for legacy recces. */
   qualityFlags: ReccePosmQualityFlags | null;
 }

@@ -23,6 +23,7 @@
 ─────────────────────────────────────────────────────────────────────────────── */
 
 import { api, type ApiResponse } from '@/lib/api-client';
+import type { RecceMarkup } from '@/lib/markup';
 
 // ── Wire types (mirror the backend AuditReviewService payloads) ───────────────
 
@@ -72,7 +73,13 @@ export interface CompareRow {
   dimensions: unknown;
   reccePhoto: MediaRef | null;
   installPhoto: MediaRef | null;
-  recceMarkup: unknown;
+  /**
+   * Raw stored recce markup (WHERE the install was proposed) or null. Declared as the parsed
+   * shape for documentation, but the value is UNVALIDATED off the wire — always render it via
+   * `<MarkupOverlay>`, whose `parseMarkup` is the single validation point (a legacy/garbage
+   * value degrades to no overlay rather than a crash). Never trust the fields without parsing.
+   */
+  recceMarkup: RecceMarkup | null;
   installGeo: { lat: number | null; lng: number | null };
   /** true = inside fence · false = outside fence · null = not verified. */
   geoFenceOk: boolean | null;

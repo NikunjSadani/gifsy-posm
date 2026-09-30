@@ -1,12 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the network edge so we can assert the exact POST body the submit helpers build.
+// `vi.hoisted` runs before the hoisted vi.mock factory, so `post` is initialised in time.
+const { post } = vi.hoisted(() => ({
+  post: vi.fn((_path: string, _body?: unknown) =>
+    Promise.resolve({ success: true, data: { id: 'r1', status: 'SUBMITTED' } }),
+  ),
+}));
+vi.mock('@/lib/api-client', () => ({ api: { post, get: vi.fn() } }));
+
 import {
   groupRecces,
   findSiteRecce,
   rejectionLabel,
+  submitRecce,
+  resubmitRecce,
   RECCE_STATUS_ORDER,
   type RecceListRow,
   type RecceStatus,
 } from '@/lib/field/recce-api';
+import type { CapturedReccePosm } from '@/components/field/capture/PosmCaptureCard';
+import type { RecceMarkup } from '@/lib/markup';
 
 /** Minimal recce-row factory for the grouping/lookup fixtures. */
 function row(partial: Partial<RecceListRow> & Pick<RecceListRow, 'id' | 'status'>): RecceListRow {
@@ -88,5 +102,42 @@ describe('rejectionLabel', () => {
   it('returns null for a missing code', () => {
     expect(rejectionLabel(null)).toBeNull();
     expect(rejectionLabel(undefined)).toBeNull();
+  });
+});
+
+describe('submit body carries markup', () => {
+  const markup: RecceMarkup = { version: 1, shapes: [{ x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] };
+
+  function line(overrides: Partial<CapturedReccePosm> = {}): CapturedReccePosm {
+    return {
+      posmTypeId: 't1',
+      dimensions: { width: 10, height: 20, unit: 'cm' },
+      photo: { key: 'k1', geo: { lat: 18.5, lng: 73.8, accuracy: 8, capturedAt: '2026-01-01T00:00:00.000Z' } },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => post.mockClear());
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bodyOf = (): any => post.mock.calls[0][1];
+
+  it('includes markup on a posm when set (create)', () => {
+    void submitRecce('site-1', [line({ markup })]);
+    const body = bodyOf();
+    expect(body.siteId).toBe('site-1');
+    expect(body.posms[0].markup).toEqual(markup);
+  });
+
+  it('omits the markup key entirely when a line has none (create)', () => {
+    void submitRecce('site-1', [line()]);
+    expect('markup' in bodyOf().posms[0]).toBe(false);
+  });
+
+  it('passes markup through on resubmit', () => {
+    void resubmitRecce('recce-9', [line({ markup }), line()]);
+    const body = bodyOf();
+    expect(body.posms[0].markup).toEqual(markup);
+    expect('markup' in body.posms[1]).toBe(false);
   });
 });

@@ -12,10 +12,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw } from 'lucide-react';
+import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw, PenSquare, X } from 'lucide-react';
 import { CameraCapture } from './CameraCapture';
+import { PhotoMarkup } from './PhotoMarkup';
 import { useGeo, formatFix, type GeoFix } from '@/lib/field/geo';
 import { uploadMedia, type MediaQuality } from '@/lib/field/media-upload';
+import type { RecceMarkup } from '@/lib/markup';
 
 export interface PosmTypeOption {
   id: string;
@@ -29,6 +31,8 @@ export interface CapturedReccePosm {
   posmTypeId: string;
   dimensions: { width: number; height: number; unit: string };
   photo: { key: string; geo: GeoFix };
+  /** Optional on-photo annotation marking WHERE the POSM goes — a line is valid without it. */
+  markup?: RecceMarkup;
 }
 
 /** The card's reported state — the parent uses this to gate the submit button. */
@@ -80,6 +84,11 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   const [quality, setQuality] = useState<MediaQuality | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // On-photo POSM-area annotation (optional). Cleared whenever the photo changes.
+  const [markup, setMarkup] = useState<RecceMarkup | null>(null);
+  const [markupOpen, setMarkupOpen] = useState(false);
+  const [markupUrl, setMarkupUrl] = useState<string | null>(null);
+
   // Keep the latest onChange without retriggering the report effect on every parent render.
   const onChangeRef = useRef(onChange);
   useEffect(() => {
@@ -93,14 +102,19 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
 
   const line: CapturedReccePosm | null =
     posmTypeId && dimsValid && uploaded
-      ? { posmTypeId, dimensions: { width: w, height: h, unit }, photo: { key: uploaded.key, geo: uploaded.geo } }
+      ? {
+          posmTypeId,
+          dimensions: { width: w, height: h, unit },
+          photo: { key: uploaded.key, geo: uploaded.geo },
+          ...(markup ? { markup } : {}),
+        }
       : null;
 
   // Report state upward whenever the derived readiness changes.
   useEffect(() => {
     onChangeRef.current({ started, line, error: error ?? undefined });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, error, uploaded?.key, posmTypeId, width, height, unit]);
+  }, [started, error, uploaded?.key, posmTypeId, width, height, unit, markup]);
 
   /** Capture a fix and upload the photo. Called when a new photo file is taken. */
   const captureAndUpload = async (picked: File) => {
@@ -129,6 +143,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
     setFile(picked);
     setUploaded(null);
     setQuality(null);
+    setMarkup(null); // a new/cleared photo invalidates any prior POSM-area markup
     if (picked) void captureAndUpload(picked);
     else setError(null);
   };
@@ -143,7 +158,35 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
     setUploaded(null);
     setQuality(null);
     setError(null);
+    setMarkup(null);
   };
+
+  // ── POSM-area markup lifecycle ──────────────────────────────────────────────
+  /** Open the annotator over an object-URL of the captured photo. */
+  const openMarkup = () => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setMarkupUrl(url);
+    setMarkupOpen(true);
+  };
+  /** Revoke the object-URL and close the annotator. */
+  const closeMarkup = () => {
+    setMarkupOpen(false);
+    if (markupUrl) URL.revokeObjectURL(markupUrl);
+    setMarkupUrl(null);
+  };
+  const saveMarkup = (m: RecceMarkup | null) => {
+    setMarkup(m);
+    closeMarkup();
+  };
+  const clearMarkup = () => setMarkup(null);
+
+  // Revoke a lingering object-URL if the card unmounts while the annotator is open.
+  useEffect(() => {
+    return () => {
+      if (markupUrl) URL.revokeObjectURL(markupUrl);
+    };
+  }, [markupUrl]);
 
   const warning = qualityWarning(quality);
 
@@ -267,6 +310,54 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
             Retake
           </button>
         </div>
+      )}
+
+      {/* POSM-area markup — available once a photo is captured. Optional (never gates submit). */}
+      {file && !uploading && (
+        <div className="mt-3">
+          {markup ? (
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
+              <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
+              <span className="flex-1 font-medium">
+                POSM area marked ({markup.shapes.length})
+              </span>
+              <button
+                type="button"
+                onClick={openMarkup}
+                className="shrink-0 font-semibold text-[var(--brand-primary)] underline active:scale-95 transition-transform"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={clearMarkup}
+                aria-label="Clear POSM area markup"
+                className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={openMarkup}
+              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 active:scale-95 transition-transform"
+            >
+              <PenSquare className="h-4 w-4 text-[var(--brand-primary)]" />
+              Mark POSM area
+            </button>
+          )}
+        </div>
+      )}
+
+      {markupOpen && markupUrl && (
+        <PhotoMarkup
+          imageUrl={markupUrl}
+          initial={markup}
+          onSave={saveMarkup}
+          onCancel={closeMarkup}
+        />
       )}
     </div>
   );

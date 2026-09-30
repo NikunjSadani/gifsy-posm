@@ -9,7 +9,7 @@
  * integrity signal from the JSON payload alongside it.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ImageOff, Loader2, Maximize2 } from 'lucide-react';
 import { toApiMediaUrl, type MediaRef } from '@/lib/audit/api';
 import { useFocusTrap } from '@/components/audit/use-focus-trap';
@@ -19,12 +19,30 @@ export function MediaImage({
   alt,
   className = '',
   onEnlarge,
+  overlay,
+  fitToWidth = false,
 }: {
   photo: MediaRef | null;
   alt: string;
   className?: string;
   onEnlarge?: (src: string, alt: string) => void;
+  /**
+   * Optional layer drawn OVER the loaded image (e.g. the recce `<MarkupOverlay>`). When set,
+   * the image renders at its NATURAL aspect (`block w-full h-auto`) instead of the letterboxed
+   * `object-contain` box, so the wrapper's content box equals the image box and the overlay's
+   * 0..1 coordinates align. Callers using an overlay should pass a `className` WITHOUT a fixed
+   * `aspect-*` (the natural image defines the height). Absent = unchanged behavior for all
+   * other callers (install thumbnails).
+   */
+  overlay?: ReactNode;
+  /**
+   * Render at natural aspect (`block w-full h-auto`) WITHOUT an overlay — used by the "after"
+   * photo so it sizes identically to the overlaid "before" photo in the before/after grid
+   * (both natural-aspect → aligned columns; a fixed `aspect-*` would mismatch the overlaid one).
+   */
+  fitToWidth?: boolean;
 }) {
+  const natural = !!overlay || fitToWidth;
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
 
@@ -70,8 +88,13 @@ export function MediaImage({
         loading="lazy"
         onLoad={() => setLoaded(true)}
         onError={() => setErrored(true)}
-        className={`h-full w-full object-contain transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+        className={`${
+          natural ? 'block w-full h-auto' : 'h-full w-full object-contain'
+        } transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
       />
+      {/* Overlay sibling — aligns to the image box because in overlay mode the img is
+          natural-aspect (w-full h-auto), so this wrapper's content box IS the image box. */}
+      {loaded && overlay}
       {loaded && onEnlarge && (
         <button
           type="button"
