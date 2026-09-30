@@ -45,12 +45,42 @@ export class CreateSiteDto {
   @IsOptional()
   @IsString()
   @MaxLength(120)
+  region?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cluster?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
   town?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(60)
   rsCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  beatName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  channel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  address?: string;
 
   /** A Vendor id in THIS tenant (validated server-side); the fleet servicing this site. */
   @IsOptional()

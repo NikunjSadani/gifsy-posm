@@ -25,8 +25,14 @@ interface SiteErrorRow {
   phone: string;
   lat: string;
   lng: string;
+  region: string;
+  state: string;
+  cluster: string;
   town: string;
   rs_code: string;
+  beat_name: string;
+  channel: string;
+  address: string;
   vendor_code: string;
   asm_phone: string;
   status: string;
@@ -47,16 +53,28 @@ interface SiteSuccessRow {
   phone: string | null;
   lat: number | null;
   lng: number | null;
+  region: string | null;
+  state: string | null;
+  cluster: string | null;
   town: string | null;
   rsCode: string | null;
+  beatName: string | null;
+  channel: string | null;
+  address: string | null;
   vendorId: string | null;
   asmUserId: string | null;
   status: SiteStatus;
   present: {
     phone: boolean;
     latlng: boolean;
+    region: boolean;
+    state: boolean;
+    cluster: boolean;
     town: boolean;
     rsCode: boolean;
+    beatName: boolean;
+    channel: boolean;
+    address: boolean;
     vendor: boolean;
     asm: boolean;
     status: boolean;
@@ -175,8 +193,14 @@ export class SitesService {
           phone: dto.phone ?? null,
           lat: dto.lat ?? null,
           lng: dto.lng ?? null,
+          region: dto.region ?? null,
+          state: dto.state ?? null,
+          cluster: dto.cluster ?? null,
           town: dto.town ?? null,
           rsCode: dto.rsCode ?? null,
+          beatName: dto.beatName ?? null,
+          channel: dto.channel ?? null,
+          address: dto.address ?? null,
           vendorId: dto.vendorId ?? null,
           asmUserId: dto.asmUserId ?? null,
           status: (dto.status as SiteStatus) ?? SiteStatus.ACTIVE,
@@ -201,8 +225,14 @@ export class SitesService {
     if (dto.phone !== undefined) data.phone = dto.phone;
     if (dto.lat !== undefined) data.lat = dto.lat;
     if (dto.lng !== undefined) data.lng = dto.lng;
+    if (dto.region !== undefined) data.region = dto.region;
+    if (dto.state !== undefined) data.state = dto.state;
+    if (dto.cluster !== undefined) data.cluster = dto.cluster;
     if (dto.town !== undefined) data.town = dto.town;
     if (dto.rsCode !== undefined) data.rsCode = dto.rsCode;
+    if (dto.beatName !== undefined) data.beatName = dto.beatName;
+    if (dto.channel !== undefined) data.channel = dto.channel;
+    if (dto.address !== undefined) data.address = dto.address;
     if (dto.vendorId !== undefined) {
       data.vendor = dto.vendorId ? { connect: { id: dto.vendorId } } : { disconnect: true };
     }
@@ -305,8 +335,14 @@ export class SitesService {
       const phone = get('phone');
       const latRaw = get('lat');
       const lngRaw = get('lng');
+      const region = get('region');
+      const state = get('state');
+      const cluster = get('cluster');
       const town = get('town');
       const rsCode = get('rs_code');
+      const beatName = get('beat_name');
+      const channel = get('channel');
+      const address = get('address');
       const vendorCode = get('vendor_code');
       const asmPhone = get('asm_phone');
       const statusRaw = get('status');
@@ -314,7 +350,9 @@ export class SitesService {
       const addError = (reason: string) =>
         errorRows.push({
           rowNumber, code, name, phone,
-          lat: latRaw, lng: lngRaw, town, rs_code: rsCode,
+          lat: latRaw, lng: lngRaw,
+          region, state, cluster, town, rs_code: rsCode,
+          beat_name: beatName, channel, address,
           vendor_code: vendorCode, asm_phone: asmPhone, status: statusRaw,
           error_remarks: reason,
         });
@@ -389,16 +427,28 @@ export class SitesService {
         code, name,
         phone: phone || null,
         lat, lng,
+        region: region || null,
+        state: state || null,
+        cluster: cluster || null,
         town: town || null,
         rsCode: rsCode || null,
+        beatName: beatName || null,
+        channel: channel || null,
+        address: address || null,
         vendorId, asmUserId, status,
         // F3: which source cells were non-empty — the UPDATE branch writes ONLY these, so a
         // blank cell leaves the existing value untouched (lat/lng are a paired unit).
         present: {
           phone: phone !== '',
           latlng: lat !== null && lng !== null,
+          region: region !== '',
+          state: state !== '',
+          cluster: cluster !== '',
           town: town !== '',
           rsCode: rsCode !== '',
+          beatName: beatName !== '',
+          channel: channel !== '',
+          address: address !== '',
           vendor: vendorCode !== '',
           asm: asmPhone !== '',
           status: statusRaw !== '',
@@ -415,7 +465,10 @@ export class SitesService {
           where: { clientId_code: { clientId, code: r.code } },
           create: {
             clientId, code: r.code, name: r.name, phone: r.phone,
-            lat: r.lat, lng: r.lng, town: r.town, rsCode: r.rsCode,
+            lat: r.lat, lng: r.lng,
+            region: r.region, state: r.state, cluster: r.cluster,
+            town: r.town, rsCode: r.rsCode,
+            beatName: r.beatName, channel: r.channel, address: r.address,
             vendorId: r.vendorId, asmUserId: r.asmUserId, status: r.status,
           },
           // F3: UPDATE only the columns whose source cell was non-empty. `name` is required
@@ -425,8 +478,14 @@ export class SitesService {
             name: r.name,
             ...(r.present.phone ? { phone: r.phone } : {}),
             ...(r.present.latlng ? { lat: r.lat, lng: r.lng } : {}),
+            ...(r.present.region ? { region: r.region } : {}),
+            ...(r.present.state ? { state: r.state } : {}),
+            ...(r.present.cluster ? { cluster: r.cluster } : {}),
             ...(r.present.town ? { town: r.town } : {}),
             ...(r.present.rsCode ? { rsCode: r.rsCode } : {}),
+            ...(r.present.beatName ? { beatName: r.beatName } : {}),
+            ...(r.present.channel ? { channel: r.channel } : {}),
+            ...(r.present.address ? { address: r.address } : {}),
             ...(r.present.vendor ? { vendorId: r.vendorId } : {}),
             ...(r.present.asm ? { asmUserId: r.asmUserId } : {}),
             ...(r.present.status ? { status: r.status } : {}),
@@ -486,8 +545,10 @@ export class SitesService {
   private buildErrorFile(errorRows: SiteErrorRow[]): string {
     const headers = [...SITE_ERROR_HEADERS];
     const data = errorRows.map((r) => [
-      r.rowNumber, r.code, r.name, r.phone, r.lat, r.lng, r.town,
-      r.rs_code, r.vendor_code, r.asm_phone, r.status, r.error_remarks,
+      r.rowNumber, r.code, r.name, r.phone, r.lat, r.lng,
+      r.region, r.state, r.cluster, r.town, r.rs_code,
+      r.beat_name, r.channel, r.address,
+      r.vendor_code, r.asm_phone, r.status, r.error_remarks,
     ]);
     const ws = aoaToSheetSafe([headers, ...data]);
     ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 4 }));
@@ -529,14 +590,19 @@ export class SitesService {
   /** Plain (Decimal-free) snapshot for the audit trail's old/new Json columns. */
   private snapshot(site: {
     id: string; code: string; name: string; phone: string | null;
-    lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; town: string | null;
-    rsCode: string | null; vendorId: string | null; asmUserId: string | null; status: SiteStatus;
+    lat: Prisma.Decimal | null; lng: Prisma.Decimal | null;
+    region?: string | null; state?: string | null; cluster?: string | null;
+    town: string | null; rsCode: string | null;
+    beatName?: string | null; channel?: string | null; address?: string | null;
+    vendorId: string | null; asmUserId: string | null; status: SiteStatus;
   }): Prisma.InputJsonValue {
     return {
       id: site.id, code: site.code, name: site.name, phone: site.phone,
       lat: site.lat != null ? site.lat.toString() : null,
       lng: site.lng != null ? site.lng.toString() : null,
+      region: site.region ?? null, state: site.state ?? null, cluster: site.cluster ?? null,
       town: site.town, rsCode: site.rsCode,
+      beatName: site.beatName ?? null, channel: site.channel ?? null, address: site.address ?? null,
       vendorId: site.vendorId, asmUserId: site.asmUserId, status: site.status,
     };
   }

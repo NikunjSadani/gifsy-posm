@@ -88,8 +88,10 @@ describe('SitesService.bulkUpload', () => {
     const rows = readErrorFile(res.errorFileBase64 as string);
     // header + 3 error rows
     expect(rows[0]).toEqual([
-      'row_number', 'code', 'name', 'phone', 'lat', 'lng', 'town',
-      'rs_code', 'vendor_code', 'asm_phone', 'status', 'error_remarks',
+      'row_number', 'code', 'name', 'phone', 'lat', 'lng',
+      'region', 'state', 'cluster', 'town', 'rs_code',
+      'beat_name', 'channel', 'address',
+      'vendor_code', 'asm_phone', 'status', 'error_remarks',
     ]);
     const remarks = rows.slice(1).map((r) => r[r.length - 1]);
     expect(remarks[0]).toMatch(/code is required/i);

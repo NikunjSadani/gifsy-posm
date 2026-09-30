@@ -33,8 +33,14 @@ const emptyForm = {
   phone: '',
   lat: '',
   lng: '',
+  region: '',
+  state: '',
+  cluster: '',
   town: '',
   rsCode: '',
+  beatName: '',
+  channel: '',
+  address: '',
   vendorId: '',
   asmUserId: '',
   status: 'ACTIVE' as SiteStatus,
@@ -154,8 +160,14 @@ export default function SitesPage() {
       phone: s.phone ?? '',
       lat: s.lat != null ? String(s.lat) : '',
       lng: s.lng != null ? String(s.lng) : '',
+      region: s.region ?? '',
+      state: s.state ?? '',
+      cluster: s.cluster ?? '',
       town: s.town ?? '',
       rsCode: s.rsCode ?? '',
+      beatName: s.beatName ?? '',
+      channel: s.channel ?? '',
+      address: s.address ?? '',
       vendorId: s.vendorId ?? '',
       asmUserId: s.asmUserId ?? '',
       status: s.status,
@@ -180,8 +192,14 @@ export default function SitesPage() {
         code: form.code.trim(),
         name: form.name.trim(),
         phone: form.phone.trim(),
+        region: form.region.trim(),
+        state: form.state.trim(),
+        cluster: form.cluster.trim(),
         town: form.town.trim(),
         rsCode: form.rsCode.trim(),
+        beatName: form.beatName.trim(),
+        channel: form.channel.trim(),
+        address: form.address.trim(),
         vendorId: form.vendorId,
         asmUserId: form.asmUserId,
         status: form.status,
@@ -199,8 +217,14 @@ export default function SitesPage() {
         status: form.status,
       };
       if (form.phone.trim()) body.phone = form.phone.trim();
+      if (form.region.trim()) body.region = form.region.trim();
+      if (form.state.trim()) body.state = form.state.trim();
+      if (form.cluster.trim()) body.cluster = form.cluster.trim();
       if (form.town.trim()) body.town = form.town.trim();
       if (form.rsCode.trim()) body.rsCode = form.rsCode.trim();
+      if (form.beatName.trim()) body.beatName = form.beatName.trim();
+      if (form.channel.trim()) body.channel = form.channel.trim();
+      if (form.address.trim()) body.address = form.address.trim();
       if (form.vendorId) body.vendorId = form.vendorId;
       if (form.asmUserId) body.asmUserId = form.asmUserId;
       if (hasCoords) {
@@ -444,6 +468,48 @@ export default function SitesPage() {
             value={form.rsCode}
             onChange={(e) => setForm((f) => ({ ...f, rsCode: e.target.value }))}
             maxLength={60}
+          />
+          <Input
+            label="Region"
+            placeholder="Region"
+            value={form.region}
+            onChange={(e) => setForm((f) => ({ ...f, region: e.target.value }))}
+            maxLength={120}
+          />
+          <Input
+            label="State"
+            placeholder="State"
+            value={form.state}
+            onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
+            maxLength={120}
+          />
+          <Input
+            label="Cluster"
+            placeholder="Cluster"
+            value={form.cluster}
+            onChange={(e) => setForm((f) => ({ ...f, cluster: e.target.value }))}
+            maxLength={120}
+          />
+          <Input
+            label="Beat name"
+            placeholder="Beat name"
+            value={form.beatName}
+            onChange={(e) => setForm((f) => ({ ...f, beatName: e.target.value }))}
+            maxLength={120}
+          />
+          <Input
+            label="Channel"
+            placeholder="e.g. GT / MT"
+            value={form.channel}
+            onChange={(e) => setForm((f) => ({ ...f, channel: e.target.value }))}
+            maxLength={60}
+          />
+          <Input
+            label="Address"
+            placeholder="Street address"
+            value={form.address}
+            onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+            maxLength={300}
           />
           <Select
             label="Status"

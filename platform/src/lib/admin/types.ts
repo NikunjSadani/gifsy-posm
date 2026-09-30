@@ -80,8 +80,14 @@ export interface Site {
   /** Prisma Decimal → serialised as a string over JSON; may also be null. */
   lat: string | number | null;
   lng: string | number | null;
+  region: string | null;
+  state: string | null;
+  cluster: string | null;
   town: string | null;
   rsCode: string | null;
+  beatName: string | null;
+  channel: string | null;
+  address: string | null;
   vendorId: string | null;
   asmUserId: string | null;
   status: SiteStatus;
@@ -118,15 +124,21 @@ export interface BulkUploadResult {
   errorFileBase64: string | null;
 }
 
-/** The bulk-upload template columns (first row of the .xlsx). */
+/** The bulk-upload template columns (first row of the .xlsx). Mirrors api SITE_UPLOAD_HEADERS. */
 export const SITE_UPLOAD_HEADERS = [
   'code',
   'name',
   'phone',
   'lat',
   'lng',
+  'region',
+  'state',
+  'cluster',
   'town',
   'rs_code',
+  'beat_name',
+  'channel',
+  'address',
   'vendor_code',
   'asm_phone',
   'status',
