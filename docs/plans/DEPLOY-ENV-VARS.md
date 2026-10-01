@@ -14,6 +14,7 @@ Legend — **Source**: `Secret Manager` (bound via `--set-secrets`, secret name 
 |---|---|---|---|---|
 | `NODE_ENV` | api | both = `production` | plain | Production runtime mode. `main.ts` fail-fast-checks `DATABASE_URL`/`JWT_SECRET` when this is `production`. |
 | `PORT` | api | both | Cloud Run | Listen port (8080). `main.ts` reads it; do not set by hand. |
+| `TRUST_PROXY_HOPS` | api | both | plain | Trusted proxy hops so `req.ip` (per-IP rate limit) is the real client behind the edge. Set to the exact hop count (Cloud Run=1; +Cloudflare worker=2); unset/0 = trust none. A WRONG value makes the throttle spoofable (too high) or coarse (too low). |
 | `DATABASE_URL` | api | both | Secret Manager `posm-<env>-database-url` | Postgres URL for DB `posm_staging` / `posm_prod`, user `posm_app`. |
 | `JWT_SECRET` | api | both | Secret Manager `posm-<env>-jwt-secret` | Signs/verifies access tokens. Required at boot. **Must equal the same env's frontend `JWT_SECRET`.** Use different values per env. |
 | `JWT_EXPIRES_IN` | api | both = `60m` | plain | Access-token lifetime (short so the rolling session slides). |

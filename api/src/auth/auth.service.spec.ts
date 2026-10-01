@@ -132,28 +132,34 @@ describe('AuthService', () => {
       await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toMatchObject({ status: 401 });
     });
 
-    it('wrong password → 401 and increments the failed-attempt counter', async () => {
+    it('wrong password → 401 and ATOMICALLY increments the failed-attempt counter', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(activeUser({ failedLoginAttempts: 1 }));
+      mockPrisma.user.update.mockResolvedValue({ failedLoginAttempts: 2 }); // below the cap → no lock
       await expect(service.login('deoleo', 'asm@kwality.in', 'wrong')).rejects.toMatchObject({ status: 401 });
+      // atomic increment (not a read-modify-write of the stale preloaded value)
       expect(mockPrisma.user.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ failedLoginAttempts: 2 }) }),
+        expect.objectContaining({ data: { failedLoginAttempts: { increment: 1 } } }),
       );
+      expect(mockPrisma.user.update).toHaveBeenCalledTimes(1); // no lock write below the cap
     });
 
-    it('wrong password at the cap → locks the account (lockedUntil set, counter reset)', async () => {
-      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ failedLoginAttempts: 4 })); // 5th fail
+    it('wrong password when the atomic count reaches the cap → locks (lockedUntil set, counter reset)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser());
+      mockPrisma.user.update.mockResolvedValueOnce({ failedLoginAttempts: 5 }); // the atomic increment returns the cap
       await expect(service.login('deoleo', 'asm@kwality.in', 'wrong')).rejects.toMatchObject({ status: 401 });
-      const data = mockPrisma.user.update.mock.calls[0][0].data;
-      expect(data.lockedUntil).toBeInstanceOf(Date);
-      expect(data.failedLoginAttempts).toBe(0);
+      const calls = mockPrisma.user.update.mock.calls;
+      expect(calls[0][0].data).toEqual({ failedLoginAttempts: { increment: 1 } });
+      expect(calls[1][0].data.lockedUntil).toBeInstanceOf(Date);
+      expect(calls[1][0].data.failedLoginAttempts).toBe(0);
     });
 
-    it('a currently-locked account → 403, without checking the password', async () => {
+    it('a currently-locked account → 401 (SAME uniform error, not a 403 enumeration oracle)', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(
         activeUser({ lockedUntil: new Date(Date.now() + 10 * 60_000) }),
       );
-      await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toMatchObject({ status: 401 });
       expect(mockPrisma.userSession.create).not.toHaveBeenCalled();
+      expect(mockPrisma.user.update).not.toHaveBeenCalled(); // no counter write while locked
     });
 
     it('correct password → mints a session + returns the user (email), clears failed state', async () => {

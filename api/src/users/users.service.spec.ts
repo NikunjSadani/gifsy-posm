@@ -172,6 +172,22 @@ describe('UsersService', () => {
       await service.update(clientAdmin, 'u1', { isActive: false });
       expect(mockAuth.invalidateAllSessions).toHaveBeenCalledWith('u1');
     });
+
+    it('a PASSWORD RESET evicts ALL sessions (so a stolen/stale session dies with the reset)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(existingVendorUser);
+      mockPrisma.user.update.mockResolvedValue({ ...existingVendorUser });
+      await service.update(clientAdmin, 'u1', { password: 'brand-new-pass' });
+      const data = mockPrisma.user.update.mock.calls[0][0].data;
+      expect(typeof data.passwordHash).toBe('string');
+      expect(data.failedLoginAttempts).toBe(0); // reset also clears lockout
+      expect(mockAuth.invalidateAllSessions).toHaveBeenCalledWith('u1');
+    });
+
+    it('F8: an un-assumed GIFSY_ADMIN cannot UPDATE a tenant user (no cross-tenant write)', async () => {
+      await expect(service.update(owner, 'u1', { password: 'x1234567' })).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('deactivate', () => {
@@ -186,6 +202,12 @@ describe('UsersService', () => {
       expect(mockPrisma.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'DELETE', entityType: 'USER', entityId: 'u1' });
       // The eviction wiring MUST fire.
       expect(mockAuth.invalidateAllSessions).toHaveBeenCalledWith('u1');
+    });
+
+    it('F8: an un-assumed GIFSY_ADMIN cannot DEACTIVATE a tenant user', async () => {
+      await expect(service.deactivate(owner, 'u1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
     });
 
     it('404s an id outside the caller tenant (never touches sessions)', async () => {

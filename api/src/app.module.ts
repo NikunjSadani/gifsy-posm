@@ -67,8 +67,9 @@ import { SettingsModule }     from './settings/settings.module';
         ttl:   60_000,  // 1 minute window (ms)
         limit: 60,
       }],
-      // Skip ALL rate limiting outside production (local dev + CI). Production always throttles.
-      skipIf: () => process.env.NODE_ENV !== 'production',
+      // Skip rate limiting ONLY on an explicit non-prod runtime (local dev + CI). FAIL-CLOSED: an
+      // unset/misspelled NODE_ENV keeps throttling ON (never silently disables the brute-force bound).
+      skipIf: () => process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test',
     }),
     PrismaModule,
     StorageModule,

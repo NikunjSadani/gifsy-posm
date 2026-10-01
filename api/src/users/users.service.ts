@@ -135,6 +135,9 @@ export class UsersService {
   }
 
   async update(user: JwtPayload, id: string, dto: UpdateUserDto) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes (else its
+    // unscoped findScopedOrThrow would match + mutate ANY brand's user, cross-tenant).
+    this.assertTenantContext(user);
     const existing = await this.findScopedOrThrow(user, id);
 
     // Effective role/vendor AFTER the patch — the invariant is checked against the RESULT.
@@ -186,9 +189,12 @@ export class UsersService {
       //  - the update DEACTIVATES (isActive true→false), OR
       //  - the effective role OR vendorId ACTUALLY CHANGES (F4) — a demotion / vendor
       //    re-scope must bite now, so a stale token can't keep acting under the old grant.
+      //  - a PASSWORD RESET — the primary response to a compromised/offboarded account, so every
+      //    existing session (incl. a stolen refresh token) MUST die, not merely the credential.
       const roleOrVendorChanged =
         nextRole !== existing.role || nextVendorId !== existing.vendorId;
-      if (deactivating || roleOrVendorChanged) {
+      const passwordChanged = nextPasswordHash !== undefined;
+      if (deactivating || roleOrVendorChanged || passwordChanged) {
         await this.authService.invalidateAllSessions(updated.id);
       }
       return updated;
@@ -206,6 +212,8 @@ export class UsersService {
    * immediately (not merely within the access-token TTL). Never a hard delete.
    */
   async deactivate(user: JwtPayload, id: string) {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    this.assertTenantContext(user);
     const existing = await this.findScopedOrThrow(user, id);
     // F6: never let a caller deactivate themselves, nor strip the tenant's last active admin.
     await this.assertNotTenantLockout(user, existing);
@@ -282,22 +290,32 @@ export class UsersService {
 
     // Preload the tenant's vendors + existing logins ONCE — so per-row resolution and the
     // email/phone/promoter-code collision checks are in-memory (not N queries), and we can tell a
-    // create from an update (by email, the login id).
-    const [vendors, existingUsers] = await Promise.all([
+    // create from an update (by email, the login id). A SEPARATE set of GIFSY_ADMIN emails in this
+    // tenant is loaded so a sheet row can never upsert (and overwrite) an operator account — the
+    // single-record path excludes GIFSY_ADMIN, and the bulk upsert (keyed only on clientId_email)
+    // must honour the same exclusion.
+    const [vendors, existingUsers, gifsyAdmins] = await Promise.all([
       this.prisma.vendor.findMany({ where: { clientId }, select: { id: true, code: true, isActive: true } }),
       this.prisma.user.findMany({
         where: { clientId, role: { not: 'GIFSY_ADMIN' } },
         select: { email: true, phone: true, promoterCode: true },
+      }),
+      this.prisma.user.findMany({
+        where: { clientId, role: 'GIFSY_ADMIN' },
+        select: { email: true },
       }),
     ]);
     const vendorByCode = new Map(vendors.map((v) => [v.code.toLowerCase(), v]));
     // owner maps: key(lower) → email, so a collision with a DIFFERENT user is detectable.
     const phoneOwner = new Map<string, string>();
     const promoterOwner = new Map<string, string>();
+    const existingEmails = new Set<string>(); // emails that already exist (→ this row is an UPDATE)
     for (const u of existingUsers) {
+      if (u.email) existingEmails.add(u.email.toLowerCase());
       if (u.phone) phoneOwner.set(u.phone.toLowerCase(), (u.email ?? '').toLowerCase());
       if (u.promoterCode) promoterOwner.set(u.promoterCode.toLowerCase(), (u.email ?? '').toLowerCase());
     }
+    const reservedEmails = new Set(gifsyAdmins.map((u) => (u.email ?? '').toLowerCase()).filter(Boolean));
 
     interface Ok {
       email: string; name: string; role: ManagedRole; phone: string | null; vendorId: string | null;
@@ -324,7 +342,9 @@ export class UsersService {
       const phoneRaw = get('phone');
       const vendorCode = get('vendor_code');
       const promoterCode = get('promoter_code');
-      const passwordRaw = get('password'); // never echoed into the error report
+      // Password is read RAW (not trimmed) so it matches login exactly — login compares the
+      // submitted password untrimmed, so trimming here would store a value that can never be typed.
+      const passwordRaw = String(lower['password'] ?? ''); // never echoed into the error report
 
       const addError = (reason: string) =>
         errorRows.push({
@@ -336,6 +356,9 @@ export class UsersService {
       if (!emailRaw) { addError('email is required'); continue; }
       const email = normalizeEmail(emailRaw);
       if (!emailRe.test(email)) { addError(`Invalid email "${emailRaw}"`); continue; }
+      if (reservedEmails.has(email)) {
+        addError(`Email "${emailRaw}" belongs to a platform operator account and cannot be set via upload`); continue;
+      }
       if (seenEmails.has(email)) {
         addError(`Duplicate email "${emailRaw}" appears more than once in this file`); continue;
       }
@@ -443,7 +466,34 @@ export class UsersService {
         });
       });
       ops.push(this.prisma.auditLog.create({ data: auditData }));
-      await this.prisma.$transaction(ops);
+      try {
+        await this.prisma.$transaction(ops);
+      } catch (e) {
+        // A unique collision the in-memory snapshot couldn't foresee (e.g. a concurrent insert
+        // between snapshot and commit) would otherwise throw a raw 500 and roll back the whole
+        // batch. Map it to a clear 409 instead of leaking a Prisma error.
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new ConflictException(
+            'A unique value (email, phone or promoter code) in the file collides with an existing ' +
+              'user — likely changed concurrently. Re-download the current data and try again.',
+          );
+        }
+        throw e;
+      }
+
+      // SECURITY: a bulk PASSWORD RESET on an EXISTING login must evict that user's sessions (same
+      // as the single-record reset) so a stale/stolen session can't outlive the reset. New users
+      // have no sessions, so we only evict for emails that already existed.
+      const resetEmails = successRows
+        .filter((r, i) => passwordHashes[i] && existingEmails.has(r.email))
+        .map((r) => r.email);
+      if (resetEmails.length > 0) {
+        const affected = await this.prisma.user.findMany({
+          where: { clientId, email: { in: resetEmails } },
+          select: { id: true },
+        });
+        for (const u of affected) await this.authService.invalidateAllSessions(u.id);
+      }
     } else {
       await this.prisma.auditLog.create({ data: auditData });
     }

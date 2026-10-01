@@ -27,6 +27,20 @@ async function bootstrap() {
   // Multipart file uploads are unaffected (multer parses those independently).
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
+  // Trust proxy so `req.ip` (and the per-IP rate limiter) resolve to the REAL client behind the
+  // edge (Cloud Run / Cloudflare). TRUST_PROXY_HOPS is the number of trusted hops — set it to the
+  // exact hop count per env (e.g. Cloud Run = 1; + a Cloudflare worker = 2). Default 0 = trust no
+  // proxy (local), so a client-supplied X-Forwarded-For can never spoof its IP to evade throttling.
+  // ⚠️ A wrong value makes the throttle either spoofable (too high) or coarse (too low) — set it
+  // deliberately at deploy time; see DEPLOY-ENV-VARS.md.
+  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  if (Number.isFinite(trustProxyHops) && trustProxyHops > 0) {
+    (app.getHttpAdapter().getInstance() as { set: (k: string, v: unknown) => void }).set(
+      'trust proxy',
+      trustProxyHops,
+    );
+  }
+
   // Structured logging — route all Nest logs through nestjs-pino so framework + application
   // logs share one JSON stream. flushLogs() drains buffered bootstrap logs before serving.
   app.useLogger(app.get(PinoLogger));

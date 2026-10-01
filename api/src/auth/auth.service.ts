@@ -90,21 +90,29 @@ export class AuthService {
       throw invalid;
     }
 
-    // Brute-force lockout: a locked account is refused until the window elapses.
+    // Brute-force lockout: a locked account is refused until the window elapses. We return the
+    // SAME uniform 401 as any other failure (NOT a distinct 403/message) so the lockout state is
+    // not an account-enumeration oracle — an attacker can't tell a locked real account from a
+    // non-existent one. (The lock still blocks guessing; an admin password reset clears it.)
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new ForbiddenException(
-        'Account temporarily locked after too many failed attempts. Please try again later.',
-      );
+      throw invalid;
     }
 
     if (!ok) {
-      // Count the failure; lock (and reset the counter) once the cap is hit.
-      const attempts = user.failedLoginAttempts + 1;
-      const data: { failedLoginAttempts: number; lockedUntil?: Date } =
-        attempts >= MAX_LOGIN_ATTEMPTS
-          ? { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOGIN_LOCKOUT_MINUTES * 60 * 1000) }
-          : { failedLoginAttempts: attempts };
-      await this.prisma.user.update({ where: { id: user.id }, data });
+      // ATOMIC increment (closes the read-modify-write race where a concurrent burst of wrong
+      // passwords all read the same stale count and lose increments, defeating the lock). Decide
+      // the lock from the value the DB returns; a second small write sets the lock window.
+      const bumped = await this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: { increment: 1 } },
+        select: { failedLoginAttempts: true },
+      });
+      if (bumped.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOGIN_LOCKOUT_MINUTES * 60 * 1000) },
+        });
+      }
       throw invalid;
     }
 

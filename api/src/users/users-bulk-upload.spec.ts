@@ -34,6 +34,7 @@ const admin: JwtPayload = {
 function makePrisma(opts: {
   vendors?: { id: string; code: string; isActive: boolean }[];
   existing?: { email: string | null; phone: string | null; promoterCode: string | null }[];
+  gifsyAdmins?: { email: string }[];
 } = {}) {
   const upsert = jest.fn().mockImplementation((args) => ({ __upsert: args }));
   const auditCreate = jest.fn().mockResolvedValue({});
@@ -41,7 +42,11 @@ function makePrisma(opts: {
   const vendorFindMany = jest.fn().mockResolvedValue(
     opts.vendors ?? [{ id: 'v1', code: 'VC1', isActive: true }],
   );
-  const userFindMany = jest.fn().mockResolvedValue(opts.existing ?? []);
+  const userFindMany = jest.fn().mockImplementation(({ where }: any) => {
+    if (where?.role === 'GIFSY_ADMIN') return Promise.resolve(opts.gifsyAdmins ?? []); // operator accounts in-tenant
+    if (where?.email?.in) return Promise.resolve((where.email.in as string[]).map((e, i) => ({ id: `u${i}` }))); // post-reset eviction lookup
+    return Promise.resolve(opts.existing ?? []); // the existing-logins preload
+  });
   const prisma = {
     user: { upsert, findMany: userFindMany },
     vendor: { findMany: vendorFindMany },
@@ -166,6 +171,25 @@ describe('UsersService.bulkUpload (email + password)', () => {
     const remarks = readErrorFile(res.errorFileBase64 as string).slice(1).map((r) => r[r.length - 1]);
     expect(remarks[0]).toMatch(/not found/i);
     expect(remarks[1]).toMatch(/inactive/i);
+  });
+
+  it('rejects a row whose email is a platform-operator (GIFSY_ADMIN) account — no overwrite', async () => {
+    const { prisma, auth, upsert } = makePrisma({ gifsyAdmins: [{ email: 'op@kw.in' }] });
+    const svc = new UsersService(prisma, auth);
+    const buffer = buildXlsxBuffer([['op@kw.in', 'Takeover', 'CLIENT_ADMIN', '', '', '', 'hacked12345']]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(0);
+    expect(upsert).not.toHaveBeenCalled();
+    const remarks = readErrorFile(res.errorFileBase64 as string).slice(1).map((r) => r[r.length - 1]);
+    expect(remarks[0]).toMatch(/platform operator/i);
+  });
+
+  it('a bulk password reset on an EXISTING email evicts that user’s sessions', async () => {
+    const { prisma, auth } = makePrisma({ existing: [{ email: 'field1@kw.in', phone: null, promoterCode: null }] });
+    const svc = new UsersService(prisma, auth);
+    const buffer = buildXlsxBuffer([['field1@kw.in', 'Field One', 'ASM', '', '', '', 'resetpass123']]);
+    await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(auth.invalidateAllSessions as unknown as jest.Mock).toHaveBeenCalledWith('u0'); // eviction lookup returns id u0
   });
 
   it('throws when a required column (email) is missing', async () => {
