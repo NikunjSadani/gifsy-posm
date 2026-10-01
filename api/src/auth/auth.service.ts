@@ -11,6 +11,7 @@ import { JwtPayload } from '../common/decorators/current-user.decorator';
 import {
   comparePassword,
   normalizeEmail,
+  DUMMY_PASSWORD_HASH,
   MAX_LOGIN_ATTEMPTS,
   LOGIN_LOCKOUT_MINUTES,
 } from '../common/password';
@@ -79,6 +80,11 @@ export class AuthService {
     const user = await this.prisma.user.findFirst({
       where: { clientId, email: normEmail },
     });
+
+    // Timing-equalisation: ALWAYS run a bcrypt compare (against a dummy hash when there is no
+    // account / no password set) so response time doesn't reveal whether the email exists.
+    const ok = await comparePassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+
     // Uniform failure for missing account / inactive / no password set — no enumeration signal.
     if (!user || !user.isActive || !user.passwordHash) {
       throw invalid;
@@ -91,7 +97,6 @@ export class AuthService {
       );
     }
 
-    const ok = await comparePassword(password, user.passwordHash);
     if (!ok) {
       // Count the failure; lock (and reset the counter) once the cap is hit.
       const attempts = user.failedLoginAttempts + 1;

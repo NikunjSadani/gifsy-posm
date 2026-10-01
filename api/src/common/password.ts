@@ -14,6 +14,17 @@ export function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, BCRYPT_COST);
 }
 
+/**
+ * A real bcrypt hash of a random throwaway value, computed once at import. Login compares the
+ * submitted password against THIS when no account (or no password) is found, so the bcrypt work —
+ * and therefore the response time — is the same whether or not the email exists. This removes the
+ * timing side-channel that a uniform error message alone does not close (no account enumeration).
+ */
+export const DUMMY_PASSWORD_HASH = bcrypt.hashSync(
+  'timing-equalisation-placeholder-not-a-real-password',
+  BCRYPT_COST,
+);
+
 /** Constant-time compare of a plaintext against a stored bcrypt hash. */
 export function comparePassword(plain: string, hash: string): Promise<boolean> {
   return bcrypt.compare(plain, hash);
