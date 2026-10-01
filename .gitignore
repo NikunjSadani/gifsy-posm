@@ -11,5 +11,19 @@ coverage/
 .env
 .env.local
 .env.*.local
+# Real per-env secret files (the *.example templates stay tracked).
+.env.staging
+.env.production
 .DS_Store
 Thumbs.db
+
+# ── Terraform (state + real values never committed; *.example stay tracked) ──
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+crash.log
+terraform/backend.tf
+terraform/environments/*.tfvars
+!terraform/environments/*.tfvars.example

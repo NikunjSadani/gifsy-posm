@@ -1,0 +1,42 @@
+# gifsy-posm edge worker — OPTIONAL TEMPLATE (docs/plans/ENVIRONMENTS.md §6).
+# Use ONLY if the owner picks "Cloudflare Worker" as the edge AND the domain's DNS is on Cloudflare.
+# Otherwise use Cloud Run domain mapping, or just the raw *.run.app frontend URLs.
+#
+# Nothing here is real: replace every <PLACEHOLDER>. One worker per environment (separate [env.*]).
+# Deploy (owner, privileged — authenticate via env var, NOT `wrangler login`):
+#   cd cloudflare
+#   export CLOUDFLARE_API_TOKEN=...                      # token with Workers Scripts:Edit + Zone/DNS edit
+#   npx wrangler deploy --env staging
+#   npx wrangler deploy --env production
+# Read each upstream URL with:
+#   gcloud run services describe posm-frontend-<env> --region asia-south1 --project $PROJECT_ID --format='value(status.url)'
+
+name = "posm-edge"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+# account_id = "<CLOUDFLARE_ACCOUNT_ID>"        # or set CLOUDFLARE_ACCOUNT_ID in the environment
+
+# Disable the default *.workers.dev URL so the only way in is the allow-listed custom host.
+workers_dev = false
+
+# ── staging ─────────────────────────────────────────────────────────────────
+[env.staging]
+name = "posm-edge-staging"
+routes = [
+  { pattern = "uat-posm.<DOMAIN>", custom_domain = true },
+]
+
+[env.staging.vars]
+UPSTREAM_ORIGIN = "https://posm-frontend-staging-<HASH>.asia-south1.run.app"
+ALLOWED_HOSTS   = "uat-posm.<DOMAIN>"
+
+# ── production ──────────────────────────────────────────────────────────────
+[env.production]
+name = "posm-edge-prod"
+routes = [
+  { pattern = "posm.<DOMAIN>", custom_domain = true },
+]
+
+[env.production.vars]
+UPSTREAM_ORIGIN = "https://posm-frontend-prod-<HASH>.asia-south1.run.app"
+ALLOWED_HOSTS   = "posm.<DOMAIN>"

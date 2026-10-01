@@ -1,0 +1,165 @@
+# gifsy-posm - STAGING deploy (auto on push to `develop`).
+#
+# Pipeline: test gate -> WIF auth -> build+push api & frontend images (tag = git SHA) ->
+#           run Cloud Run Job `posm-migrate-staging` (wait) -> deploy posm-api-staging &
+#           posm-frontend-staging at the new images -> print serving revision + image SHA.
+#
+# Test->deploy wiring: the `test` job below CALLS ./.github/workflows/test.yml (reusable); `deploy`
+# has `needs: test`, so a RED suite skips the deploy.
+#
+# Required GitHub REPO SECRETS:
+#   WIF_PROVIDER   full provider resource, e.g.
+#                  projects/<NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github
+#   DEPLOYER_SA    posm-deployer@<PROJECT_ID>.iam.gserviceaccount.com
+# Required GitHub REPO VARIABLES:
+#   GCP_PROJECT_ID           GCP project id (Artifact Registry + Cloud Run live here)
+# Optional REPO VARIABLES:
+#   STAGING_API_URL          public API base URL baked into the frontend build as NEXT_PUBLIC_API_URL
+#                            (e.g. a custom domain). If unset, the run.app URL of posm-api-staging is
+#                            looked up via gcloud (service must already exist - Terraform creates it).
+#   NEXT_PUBLIC_CLIENT_ID    defaults to `kwality`
+#
+# Uses a GitHub Environment named `staging` (auto-created on first run; no approval rules needed).
+name: Deploy - Staging
+
+on:
+  push:
+    branches: [develop]
+
+# Never cancel a deploy mid-flight (could leave a half-migrated env); queue instead.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGION: asia-south1
+  AR_REPO: posm
+  API_SERVICE: posm-api-staging
+  FE_SERVICE: posm-frontend-staging
+  MIGRATE_JOB: posm-migrate-staging
+
+jobs:
+  test:
+    name: Test gate
+    uses: ./.github/workflows/test.yml
+
+  deploy:
+    name: Build, migrate, deploy (staging)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write # required for Workload Identity Federation
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GIT_SHA: ${{ github.sha }}
+      API_URL_OVERRIDE: ${{ vars.STAGING_API_URL }}
+      CLIENT_ID: ${{ vars.NEXT_PUBLIC_CLIENT_ID || 'kwality' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required config
+        run: |
+          [ -n "$PROJECT_ID" ] || { echo "::error::repo var GCP_PROJECT_ID is not set"; exit 1; }
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Compute image names + API URL
+        run: |
+          REG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+          echo "API_IMAGE=${REG}/posm-api:${GIT_SHA}" >> "$GITHUB_ENV"
+          echo "FE_IMAGE=${REG}/posm-frontend:${GIT_SHA}" >> "$GITHUB_ENV"
+          if [ -n "$API_URL_OVERRIDE" ]; then
+            API_URL="$API_URL_OVERRIDE"
+          else
+            API_URL="$(gcloud run services describe "$API_SERVICE" --region "$REGION" --format='value(status.url)')"
+          fi
+          [ -n "$API_URL" ] || { echo "::error::could not resolve API URL (set repo var STAGING_API_URL or create $API_SERVICE first)"; exit 1; }
+          echo "NEXT_PUBLIC_API_URL=${API_URL}" >> "$GITHUB_ENV"
+          echo "Frontend will be built against API URL: ${API_URL}"
+
+      - name: Build + push API image
+        run: |
+          docker build -t "$API_IMAGE" api
+          docker push "$API_IMAGE"
+
+      - name: Build + push frontend image
+        run: |
+          docker build \
+            --build-arg "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" \
+            --build-arg "NEXT_PUBLIC_CLIENT_ID=${CLIENT_ID}" \
+            --build-arg "BUILD_ID=${GIT_SHA}" \
+            -t "$FE_IMAGE" platform
+          docker push "$FE_IMAGE"
+
+      # Migrations run BEFORE the new code takes traffic. The job uses the API image (it carries the
+      # prisma CLI + migrations). `--wait` fails this step if the job fails -> deploy stops here.
+      - name: Run migration job
+        run: |
+          gcloud run jobs update "$MIGRATE_JOB" --region "$REGION" --image "$API_IMAGE" --quiet
+          gcloud run jobs execute "$MIGRATE_JOB" --region "$REGION" --wait
+
+      - name: Deploy API
+        run: |
+          gcloud run deploy "$API_SERVICE" --region "$REGION" --image "$API_IMAGE" \
+            --update-labels "git-sha=${GIT_SHA::40}" --quiet
+
+      - name: Deploy frontend
+        run: |
+          gcloud run deploy "$FE_SERVICE" --region "$REGION" --image "$FE_IMAGE" \
+            --update-labels "git-sha=${GIT_SHA::40}" --quiet
+
+      # Self-heal traffic: `gcloud run deploy` routes to the new revision UNLESS traffic was
+      # previously pinned (e.g. by a rollback `update-traffic --to-revisions`). Force 100% to the
+      # latest ready revision so a deploy after a rollback actually serves.
+      - name: Route 100% traffic to the new revisions
+        run: |
+          gcloud run services update-traffic "$API_SERVICE" --region "$REGION" --to-latest --quiet
+          gcloud run services update-traffic "$FE_SERVICE" --region "$REGION" --to-latest --quiet
+
+      - name: Verify serving revision + image SHA
+        run: |
+          fail=0
+          {
+            echo "### Staging deploy - ${GIT_SHA}"
+            echo
+            echo "| service | serving revision | image | traffic |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for pair in "${API_SERVICE}=${API_IMAGE}" "${FE_SERVICE}=${FE_IMAGE}"; do
+            svc="${pair%%=*}"; want="${pair#*=}"
+            rev="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+            img="$(gcloud run services describe "$svc" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+            traffic="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.traffic[0].revisionName,status.traffic[0].percent)')"
+            url="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.url)')"
+            echo "$svc -> revision=$rev image=$img traffic=[$traffic] url=$url"
+            echo "| $svc | $rev | \`$img\` | $traffic |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$img" != "$want" ]; then
+              echo "::error::$svc is serving $img, expected $want"; fail=1
+            fi
+          done
+          echo "SERVING IMAGE SHA: ${GIT_SHA}"
+          exit $fail
+
+      # Soft smoke: warn (do not fail) - the service may be ingress-restricted from the runner.
+      - name: Smoke API readiness
+        continue-on-error: true
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "${NEXT_PUBLIC_API_URL%/}/health/ready" \
+            || echo "::warning::/health/ready not reachable from the runner (check manually)"

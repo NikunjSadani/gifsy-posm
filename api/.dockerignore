@@ -1,0 +1,30 @@
+# Keep the build context small and keep secrets/local state OUT of the image.
+node_modules
+dist
+coverage
+.git
+.gitignore
+
+# Secrets / env — runtime config comes from Cloud Run env + Secret Manager, never the image.
+.env
+.env.*
+!.env.example
+
+# Local-only state (local Postgres data dir, local-disk media driver)
+.localdb
+.localstorage
+
+# Tests, dev scripts, tooling
+test
+scripts
+**/*.spec.ts
+*.log
+*.tsbuildinfo
+
+# Docker / editor / OS noise
+Dockerfile
+.dockerignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db

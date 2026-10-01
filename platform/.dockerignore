@@ -1,0 +1,30 @@
+# Keep the build context small and keep secrets/local state OUT of the image.
+node_modules
+.next
+out
+build
+coverage
+.git
+.gitignore
+
+# Secrets / env — public values arrive as build ARGs, secrets as Cloud Run runtime env.
+.env
+.env.*
+!.env.example
+
+# Tests / tooling (not needed to build the app)
+vitest.config.ts
+vitest.setup.ts
+eslint.config.mjs
+**/*.test.ts
+**/*.test.tsx
+*.log
+*.tsbuildinfo
+
+# Docker / editor / OS noise
+Dockerfile
+.dockerignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db

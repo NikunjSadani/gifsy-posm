@@ -1,0 +1,60 @@
+# gifsy-posm - test gate (CI).
+#
+# This is THE gate: a red suite blocks every deploy. It runs on PRs + pushes to develop/main, and is
+# also a reusable workflow (`workflow_call`) that deploy-staging.yml / deploy-prod.yml invoke as their
+# `test` job so the deploy `needs: test` dependency is real, not a parallel hope.
+#
+# Required repo secrets/vars: NONE (jest is unit/mocked - no DB, no cloud, no secrets).
+# Do NOT add a Postgres service unless a test genuinely needs one.
+# NOTE: no `concurrency:` block here on purpose - callers define their own, and the same group in
+# caller + callee deadlocks.
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API gates (prisma generate, tsc, jest, nest build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      # Prisma client must be generated before tsc/jest/build (generated types are imported).
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - run: npx jest --no-coverage
+      - run: npx nest build
+
+  platform:
+    name: FE gates (tsc, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: platform/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vitest run

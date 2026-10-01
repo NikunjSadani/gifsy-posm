@@ -1,0 +1,42 @@
+# Copy to environments/staging.tfvars (git-ignored — do not commit real values) and fill in.
+# Apply with:  terraform apply -var-file=environments/staging.tfvars
+# Staging is applied FIRST because it creates the shared resources (APIs, Artifact Registry,
+# deployer SA, WIF).
+
+# ---- Identity / placement ----
+project_id  = "REPLACE_ME_GCP_PROJECT_ID"
+region      = "asia-south1"
+environment = "staging"
+
+# Hostname the frontend is served on via the edge (only used to build the api's CORS_ORIGINS).
+domain = "uat-posm.REPLACE_ME_DOMAIN"
+
+# ---- Shared resources: staging creates them, prod does not ----
+manage_shared_resources = true
+enable_apis             = true
+github_repo             = "REPLACE_ME_OWNER/gifsy-posm" # WIF is bound to this repo only
+
+# ---- Cloud SQL: STAGING normally uses the PRE-EXISTING shared instance ----
+sql_instance        = "gifsy-shared" # the existing instance's NAME (it must already exist)
+create_sql_instance = false          # false = only create database posm_staging + user on it
+db_user             = "posm_app"
+# (If instead you want a dedicated instance: create_sql_instance = true and set sql_tier etc.)
+
+# ---- Cloud Run ----
+# First apply (nothing pushed yet): keep the placeholder images (the defaults) and turn probes OFF,
+# then after the first CI image push set enable_health_probes = true and re-apply.
+enable_health_probes = false
+# api_image          = "asia-south1-docker.pkg.dev/REPLACE_ME_GCP_PROJECT_ID/posm/posm-api:REPLACE_ME_SHA"
+# frontend_image     = "asia-south1-docker.pkg.dev/REPLACE_ME_GCP_PROJECT_ID/posm/posm-frontend:REPLACE_ME_SHA"
+api_min_instances      = 0
+frontend_min_instances = 0
+
+# ---- Email (MSG91 SMTP). Secrets themselves (user/pass/auth key/template id) are NOT here —
+#      add them out-of-band to Secret Manager (see README). ----
+msg91_smtp_host    = "REPLACE_ME_MSG91_SMTP_HOST"
+msg91_smtp_port    = "587"
+reports_from_email = "REPLACE_ME@REPLACE_ME_DOMAIN"
+
+# ---- Staging-only conveniences ----
+bucket_force_destroy    = true  # staging data is disposable
+sql_deletion_protection = false # only matters if create_sql_instance = true

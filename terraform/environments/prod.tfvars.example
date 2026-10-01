@@ -1,0 +1,53 @@
+# Copy to environments/prod.tfvars (git-ignored — do not commit real values) and fill in.
+# Apply with:  terraform apply -var-file=environments/prod.tfvars
+# Use a SEPARATE state (backend prefix posm/prod). Apply staging first: prod relies on the shared
+# deployer SA / Artifact Registry / WIF that the staging state creates.
+
+# ---- Identity / placement ----
+project_id  = "REPLACE_ME_GCP_PROJECT_ID" # same project as staging, or a dedicated prod project
+region      = "asia-south1"
+environment = "prod"
+
+domain = "posm.REPLACE_ME_DOMAIN" # the client-facing hostname
+
+# ---- Shared resources already created by the staging state ----
+# If prod lives in a DIFFERENT project from staging there is no shared deployer/WIF/registry there:
+# set manage_shared_resources = true and github_repo in that project instead.
+manage_shared_resources = false
+enable_apis             = true
+github_repo             = "" # only needed when manage_shared_resources = true
+
+# ---- Cloud SQL: DECISION REQUIRED (DEPLOYMENT-PLAN section 5.1; see README "Shared vs dedicated") ----
+# Option 1 (blueprint default): prod DB on the shared instance
+sql_instance        = "gifsy-shared"
+create_sql_instance = false
+# Option 2 (recommended for a paying client): a dedicated instance for prod
+# sql_instance          = "posm-prod"
+# create_sql_instance   = true
+# sql_tier              = "db-custom-1-3840"
+# sql_availability_type = "ZONAL"   # REGIONAL = HA (2x cost)
+# sql_point_in_time_recovery = true
+# sql_deletion_protection    = true
+
+# If staging ALSO uses this same instance and its state already created user `posm_app`, use a
+# different user here so the two states do not fight over one instance-wide user:
+db_user = "posm_app_prod"
+# (db_user = "posm_app" is fine when prod has its own dedicated instance.)
+
+# ---- Cloud Run ----
+# First apply: placeholder images + probes off; then set real images/probes (see README).
+enable_health_probes = false
+# api_image          = "asia-south1-docker.pkg.dev/REPLACE_ME_GCP_PROJECT_ID/posm/posm-api:REPLACE_ME_SHA"
+# frontend_image     = "asia-south1-docker.pkg.dev/REPLACE_ME_GCP_PROJECT_ID/posm/posm-frontend:REPLACE_ME_SHA"
+api_min_instances      = 0 # 1 = warm prod (no cold start, costs always-on instance) — DEPLOYMENT-PLAN section 5.4
+frontend_min_instances = 0
+
+# ---- Email (MSG91 SMTP). Secrets are added out-of-band (see README). Prod uses REAL MSG91 OTP:
+#      there is no FIXED_OTP on prod and Terraform refuses to set one. ----
+msg91_smtp_host    = "REPLACE_ME_MSG91_SMTP_HOST"
+msg91_smtp_port    = "587"
+reports_from_email = "REPLACE_ME@REPLACE_ME_DOMAIN"
+
+# ---- Prod protections (keep these) ----
+bucket_force_destroy    = false
+sql_deletion_protection = true

@@ -8,6 +8,19 @@ import { AppModule }              from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+
+  // Fail fast in production if a REQUIRED secret is missing, instead of booting into a
+  // half-working state (DB calls failing / tokens unsignable). Cloud Run binds these from
+  // Secret Manager; a missing/unbound secret should crash the revision at startup so the
+  // rollout never goes healthy. (JwtStrategy also guards JWT_SECRET — this is the earlier,
+  // clearer check.) Non-production (dev/test/CI) is unaffected.
+  if (process.env.NODE_ENV === 'production') {
+    const missing = ['DATABASE_URL', 'JWT_SECRET'].filter((k) => !process.env[k]?.trim());
+    if (missing.length) {
+      throw new Error(`Missing required environment variable(s) in production: ${missing.join(', ')}`);
+    }
+  }
+
   // bodyParser:false → we install our own json/urlencoded parsers with a raised limit. The
   // Express default is 100 kB, which a large admin bulk-upload (site/vendor master — hundreds
   // of rows of JSON) exceeds. Cloud Run caps the request at 32 MB, so 25 MB is a safe ceiling.

@@ -1,0 +1,176 @@
+# gifsy-posm - PRODUCTION deploy. MANUAL ONLY (`workflow_dispatch`), `main` branch only.
+# NO auto-merge, NO schedule, NO push trigger.
+#
+# Pipeline: test gate -> WIF auth -> build+push api & frontend images (tag = git SHA; prod builds its
+#           OWN images, separate from staging) -> run Cloud Run Job `posm-migrate-prod` (wait) ->
+#           deploy posm-api-prod & posm-frontend-prod -> print + assert the serving revision + image SHA.
+#
+# To run: GitHub -> Actions -> "Deploy - Production (main)" -> Run workflow (choose branch `main`).
+# Running it from any other ref is refused (job-level `if` + an explicit step guard).
+#
+# Test->deploy wiring: the `test` job CALLS ./.github/workflows/test.yml (reusable); `deploy`
+# has `needs: test`, so a RED suite skips the deploy.
+#
+# Required GitHub REPO SECRETS:
+#   WIF_PROVIDER   projects/<NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github
+#   DEPLOYER_SA    posm-deployer@<PROJECT_ID>.iam.gserviceaccount.com
+# Required GitHub REPO VARIABLES:
+#   GCP_PROJECT_ID           GCP project id
+# Optional REPO VARIABLES:
+#   PROD_API_URL             public API base URL baked into the frontend build as NEXT_PUBLIC_API_URL
+#                            (custom domain). If unset, the run.app URL of posm-api-prod is looked up
+#                            via gcloud (service must already exist).
+#   NEXT_PUBLIC_CLIENT_ID    defaults to `kwality`
+#
+# Uses a GitHub Environment named `production`: add required reviewers there if you want a manual
+# approval click before the deploy job starts (recommended). It is auto-created on first run.
+name: Deploy - Production (main)
+
+on:
+  workflow_dispatch:
+
+# Never cancel a prod deploy mid-flight; queue instead.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGION: asia-south1
+  AR_REPO: posm
+  API_SERVICE: posm-api-prod
+  FE_SERVICE: posm-frontend-prod
+  MIGRATE_JOB: posm-migrate-prod
+  MEDIA_BUCKET: posm-prod-files # informational: provisioned by Terraform, wired in the service env
+
+jobs:
+  test:
+    name: Test gate
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/test.yml
+
+  deploy:
+    name: Build, migrate, deploy (PRODUCTION)
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # required for Workload Identity Federation
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GIT_SHA: ${{ github.sha }}
+      API_URL_OVERRIDE: ${{ vars.PROD_API_URL }}
+      CLIENT_ID: ${{ vars.NEXT_PUBLIC_CLIENT_ID || 'kwality' }}
+    steps:
+      - name: Guard - main only
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Production deploys run from main only (got $GITHUB_REF)"; exit 1
+          fi
+          [ -n "$PROJECT_ID" ] || { echo "::error::repo var GCP_PROJECT_ID is not set"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Compute image names + API URL
+        run: |
+          REG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+          echo "API_IMAGE=${REG}/posm-api:${GIT_SHA}" >> "$GITHUB_ENV"
+          echo "FE_IMAGE=${REG}/posm-frontend:${GIT_SHA}" >> "$GITHUB_ENV"
+          if [ -n "$API_URL_OVERRIDE" ]; then
+            API_URL="$API_URL_OVERRIDE"
+          else
+            API_URL="$(gcloud run services describe "$API_SERVICE" --region "$REGION" --format='value(status.url)')"
+          fi
+          [ -n "$API_URL" ] || { echo "::error::could not resolve API URL (set repo var PROD_API_URL or create $API_SERVICE first)"; exit 1; }
+          echo "NEXT_PUBLIC_API_URL=${API_URL}" >> "$GITHUB_ENV"
+          echo "Frontend will be built against API URL: ${API_URL}"
+
+      # Prod images are built fresh from this SHA - never re-tagged from staging.
+      - name: Build + push API image
+        run: |
+          docker build -t "$API_IMAGE" api
+          docker push "$API_IMAGE"
+
+      - name: Build + push frontend image
+        run: |
+          docker build \
+            --build-arg "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" \
+            --build-arg "NEXT_PUBLIC_CLIENT_ID=${CLIENT_ID}" \
+            --build-arg "BUILD_ID=${GIT_SHA}" \
+            -t "$FE_IMAGE" platform
+          docker push "$FE_IMAGE"
+
+      # Migrations run BEFORE the new code takes traffic; `--wait` fails the step (and stops the
+      # deploy) if the job fails. Take/confirm a Cloud SQL backup before dispatching a prod run
+      # that carries a destructive migration.
+      - name: Run migration job
+        run: |
+          gcloud run jobs update "$MIGRATE_JOB" --region "$REGION" --image "$API_IMAGE" --quiet
+          gcloud run jobs execute "$MIGRATE_JOB" --region "$REGION" --wait
+
+      - name: Deploy API
+        run: |
+          gcloud run deploy "$API_SERVICE" --region "$REGION" --image "$API_IMAGE" \
+            --update-labels "git-sha=${GIT_SHA::40}" --quiet
+
+      - name: Deploy frontend
+        run: |
+          gcloud run deploy "$FE_SERVICE" --region "$REGION" --image "$FE_IMAGE" \
+            --update-labels "git-sha=${GIT_SHA::40}" --quiet
+
+      # Self-heal traffic: `gcloud run deploy` routes to the new revision UNLESS traffic was
+      # previously pinned (e.g. by a rollback `update-traffic --to-revisions`). Force 100% to the
+      # latest ready revision so a deploy after a rollback actually serves.
+      - name: Route 100% traffic to the new revisions
+        run: |
+          gcloud run services update-traffic "$API_SERVICE" --region "$REGION" --to-latest --quiet
+          gcloud run services update-traffic "$FE_SERVICE" --region "$REGION" --to-latest --quiet
+
+      - name: Verify serving revision + image SHA
+        run: |
+          fail=0
+          {
+            echo "### PRODUCTION deploy - ${GIT_SHA}"
+            echo
+            echo "| service | serving revision | image | traffic |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for pair in "${API_SERVICE}=${API_IMAGE}" "${FE_SERVICE}=${FE_IMAGE}"; do
+            svc="${pair%%=*}"; want="${pair#*=}"
+            rev="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+            img="$(gcloud run services describe "$svc" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+            traffic="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.traffic[0].revisionName,status.traffic[0].percent)')"
+            url="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.url)')"
+            echo "$svc -> revision=$rev image=$img traffic=[$traffic] url=$url"
+            echo "| $svc | $rev | \`$img\` | $traffic |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$img" != "$want" ]; then
+              echo "::error::$svc is serving $img, expected $want"; fail=1
+            fi
+          done
+          echo "SERVING IMAGE SHA: ${GIT_SHA}"
+          exit $fail
+
+      # Soft smoke: warn (do not fail) - the service may be ingress-restricted from the runner.
+      - name: Smoke API readiness
+        continue-on-error: true
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "${NEXT_PUBLIC_API_URL%/}/health/ready" \
+            || echo "::warning::/health/ready not reachable from the runner (check manually)"

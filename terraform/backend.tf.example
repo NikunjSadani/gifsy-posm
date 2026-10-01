@@ -1,0 +1,21 @@
+# Copy to backend.tf (git-ignored) BEFORE `terraform init`, and fill in the bucket.
+# The state bucket must already exist (create it by hand once; it is NOT managed by this config,
+# otherwise the state would live in a resource it manages). Enable versioning on it.
+#
+#   gcloud storage buckets create gs://<STATE_BUCKET> --project <PROJECT_ID> \
+#     --location asia-south1 --uniform-bucket-level-access
+#   gcloud storage buckets update gs://<STATE_BUCKET> --versioning
+#
+# ONE state per environment: use a different `prefix` for staging and prod so the two applies
+# never share (or lock) each other's state.
+#   staging -> prefix = "posm/staging"
+#   prod    -> prefix = "posm/prod"
+#
+# NOTE: state contains generated secrets (DB password, JWT secret). Restrict the bucket's IAM to
+# the owner / deployer only.
+terraform {
+  backend "gcs" {
+    bucket = "REPLACE_ME_STATE_BUCKET"
+    prefix = "posm/REPLACE_ME_ENVIRONMENT" # posm/staging | posm/prod
+  }
+}
