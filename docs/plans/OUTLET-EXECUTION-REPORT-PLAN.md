@@ -117,3 +117,15 @@ Owner asked how users are created (answer: single-record UI only, no bulk) and t
   authenticated proxy with a real .xlsx: created a new ASM, updated an existing user's promoter
   code, and a row attempting to change an existing auditor's role → role stayed AUDITOR (auth-safety).
   ⚠️ demo mutation: created user `9800000055` (Bulk ASM) + set auditor `9000000002` promoter=`PAUD`.
+
+### Downloadable template (2026-10-01)
+
+- **`GET /v1/users/bulk-upload/template`** — a header-only .xlsx (`phone,name,role,vendor_code,
+  promoter_code`) streamed as a StreamableFile (attachment), built with `aoaToSheetSafe` so the
+  columns match the uploader EXACTLY → download → fill → re-upload round-trips. `buildUploadTemplate()`
+  on the service; +1 unit test (valid PK-zip, 1 header row).
+- FE: `UploadPanel` gained an optional `templateUrl` (+ `templateFileName`) → a "Download template"
+  button (fetch auth-gated blob → save). Wired on the Users panel; generic so Sites can add it in
+  one prop later. Gates: api jest 388, FE vitest 281, both tsc 0.
+- Runtime-proven: endpoint returns 200 + valid header-only xlsx; the UI button renders, and a click
+  fetches + triggers the `user-upload-template.xlsx` download with no error.
