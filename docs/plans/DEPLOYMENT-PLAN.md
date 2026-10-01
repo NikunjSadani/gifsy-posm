@@ -134,3 +134,18 @@ moment the §3 blockers clear. Say the word and I'll kick off Wave A.
 
 ## Status log
 - 2026-10-01: plan written for owner review. Awaiting §5 decisions + §3 access before any build.
+- 2026-10-01: **Wave A COMPLETE** (scaffolding only — nothing applied). Built by 5 parallel
+  sub-agents against DEPLOY-CONTRACT.md, then integrated + gated. Delivered: api/platform
+  Dockerfiles + docker-compose; GitHub Actions test/deploy-staging/deploy-prod (WIF, needs:test,
+  migrate-job-before-rollout, serving-SHA verify, traffic self-heal); Terraform (Cloud Run ×2 env,
+  Cloud SQL shared-or-dedicated, GCS, Secret Manager, IAM/WIF, Artifact Registry) — `terraform
+  validate` passes; `.env.{staging,production}.example` (api+platform); migrate helper; prod-secret
+  startup guard in main.ts; ENVIRONMENTS.md + DEPLOY-RUNBOOK.md + Cloudflare worker; .gitignore for
+  state/secrets. **Gates:** api tsc 0 + jest 388, FE tsc 0 + vitest 281, terraform validate OK, all
+  YAML valid. Commits on `develop` (`…` Wave A). NOTE: the full DUAL adversarial audit of the deploy
+  + prod-auth path is Wave E (pre-go-live), not done yet.
+  ▶ **Still blocking Wave B (owner):** §5.1 production-DB decision; §3 access (GitHub remote, GCP
+  project + billing, the `gifsy-shared` Cloud SQL instance, prod MSG91 secrets, domain). Plus two
+  provisioning actions surfaced during integration: (a) seed staging/prod Client with a stable
+  `id:'kwality'` so `NEXT_PUBLIC_CLIENT_ID` works; (b) first `terraform apply` uses a bootstrap
+  image + `enable_health_probes=false` (services need an image to exist before CI's first deploy).
