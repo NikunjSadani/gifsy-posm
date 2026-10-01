@@ -62,18 +62,36 @@ export function validatePosmType(input: PosmTypeInput): FieldErrors {
 
 export interface UserInput {
   name: string;
-  phone: string;
+  email: string;
+  password?: string;
+  /** Optional: true when editing an existing user (password may be left blank to keep current). */
+  isEdit?: boolean;
+  phone?: string;
   role: string;
   vendorId?: string;
 }
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function validateUser(input: UserInput): FieldErrors {
   const errors: FieldErrors = {};
   if (isBlank(input.name)) errors.name = 'Name is required';
   else if (input.name.trim().length > 120) errors.name = 'Name must be at most 120 characters';
 
-  if (isBlank(input.phone)) errors.phone = 'Mobile number is required';
-  else if (!isValidIndianMobile(input.phone)) errors.phone = 'Enter a valid 10-digit Indian mobile number';
+  // Email is the login id — required + well-formed.
+  if (isBlank(input.email)) errors.email = 'Email is required';
+  else if (!EMAIL_RE.test(input.email.trim())) errors.email = 'Enter a valid email address';
+
+  // Phone is now OPTIONAL (contact only) — validate only when provided.
+  if (!isBlank(input.phone) && !isValidIndianMobile(input.phone as string)) {
+    errors.phone = 'Enter a valid 10-digit Indian mobile number';
+  }
+
+  // Password: optional on create (login disabled until set) and on edit (blank = keep). When
+  // supplied, enforce the 8-char minimum to match the backend.
+  if (!isBlank(input.password) && (input.password as string).length < 8) {
+    errors.password = 'Password must be at least 8 characters';
+  }
 
   if (isBlank(input.role)) {
     errors.role = 'Role is required';

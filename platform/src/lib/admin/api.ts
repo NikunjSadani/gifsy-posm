@@ -64,7 +64,12 @@ export const posmTypesApi = {
 // ── Users ─────────────────────────────────────────────────────────────────────
 export interface UserCreate {
   name: string;
-  phone: string;
+  /** Login id — required, unique per tenant. */
+  email: string;
+  /** Optional at create — when omitted the login can't sign in until an admin sets one. */
+  password?: string;
+  /** Optional contact number (no longer the login id). */
+  phone?: string;
   role: ManagedRole;
   /** Required for VENDOR_* roles; must be absent otherwise. */
   vendorId?: string;
@@ -73,6 +78,10 @@ export interface UserCreate {
 }
 export interface UserUpdate {
   name?: string;
+  /** Re-assign the login email. */
+  email?: string;
+  /** Admin password reset; undefined leaves it unchanged. */
+  password?: string;
   phone?: string;
   role?: ManagedRole;
   /** A vendor id, or null to clear the link; undefined leaves it unchanged. */

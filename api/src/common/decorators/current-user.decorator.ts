@@ -4,7 +4,8 @@ export interface JwtPayload {
   sub:      string;   // user ID
   role:     string;
   clientId: string;
-  phone:    string;
+  phone?:   string;   // optional contact (no longer the login id — email+password login)
+  email?:   string;   // login id
   name:     string;
   /**
    * True when this is an OPERATOR-CONTEXT (assume-tenant) token: a GIFSY_ADMIN

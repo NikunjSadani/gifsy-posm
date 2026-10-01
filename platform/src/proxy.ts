@@ -31,8 +31,7 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 
 const PUBLIC_PATHS = [
   '/auth/login',
-  '/api/auth/send-otp',
-  '/api/auth/verify-otp',
+  '/api/auth/login', // email+password login (replaced send-otp/verify-otp, 2026-10-01)
   '/version', // build-id probe for the online-only UpdateNudge — exposes only an opaque token
   '/_next',
   '/favicon.ico',

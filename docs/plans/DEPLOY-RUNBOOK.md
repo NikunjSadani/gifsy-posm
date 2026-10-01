@@ -5,6 +5,13 @@ during provisioning and operations. Topology and names: `ENVIRONMENTS.md` (autho
 env-var inventory: `DEPLOY-ENV-VARS.md`; infra-as-code: `terraform/README.md`; pipeline:
 `.github/workflows/`.
 
+> ⚠️ **AUTH SUPERSEDED (2026-10-01):** login is now **email + password** (admin-managed), NOT phone+OTP.
+> Any step below mentioning `FIXED_OTP` / `ALLOW_FIXED_OTP` / "OTP `123456`" / a "real MSG91 OTP login"
+> is obsolete — there is no login OTP in any environment and no `FIXED_OTP` to check for. MSG91 secrets
+> are needed only for **email reports**. "Log in per role" means with a seeded email + password. See
+> `ENVIRONMENTS.md §5` and `AUTH-EMAIL-PASSWORD-PLAN.md`. (The OTP lines will be scrubbed when this
+> runbook is exercised at provisioning time.)
+
 **Conventions.** Run commands in a shell where these are set (Git Bash / Cloud Shell):
 ```bash
 export PROJECT_ID=<gcp-project-id>        # OWNER DECISION (dedicated vs shared Gifsy project)

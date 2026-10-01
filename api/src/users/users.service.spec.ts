@@ -129,6 +129,25 @@ describe('UsersService', () => {
         service.create(clientAdmin, { phone: '9876543210', name: 'F', role: 'VENDOR_FIELD', vendorId: 'ven1', promoterCode: 'P100' } as any),
       ).rejects.toThrow(/promoter code .* already assigned/i);
     });
+
+    it('normalises the email (lowercase/trim) and stores a bcrypt hash of the password', async () => {
+      mockPrisma.user.create.mockResolvedValue({ id: 'u3', clientId: 'kwality', role: 'ASM', email: 'asm@kw.in', isActive: true, createdAt: new Date(), updatedAt: new Date() });
+      await service.create(clientAdmin, { email: '  ASM@KW.in ', password: 'supersecret', name: 'A', role: 'ASM' } as any);
+      const data = mockPrisma.user.create.mock.calls[0][0].data;
+      expect(data.email).toBe('asm@kw.in');
+      expect(typeof data.passwordHash).toBe('string');
+      expect(data.passwordHash).not.toContain('supersecret'); // hashed, never plaintext
+    });
+
+    it('a duplicate (clientId, email) is reported as an EMAIL clash', async () => {
+      const emailDup = new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002', clientVersion: 'x', meta: { target: ['clientId', 'email'] },
+      } as any);
+      mockPrisma.user.create.mockRejectedValue(emailDup);
+      await expect(
+        service.create(clientAdmin, { email: 'dupe@kw.in', name: 'A', role: 'ASM' } as any),
+      ).rejects.toThrow(/email "dupe@kw.in" already exists/i);
+    });
   });
 
   describe('update — invariant re-checked against the resulting role', () => {

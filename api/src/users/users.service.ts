@@ -13,6 +13,7 @@ import { AuthService } from '../auth/auth.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, platformWide } from '../common/tenant-scope';
 import { normalizeIndianPhone } from '../common/phone';
+import { hashPassword, normalizeEmail, MIN_PASSWORD_LENGTH } from '../common/password';
 import { aoaToSheetSafe } from '../common/xlsx';
 import { CreateUserDto, ManagedRole, MANAGED_ROLES } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -21,9 +22,10 @@ import { USER_UPLOAD_HEADERS, USER_UPLOAD_REQUIRED_HEADERS, USER_ERROR_HEADERS }
 /** A rejected bulk-upload row — echoes the source cells plus the reason. */
 interface UserErrorRow {
   rowNumber: number;
-  phone: string;
+  email: string;
   name: string;
   role: string;
+  phone: string;
   vendor_code: string;
   promoter_code: string;
   error_remarks: string;
@@ -43,6 +45,7 @@ const toJson = (v: unknown): Prisma.InputJsonValue =>
 const PUBLIC_SELECT = {
   id: true,
   clientId: true,
+  email: true,
   phone: true,
   name: true,
   role: true,
@@ -51,6 +54,7 @@ const PUBLIC_SELECT = {
   isActive: true,
   createdAt: true,
   updatedAt: true,
+  // NOTE: passwordHash / lockout fields are deliberately NEVER selected into the admin payload.
 } satisfies Prisma.UserSelect;
 
 /**
@@ -100,27 +104,33 @@ export class UsersService {
     // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
     this.assertTenantContext(user);
     const clientId = user.clientId; // writes pin to the caller's tenant
-    // F5: canonicalise to E.164 BEFORE the uniqueness check + store so the two typed forms
-    // (`9830011252` / `+919830011252`) collapse to one identity.
-    const phone = normalizeIndianPhone(dto.phone);
+    // Email is the login id (unique per tenant); canonicalised to lowercase/trimmed. Phone is now
+    // an OPTIONAL contact (E.164-canonical when given). Password is optional at create — a user
+    // with no passwordHash cannot log in until an admin sets one.
+    const email = normalizeEmail(dto.email);
+    const phone = dto.phone ? normalizeIndianPhone(dto.phone) : null;
+    const promoterCode = this.cleanPromoterCode(dto.promoterCode);
     await this.assertVendorLinkage(clientId, dto.role, dto.vendorId ?? null);
+    const passwordHash = dto.password ? await hashPassword(dto.password) : null;
 
     try {
       const created = await this.prisma.user.create({
         data: {
           clientId,
+          email,
           phone,
           name: dto.name,
           role: dto.role,
           vendorId: dto.vendorId ?? null,
-          promoterCode: this.cleanPromoterCode(dto.promoterCode),
+          promoterCode,
+          ...(passwordHash ? { passwordHash } : {}),
         },
         select: PUBLIC_SELECT,
       });
       await this.audit(user, 'CREATE', created.id, undefined, created);
       return created;
     } catch (e) {
-      this.rethrowDuplicate(e, phone, this.cleanPromoterCode(dto.promoterCode));
+      this.rethrowDuplicate(e, { phone, email, promoterCode });
     }
   }
 
@@ -133,9 +143,12 @@ export class UsersService {
       dto.vendorId === undefined ? existing.vendorId : dto.vendorId;
     await this.assertVendorLinkage(existing.clientId, nextRole, nextVendorId);
 
-    // F5: canonicalise a supplied phone to E.164 before the uniqueness check + store.
+    // Canonicalise a supplied phone to E.164 (or null to clear); undefined = leave unchanged.
     const nextPhone =
-      dto.phone !== undefined ? normalizeIndianPhone(dto.phone) : undefined;
+      dto.phone !== undefined ? (dto.phone ? normalizeIndianPhone(dto.phone) : null) : undefined;
+    // Email + password are optional on update: email re-assign (normalized), password = admin reset.
+    const nextEmail = dto.email !== undefined ? normalizeEmail(dto.email) : undefined;
+    const nextPasswordHash = dto.password ? await hashPassword(dto.password) : undefined;
 
     // F6: an update that DEACTIVATES or DEMOTES-away-from-CLIENT_ADMIN must not lock the
     // tenant out — block self-target and last-active-admin removal BEFORE mutating.
@@ -151,6 +164,11 @@ export class UsersService {
         where: { id: existing.id },
         data: {
           ...(nextPhone !== undefined ? { phone: nextPhone } : {}),
+          ...(nextEmail !== undefined ? { email: nextEmail } : {}),
+          // An admin password reset also clears any brute-force lockout state.
+          ...(nextPasswordHash !== undefined
+            ? { passwordHash: nextPasswordHash, failedLoginAttempts: 0, lockedUntil: null }
+            : {}),
           ...(dto.name !== undefined ? { name: dto.name } : {}),
           ...(dto.role !== undefined ? { role: dto.role } : {}),
           ...(dto.vendorId !== undefined ? { vendorId: dto.vendorId } : {}),
@@ -175,7 +193,11 @@ export class UsersService {
       }
       return updated;
     } catch (e) {
-      this.rethrowDuplicate(e, nextPhone ?? existing.phone, this.cleanPromoterCode(dto.promoterCode));
+      this.rethrowDuplicate(e, {
+        phone: nextPhone !== undefined ? nextPhone : existing.phone,
+        email: nextEmail !== undefined ? nextEmail : existing.email,
+        promoterCode: this.cleanPromoterCode(dto.promoterCode),
+      });
     }
   }
 
@@ -205,11 +227,11 @@ export class UsersService {
    * Excel bulk-ingestion of logins. Mirrors the sites bulk-upload (case-insensitive headers,
    * per-row validation, base64 rejection report, 5 MB / 5000-row caps, one $transaction).
    *
-   * KEY SAFETY DIFFERENCE (auth-sensitive path): this is an UPSERT by (clientId, phone), but for an
-   * EXISTING phone it writes ONLY `name` + `promoterCode` — role, vendor and active-state are NEVER
-   * changed by upload. That avoids the mass session-eviction / last-admin-lockout hazards the
-   * single-record update guards against (WoW: find WHERE a bulk guard must live). New phones are
-   * created with the full role/vendor/promoter payload.
+   * KEY SAFETY DIFFERENCE (auth-sensitive path): this is an UPSERT by (clientId, email), but for an
+   * EXISTING email it writes ONLY name / phone / promoter_code / password — role, vendor and
+   * active-state are NEVER changed by upload. That avoids the mass session-eviction / last-admin
+   * lockout hazards the single-record update guards against. New emails are created with the full
+   * role/vendor/promoter/password payload.
    */
   async bulkUpload(user: JwtPayload, file: Express.Multer.File | undefined) {
     // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
@@ -259,28 +281,36 @@ export class UsersService {
     }
 
     // Preload the tenant's vendors + existing logins ONCE — so per-row resolution and the
-    // phone/promoter-code collision checks are in-memory (not N queries), and we can tell a
-    // create from an update.
+    // email/phone/promoter-code collision checks are in-memory (not N queries), and we can tell a
+    // create from an update (by email, the login id).
     const [vendors, existingUsers] = await Promise.all([
       this.prisma.vendor.findMany({ where: { clientId }, select: { id: true, code: true, isActive: true } }),
       this.prisma.user.findMany({
         where: { clientId, role: { not: 'GIFSY_ADMIN' } },
-        select: { phone: true, promoterCode: true },
+        select: { email: true, phone: true, promoterCode: true },
       }),
     ]);
     const vendorByCode = new Map(vendors.map((v) => [v.code.toLowerCase(), v]));
-    const existingPhones = new Set(existingUsers.map((u) => u.phone));
-    const promoterOwner = new Map<string, string>(); // promoterCode(lower) → phone
-    for (const u of existingUsers) if (u.promoterCode) promoterOwner.set(u.promoterCode.toLowerCase(), u.phone);
+    // owner maps: key(lower) → email, so a collision with a DIFFERENT user is detectable.
+    const phoneOwner = new Map<string, string>();
+    const promoterOwner = new Map<string, string>();
+    for (const u of existingUsers) {
+      if (u.phone) phoneOwner.set(u.phone.toLowerCase(), (u.email ?? '').toLowerCase());
+      if (u.promoterCode) promoterOwner.set(u.promoterCode.toLowerCase(), (u.email ?? '').toLowerCase());
+    }
 
     interface Ok {
-      phone: string; name: string; role: ManagedRole; vendorId: string | null;
-      promoterCode: string | null; promoterPresent: boolean;
+      email: string; name: string; role: ManagedRole; phone: string | null; vendorId: string | null;
+      promoterCode: string | null; passwordRaw: string | null;
+      phonePresent: boolean; promoterPresent: boolean;
     }
     const successRows: Ok[] = [];
     const errorRows: UserErrorRow[] = [];
+    const seenEmails = new Set<string>();
     const seenPhones = new Set<string>();
     const seenPromoters = new Set<string>();
+    // Simple email shape check (the DTO uses class-validator IsEmail; mirror a practical subset here).
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     for (let i = 0; i < rows.length; i++) {
       const rowNumber = i + 2; // row 1 = header
@@ -288,27 +318,27 @@ export class UsersService {
       for (const [k, v] of Object.entries(rows[i])) lower[k.trim().toLowerCase()] = v;
       const get = (key: string): string => String(lower[key] ?? '').trim();
 
-      const phoneRaw = get('phone');
+      const emailRaw = get('email');
       const name = get('name');
       const roleRaw = get('role');
+      const phoneRaw = get('phone');
       const vendorCode = get('vendor_code');
       const promoterCode = get('promoter_code');
+      const passwordRaw = get('password'); // never echoed into the error report
 
       const addError = (reason: string) =>
         errorRows.push({
-          rowNumber, phone: phoneRaw, name, role: roleRaw,
+          rowNumber, email: emailRaw, name, role: roleRaw, phone: phoneRaw,
           vendor_code: vendorCode, promoter_code: promoterCode, error_remarks: reason,
         });
 
-      if (!phoneRaw) { addError('phone is required'); continue; }
-      // Validate as a 10-digit Indian mobile (mirrors the DTO's @IsMobilePhone('en-IN')), then
-      // canonicalise to E.164 exactly as normalizeIndianPhone does.
-      const digits = phoneRaw.replace(/\D/g, '');
-      const last10 = digits.length > 10 ? digits.slice(-10) : digits;
-      if (last10.length !== 10 || !/^[6-9]/.test(last10)) {
-        addError(`Invalid phone "${phoneRaw}" (must be a 10-digit Indian mobile)`); continue;
+      // Email — required, well-formed, unique within the file.
+      if (!emailRaw) { addError('email is required'); continue; }
+      const email = normalizeEmail(emailRaw);
+      if (!emailRe.test(email)) { addError(`Invalid email "${emailRaw}"`); continue; }
+      if (seenEmails.has(email)) {
+        addError(`Duplicate email "${emailRaw}" appears more than once in this file`); continue;
       }
-      const phone = normalizeIndianPhone(phoneRaw);
       if (!name) { addError('name is required'); continue; }
       if (!roleRaw) { addError('role is required'); continue; }
       const role = roleRaw.toUpperCase();
@@ -316,8 +346,27 @@ export class UsersService {
         addError(`Invalid role "${roleRaw}" (allowed: ${MANAGED_ROLES.join(', ')})`); continue;
       }
 
-      if (seenPhones.has(phone)) {
-        addError(`Duplicate phone "${phoneRaw}" appears more than once in this file`); continue;
+      // Phone — OPTIONAL now; validate only when supplied; collision checked vs a different user.
+      let phone: string | null = null;
+      if (phoneRaw) {
+        const digits = phoneRaw.replace(/\D/g, '');
+        const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+        if (last10.length !== 10 || !/^[6-9]/.test(last10)) {
+          addError(`Invalid phone "${phoneRaw}" (must be a 10-digit Indian mobile)`); continue;
+        }
+        phone = normalizeIndianPhone(phoneRaw);
+        if (seenPhones.has(phone)) {
+          addError(`Duplicate phone "${phoneRaw}" appears more than once in this file`); continue;
+        }
+        const owner = phoneOwner.get(phone.toLowerCase());
+        if (owner && owner !== email) {
+          addError(`Phone "${phoneRaw}" is already assigned to another user in this tenant`); continue;
+        }
+      }
+
+      // Password — OPTIONAL; min length when supplied.
+      if (passwordRaw && passwordRaw.length < MIN_PASSWORD_LENGTH) {
+        addError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`); continue;
       }
 
       // Vendor-linkage invariant: vendor roles REQUIRE an active tenant vendor; others must not.
@@ -341,19 +390,27 @@ export class UsersService {
           addError(`Duplicate promoter_code "${promoterCode}" appears more than once in this file`); continue;
         }
         const owner = promoterOwner.get(key);
-        if (owner && owner !== phone) {
+        if (owner && owner !== email) {
           addError(`Promoter code "${promoterCode}" is already assigned to another user in this tenant`); continue;
         }
         promoter = promoterCode;
       }
 
-      seenPhones.add(phone);
+      seenEmails.add(email);
+      if (phone) seenPhones.add(phone);
       if (promoter) seenPromoters.add(promoter.toLowerCase());
       successRows.push({
-        phone, name, role: role as ManagedRole, vendorId,
-        promoterCode: promoter, promoterPresent: promoterCode !== '',
+        email, name, role: role as ManagedRole, phone, vendorId,
+        promoterCode: promoter, passwordRaw: passwordRaw || null,
+        phonePresent: phoneRaw !== '', promoterPresent: promoterCode !== '',
       });
     }
+
+    // Hash the supplied passwords (in parallel). Rows without a password create a login that
+    // cannot sign in until an admin sets one.
+    const passwordHashes = await Promise.all(
+      successRows.map((r) => (r.passwordRaw ? hashPassword(r.passwordRaw) : Promise.resolve(null))),
+    );
 
     const batchId = randomUUID();
     const auditData: Prisma.AuditLogCreateInput = {
@@ -365,19 +422,26 @@ export class UsersService {
     };
 
     if (successRows.length > 0) {
-      const ops: Prisma.PrismaPromise<unknown>[] = successRows.map((r) =>
-        this.prisma.user.upsert({
-          where: { clientId_phone: { clientId, phone: r.phone } },
+      const ops: Prisma.PrismaPromise<unknown>[] = successRows.map((r, i) => {
+        const passwordHash = passwordHashes[i];
+        return this.prisma.user.upsert({
+          where: { clientId_email: { clientId, email: r.email } },
           create: {
-            clientId, phone: r.phone, name: r.name, role: r.role,
-            vendorId: r.vendorId, promoterCode: r.promoterCode,
+            clientId, email: r.email, name: r.name, role: r.role,
+            phone: r.phone, vendorId: r.vendorId, promoterCode: r.promoterCode,
+            ...(passwordHash ? { passwordHash } : {}),
           },
-          // SAFETY: an existing login is updated for name + promoter code ONLY (promoter is
-          // present-gated so a blank cell preserves the current code). role / vendor / isActive
-          // are intentionally never written here.
-          update: { name: r.name, ...(r.promoterPresent ? { promoterCode: r.promoterCode } : {}) },
-        }),
-      );
+          // SAFETY: an existing login is updated for name / phone / promoter / password ONLY (each
+          // present-gated so a blank cell preserves the current value). role / vendor / isActive are
+          // intentionally never written here. A supplied password also clears the lockout state.
+          update: {
+            name: r.name,
+            ...(r.phonePresent ? { phone: r.phone } : {}),
+            ...(r.promoterPresent ? { promoterCode: r.promoterCode } : {}),
+            ...(passwordHash ? { passwordHash, failedLoginAttempts: 0, lockedUntil: null } : {}),
+          },
+        });
+      });
       ops.push(this.prisma.auditLog.create({ data: auditData }));
       await this.prisma.$transaction(ops);
     } else {
@@ -412,7 +476,7 @@ export class UsersService {
   private buildUserErrorFile(errorRows: UserErrorRow[]): string {
     const headers = [...USER_ERROR_HEADERS];
     const data = errorRows.map((r) => [
-      r.rowNumber, r.phone, r.name, r.role, r.vendor_code, r.promoter_code, r.error_remarks,
+      r.rowNumber, r.email, r.name, r.role, r.phone, r.vendor_code, r.promoter_code, r.error_remarks,
     ]);
     const ws = aoaToSheetSafe([headers, ...data]);
     ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 6 }));
@@ -518,23 +582,32 @@ export class UsersService {
   }
 
   /**
-   * Map a Prisma P2002 to a friendly 409. There are TWO tenant-unique constraints on User —
-   * (clientId, phone) and (clientId, promoterCode) — so disambiguate by the violated target and
-   * name the right field (a promoter-code clash must not be reported as a phone clash).
+   * Map a Prisma P2002 to a friendly 409. There are THREE tenant-unique constraints on User —
+   * (clientId, email), (clientId, phone) and (clientId, promoterCode) — so disambiguate by the
+   * violated target and name the right field (an email clash must not be reported as a phone clash).
    */
-  private rethrowDuplicate(e: unknown, phone: string, promoterCode: string | null): never {
+  private rethrowDuplicate(
+    e: unknown,
+    fields: { phone: string | null; email: string | null; promoterCode: string | null },
+  ): never {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
       const target = e.meta?.target;
-      const hitPromoter = Array.isArray(target)
-        ? target.includes('promoterCode')
-        : typeof target === 'string' && target.includes('promoterCode');
-      if (hitPromoter) {
+      const hit = (col: string) =>
+        Array.isArray(target)
+          ? target.includes(col)
+          : typeof target === 'string' && target.includes(col);
+      if (hit('email')) {
         throw new ConflictException(
-          `Promoter code "${promoterCode ?? ''}" is already assigned to another user in this tenant.`,
+          `A user with email "${fields.email ?? ''}" already exists in this tenant.`,
+        );
+      }
+      if (hit('promoterCode')) {
+        throw new ConflictException(
+          `Promoter code "${fields.promoterCode ?? ''}" is already assigned to another user in this tenant.`,
         );
       }
       throw new ConflictException(
-        `A user with phone ${phone} already exists in this tenant.`,
+        `A user with phone ${fields.phone ?? ''} already exists in this tenant.`,
       );
     }
     throw e;

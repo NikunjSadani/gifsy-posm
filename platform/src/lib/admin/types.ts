@@ -60,9 +60,10 @@ export interface PosmType {
 export interface AdminUser {
   id: string;
   clientId: string;
-  phone: string;
+  phone: string | null;
   name: string;
   role: ManagedRole;
+  email: string | null;
   vendorId: string | null;
   promoterCode: string | null;
   isActive: boolean;
@@ -147,12 +148,14 @@ export const SITE_UPLOAD_HEADERS = [
 
 /** The user bulk-upload template columns. Mirrors api USER_UPLOAD_HEADERS. */
 export const USER_UPLOAD_HEADERS = [
-  'phone',
+  'email',
   'name',
   'role',
+  'phone',
   'vendor_code',
   'promoter_code',
+  'password',
 ] as const;
-export const USER_UPLOAD_REQUIRED_HEADERS = ['phone', 'name', 'role'] as const;
+export const USER_UPLOAD_REQUIRED_HEADERS = ['email', 'name', 'role'] as const;
 
 export const SITE_UPLOAD_REQUIRED_HEADERS = ['code', 'name'] as const;

@@ -12,15 +12,13 @@ Legend — **Source**: `Secret Manager` (bound via `--set-secrets`, secret name 
 
 | Name | Service | Env | Source | Purpose |
 |---|---|---|---|---|
-| `NODE_ENV` | api | both = `production` | plain | Production runtime mode. `main.ts` fail-fast-checks `DATABASE_URL`/`JWT_SECRET` when this is `production`; also makes the fixed-OTP guard deny by default. |
+| `NODE_ENV` | api | both = `production` | plain | Production runtime mode. `main.ts` fail-fast-checks `DATABASE_URL`/`JWT_SECRET` when this is `production`. |
 | `PORT` | api | both | Cloud Run | Listen port (8080). `main.ts` reads it; do not set by hand. |
-| `DATABASE_URL` | api | both | Secret Manager `posm-<env>-database-url` | Postgres URL for DB `posm_staging` / `posm_prod`, user `posm_app`. DB name matters: fixed-OTP staging opt-in matches `/posm_staging`, and any `/posm_prod` URL is hard-refused for fixed OTP. |
+| `DATABASE_URL` | api | both | Secret Manager `posm-<env>-database-url` | Postgres URL for DB `posm_staging` / `posm_prod`, user `posm_app`. |
 | `JWT_SECRET` | api | both | Secret Manager `posm-<env>-jwt-secret` | Signs/verifies access tokens. Required at boot. **Must equal the same env's frontend `JWT_SECRET`.** Use different values per env. |
 | `JWT_EXPIRES_IN` | api | both = `60m` | plain | Access-token lifetime (short so the rolling session slides). |
-| `FIXED_OTP` | api | **staging only** = `123456` | plain | Constant OTP for UAT (skips MSG91). Universal-login backdoor — **never set in prod**. |
-| `ALLOW_FIXED_OTP` | api | **staging only** = `true` | plain | Explicit opt-in so `FIXED_OTP` is honored under `NODE_ENV=production` (also requires DB name `posm_staging`). **Never set in prod** — guard fails closed. |
-| `MSG91_AUTH_KEY` | api | both | Secret Manager `posm-<env>-msg91-auth-key` | MSG91 API auth key (OTP SMS / WhatsApp). |
-| `MSG91_OTP_TEMPLATE_ID` | api | both | Secret Manager `posm-<env>-msg91-otp-template-id` | MSG91 DLT-approved OTP template id. |
+| _Login_ | — | — | — | **Email + password (no OTP, 2026-10-01).** Admins set bcrypt passwords; there is no login env var and no `FIXED_OTP`. |
+| `MSG91_AUTH_KEY` | api | both | Secret Manager `posm-<env>-msg91-auth-key` | MSG91 API auth key (email reports; dormant SMS/WhatsApp). Not used for login. |
 | `MSG91_WHATSAPP_NUMBER` | api | both (optional) | plain | MSG91 integrated WhatsApp number; WhatsApp sends are skipped if unset. Not in the contract list — present in code. |
 | `MSG91_SMTP_USER` | api | both | Secret Manager `posm-<env>-msg91-smtp-user` | SMTP relay username (report emails). |
 | `MSG91_SMTP_PASS` | api | both | Secret Manager `posm-<env>-msg91-smtp-pass` | SMTP relay password. |
@@ -40,7 +38,7 @@ Legend — **Source**: `Secret Manager` (bound via `--set-secrets`, secret name 
 | Name | Service | Env | Source | Purpose |
 |---|---|---|---|---|
 | `NEXT_PUBLIC_API_URL` | frontend | both (different URL) | build-arg | The same env's API service URL. `next.config.ts` rewrites `/api/*` → `${NEXT_PUBLIC_API_URL}/v1/*` at build time; change = rebuild. |
-| `NEXT_PUBLIC_CLIENT_ID` | frontend | both = `kwality` | build-arg | Tenant (Client) id sent as `clientId` on OTP send/verify, inlined into the client bundle. ⚠️ **Must equal the seeded Kwality Client row `id`** (the backend looks users up by this id, not the slug). Local dev uses a cuid, so `=kwality` only works if staging/prod seed the Client with a STABLE `id: 'kwality'`. **Provisioning action: seed staging/prod with `id:'kwality'`** (or set this to the real cuid per env). Verified 2026-10-01 against `api/scripts/seed-verify.mjs` (slug=`kwality`, id=auto cuid) + `platform/src/lib/field/config.ts` (sends it as `clientId`). |
+| `NEXT_PUBLIC_CLIENT_ID` | frontend | both = `kwality` | build-arg | Tenant (Client) id sent as `clientId` on the login request, inlined into the client bundle. ⚠️ **Must equal the seeded Kwality Client row `id`** (the backend looks users up by this id, not the slug). Local dev uses a cuid, so `=kwality` only works if staging/prod seed the Client with a STABLE `id: 'kwality'`. **Provisioning action: seed staging/prod with `id:'kwality'`** (or set this to the real cuid per env). Verified 2026-10-01 against `api/scripts/seed-verify.mjs` (slug=`kwality`, id=auto cuid) + `platform/src/lib/field/config.ts` (sends it as `clientId`). |
 | `BUILD_ID` | frontend | both | build-arg (CI = git SHA) | Next build id + `NEXT_PUBLIC_BUILD_ID`; drives `/version` and stale-tab `UpdateNudge`. |
 | `JWT_SECRET` | frontend | both | Secret Manager `posm-<env>-jwt-secret` | Runtime. The proxy (`src/proxy.ts`) verifies api-issued tokens. **Must equal the same env's api `JWT_SECRET`**; app throws at boot in production if unset. |
 | `NODE_ENV` | frontend | both = `production` | plain | Production mode. |

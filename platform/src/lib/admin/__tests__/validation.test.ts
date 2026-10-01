@@ -56,26 +56,42 @@ describe('validatePosmType', () => {
   });
 });
 
-describe('validateUser (role ↔ vendor invariant)', () => {
-  it('passes an ASM with no vendor', () => {
-    expect(isValid(validateUser({ name: 'A', phone: '9830011252', role: 'ASM' }))).toBe(true);
+describe('validateUser (email login + role ↔ vendor invariant)', () => {
+  it('passes an ASM with an email and no vendor/phone', () => {
+    expect(isValid(validateUser({ name: 'A', email: 'a@kw.in', role: 'ASM' }))).toBe(true);
+  });
+  it('requires an email', () => {
+    const e = validateUser({ name: 'A', email: '', role: 'ASM' });
+    expect(e.email).toBeDefined();
+  });
+  it('rejects a malformed email', () => {
+    const e = validateUser({ name: 'A', email: 'not-an-email', role: 'ASM' });
+    expect(e.email).toBeDefined();
+  });
+  it('phone is OPTIONAL but validated when present', () => {
+    expect(isValid(validateUser({ name: 'A', email: 'a@kw.in', role: 'ASM', phone: '' }))).toBe(true);
+    const e = validateUser({ name: 'A', email: 'a@kw.in', role: 'ASM', phone: '123' });
+    expect(e.phone).toBeDefined();
+  });
+  it('rejects a too-short password when supplied', () => {
+    const e = validateUser({ name: 'A', email: 'a@kw.in', role: 'ASM', password: 'abc' });
+    expect(e.password).toBeDefined();
   });
   it('requires a vendorId for a vendor role', () => {
-    const e = validateUser({ name: 'V', phone: '9830011252', role: 'VENDOR_FIELD' });
+    const e = validateUser({ name: 'V', email: 'v@kw.in', role: 'VENDOR_FIELD' });
     expect(e.vendorId).toBeDefined();
   });
   it('accepts a vendor role WITH a vendorId', () => {
-    const e = validateUser({ name: 'V', phone: '9830011252', role: 'VENDOR_HO', vendorId: 'ven_1' });
+    const e = validateUser({ name: 'V', email: 'v@kw.in', role: 'VENDOR_HO', vendorId: 'ven_1' });
     expect(isValid(e)).toBe(true);
   });
   it('forbids a vendorId on a non-vendor role', () => {
-    const e = validateUser({ name: 'A', phone: '9830011252', role: 'CLIENT_ADMIN', vendorId: 'ven_1' });
+    const e = validateUser({ name: 'A', email: 'a@kw.in', role: 'CLIENT_ADMIN', vendorId: 'ven_1' });
     expect(e.vendorId).toBeDefined();
   });
-  it('rejects an unknown role and a bad phone', () => {
-    const e = validateUser({ name: 'A', phone: '123', role: 'SUPERUSER' });
+  it('rejects an unknown role', () => {
+    const e = validateUser({ name: 'A', email: 'a@kw.in', role: 'SUPERUSER' });
     expect(e.role).toBeDefined();
-    expect(e.phone).toBeDefined();
   });
 });
 

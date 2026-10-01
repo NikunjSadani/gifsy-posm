@@ -69,7 +69,15 @@ enum UserRole {
 model User {
   id        String   @id @default(cuid())
   clientId  String
-  phone     String
+  // Login identity is EMAIL + password (owner decision 2026-10-01; replaced phone+OTP). `email` is
+  // unique per tenant and REQUIRED to log in; `passwordHash` null ⇒ login disabled until an admin
+  // sets a password. `phone` is now an OPTIONAL contact field (notifications), no longer the login id.
+  email     String?
+  passwordHash String?
+  // Brute-force lockout: N consecutive failures locks the account until `lockedUntil`.
+  failedLoginAttempts Int      @default(0)
+  lockedUntil         DateTime?
+  phone     String?
   name      String
   role      UserRole
   vendorId  String?                          // set for VENDOR_FIELD / VENDOR_HO
@@ -95,7 +103,10 @@ model User {
   submittedInstalls Installation[] @relation("InstallSubmitter")
   hoReviewedInstalls Installation[] @relation("InstallHoReviewer")
 
-  @@unique([clientId, phone])                 // one active login per (tenant, phone)
+  // Email is the login id — unique per tenant when set (Postgres NULLs are distinct, so pre-email
+  // rows don't collide; a user can't log in until an admin assigns an email + password).
+  @@unique([clientId, email])
+  @@unique([clientId, phone])                 // phone kept unique per tenant (now optional contact)
   // Promoter code is unique per tenant when set. Postgres treats NULLs as distinct, so the many
   // existing users with a null code do not collide — only a duplicate non-null code is rejected.
   @@unique([clientId, promoterCode])
@@ -155,45 +166,9 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-/// The single purpose POSM issues OTPs for today (login). Ported as an enum (not a bare
-/// string) to mirror loyalty's OtpCode.purpose and leave room for future purposes.
-enum OtpPurpose {
-  LOGIN
-}
-
-/// Delivery channel an OTP was sent over — captured for support/diagnostics.
-enum OtpChannel {
-  SMS
-  WHATSAPP
-}
-
-/// Durable, cross-instance OTP store (chassis auth pattern, ported from loyalty's OtpCode).
-/// Replaces the former in-memory Map so the per-phone send-cap and attempt-cap hold across
-/// ALL Cloud Run instances (a per-instance Map does not). The code is stored HASHED
-/// (SHA-256, see common/otp.ts) so a DB read cannot recover a live OTP; verify hashes the
-/// submitted code and compares. `consumedAt` marks a used code; a fresh send supersedes older
-/// unconsumed rows because verify always reads the NEWEST unconsumed row for the phone.
-model OtpCode {
-  id          String      @id @default(cuid())
-  phone       String
-  clientId    String?                        // the tenant the login OTP was scoped to (nullable: unbranded caller)
-  codeHash    String                         // SHA-256 hex of the 6-digit code — never the plaintext
-  purpose     OtpPurpose  @default(LOGIN)
-  channel     OtpChannel?
-  attempts    Int         @default(0)        // wrong-code attempts against THIS code
-  maxAttempts Int         @default(3)
-  expiresAt   DateTime
-  consumedAt  DateTime?                      // set when the code is verified (loyalty's verifiedAt)
-  requestId   String?                        // MSG91 request id (light delivery handle; dormant)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-
-  @@index([phone])
-  @@index([clientId])
-  @@index([purpose])
-  @@index([expiresAt])
-  @@map("otp_codes")
-}
+// OTP login was removed on 2026-10-01 (owner decision) in favour of email + password. The former
+// OtpCode model + OtpPurpose/OtpChannel enums were deleted here; the `otp_codes` table + enums are
+// dropped by the accompanying migration. MSG91 remains for transactional email (reports).
 
 // ═════════════════════════════════════════════════════════════════════════════
 // POSM MASTERS

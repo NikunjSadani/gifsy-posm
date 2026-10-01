@@ -20,7 +20,8 @@ full env-var inventory lives in `DEPLOY-ENV-VARS.md`; the rationale/plan is `DEP
 | URL (edge, optional) | — | `uat-posm.<DOMAIN>` | `posm.<DOMAIN>` (or client-facing domain) — **owner decision, §6** |
 | DB | local PG `posm_dev` `:5433` | `posm_staging` on `$SQL_INSTANCE`, user `posm_app` | `posm_prod` on `$SQL_INSTANCE` (instance placement = open decision, `DEPLOYMENT-PLAN.md` §5.1), user `posm_app` |
 | Media | local disk (`STORAGE_DRIVER=local`) | GCS `posm-staging-files` (`STORAGE_DRIVER=gcs`) | GCS `posm-prod-files` (`STORAGE_DRIVER=gcs`) |
-| OTP / email | `FIXED_OTP=123456` | **`FIXED_OTP=123456`** (+ `ALLOW_FIXED_OTP=true`) | **real MSG91** — no `FIXED_OTP`, no `ALLOW_FIXED_OTP` |
+| Login | email + password (admin-set) | email + password | email + password | — all envs identical; no OTP |
+| Email (reports) | MSG91 (dev bypass logs) | MSG91 | **real MSG91** | — not used for login |
 | Secrets | `api/.env`, `platform/.env` (never committed) | Secret Manager `posm-staging-*` | Secret Manager `posm-prod-*` |
 | Images | — | `…/posm/posm-api:<SHA>`, `…/posm/posm-frontend:<SHA>` (built for staging) | same repo/names, **built separately** for prod from `main` |
 | Min instances | — | 0 | 0 (1 for a warm prod is an open decision) |
@@ -108,22 +109,19 @@ Cross-checks from the outside:
 - Frontend build id: `GET <frontend-or-edge-url>/version` (public, opaque) — the frontend is built with
   `BUILD_ID=<GIT_SHA>`, so this should equal the SHA in the image tag.
 
-## 5. Login / OTP facts
+## 5. Login facts
 
-- Login is **phone + OTP**. The fixed-OTP bypass is a universal-login backdoor, so it is gated in
-  `api/src/common/fixed-otp.ts` (fail-closed). It is honored ONLY when:
-  1. `NODE_ENV` is explicitly `development` or `test` (local), **or**
-  2. (staging box, which runs `NODE_ENV=production`) `ALLOW_FIXED_OTP=true` **and** `DATABASE_URL`
-     matches `/posm_staging`.
-  And it is **hard-refused** whenever `DATABASE_URL` matches `/posm_prod` (defense-in-depth).
-- **local** and **staging**: OTP is `123456` (`FIXED_OTP=123456`; staging also needs `ALLOW_FIXED_OTP=true`).
-  No SMS/email is sent.
-- **prod**: real MSG91 (`MSG91_AUTH_KEY`, `MSG91_OTP_TEMPLATE_ID`; email via the SMTP secrets). Prod must
-  set **neither** `FIXED_OTP` nor `ALLOW_FIXED_OTP`. Never weaken or "temporarily" bypass this guard to
-  debug prod login.
-- Naming caveat: the staging positive-match and the prod refusal key off the DB **names**
-  `posm_staging` / `posm_prod`. Do not create restore/scratch databases whose names start with those
-  strings expecting different behavior (see runbook, DB restore).
+- Login is **email + password** (replaced phone + OTP, 2026-10-01), the SAME across local / staging /
+  prod. `POST /v1/auth/login` → bcrypt verify → the rolling session. There is **no OTP and no
+  FIXED_OTP backdoor** in any environment.
+- Passwords are **admin-managed**: an admin sets a user's password (create/edit, or the bulk upload's
+  optional `password` column). A user with no password set cannot sign in. There is no self-service
+  reset — an admin sets a new password.
+- Brute-force: after repeated failed logins the account is temporarily locked (see
+  `api/src/common/password.ts`). Login errors are uniform (no account enumeration).
+- `NEXT_PUBLIC_CLIENT_ID` (the tenant id) is sent with the login request to scope it — it must equal
+  the seeded Client row `id` (seed staging/prod with a stable `id:'kwality'`).
+- MSG91 is retained for transactional **email** (scheduled reports), not for login.
 - Sessions: httpOnly `token` cookie (~60 min, `JWT_EXPIRES_IN=60m`) + 7-day rolling `refresh_token`
   cookie, set `Secure` whenever the frontend runs with `NODE_ENV=production` (staging and prod) — so
   staging/prod must be reached over **https** (Cloud Run URLs and the edge both are).

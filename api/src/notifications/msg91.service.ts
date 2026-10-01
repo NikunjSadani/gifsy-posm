@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
-import { isFixedOtpAllowed } from '../common/fixed-otp';
 
 /**
  * Shared MSG91 provider (chassis transport). Sends OTPs via the MSG91 v5 OTP API,
@@ -15,82 +14,6 @@ export class Msg91Service {
 
   constructor(private readonly config: ConfigService) {}
 
-  /**
-   * @returns `{ requestId }` — MSG91's returned OTP request id (best-effort; null when a
-   *   DEV bypass fires or the body carries no id). Send behaviour is unchanged.
-   */
-  async sendOtp(
-    phone: string,
-    otp: string,
-    channel: 'SMS' | 'WHATSAPP' = 'SMS',
-    templateId?: string,
-  ): Promise<{ requestId: string | null }> {
-    // `.trim()` defends against secrets saved with a leading UTF-8 BOM or stray whitespace —
-    // a BOM on MSG91_AUTH_KEY made `fetch` throw a ByteString error on the authkey header.
-    const authKey    = this.config.get<string>('MSG91_AUTH_KEY')?.trim();
-    const override   = templateId?.trim();
-    const resolvedTemplateId = override || this.config.get<string>('MSG91_OTP_TEMPLATE_ID')?.trim();
-    // FIXED_OTP is a dev/staging convenience only, gated by isFixedOtpAllowed.
-    const fixedOtp = isFixedOtpAllowed() ? this.config.get<string>('FIXED_OTP') : undefined;
-
-    // FIXED_OTP mode — skip MSG91, log OTP to console (dev/staging only)
-    if (fixedOtp) {
-      this.logger.warn(`[FIXED_OTP MODE] OTP for ${phone} is always: ${fixedOtp} — MSG91 not called`);
-      return { requestId: null };
-    }
-
-    if (!authKey) {
-      this.logger.warn(`[DEV] MSG91 not configured — OTP for ${phone}: ${otp}`);
-      return { requestId: null };
-    }
-
-    // MSG91 OTP API v5 — authkey goes in the header, not the body. Sender ID is configured
-    // on the template inside the MSG91 dashboard. Both SMS and WhatsApp use the same endpoint;
-    // routing is determined by the template type registered in MSG91.
-    const url  = 'https://control.msg91.com/api/v5/otp';
-    const body = { template_id: resolvedTemplateId, mobile: `91${phone}`, otp };
-
-    // Never hang the OTP request on an unresponsive MSG91 — 10s timeout, then fail fast.
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method:  'POST',
-        headers: { authkey: authKey, 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-        signal:  AbortSignal.timeout(10_000),
-      });
-    } catch (e) {
-      const reason = (e as Error)?.name === 'TimeoutError'
-        ? 'MSG91 did not respond within 10s (timeout — check MSG91 IP whitelisting / egress)'
-        : String(e);
-      this.logger.error(`MSG91 OTP request failed for ${phone} (${channel}): ${reason}`);
-      throw new Error(`Failed to send OTP via ${channel}: ${reason}`);
-    }
-
-    // MSG91 can return HTTP 200 with {"type":"error"} — check the body too.
-    const json = await res.json() as {
-      type?: string;
-      message?: string;
-      request_id?: string;
-      requestId?: string;
-      data?: { request_id?: string; requestId?: string };
-    };
-    if (!res.ok || json?.type === 'error') {
-      const reason = json?.message ?? `HTTP ${res.status}`;
-      this.logger.error(`MSG91 OTP failed for ${phone} (${channel}): ${reason}`);
-      throw new Error(`Failed to send OTP via ${channel}: ${reason}`);
-    }
-
-    const requestId =
-      json.request_id ??
-      json.requestId ??
-      json.data?.request_id ??
-      json.data?.requestId ??
-      (typeof json.message === 'string' && /^[A-Za-z0-9]{20,}$/.test(json.message.trim())
-        ? json.message.trim()
-        : null);
-    return { requestId };
-  }
 
   /**
    * Send a WhatsApp TEMPLATE message via the MSG91 v5 bulk WhatsApp API. Optional in the

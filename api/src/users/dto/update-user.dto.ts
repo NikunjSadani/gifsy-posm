@@ -5,9 +5,12 @@ import {
   IsIn,
   IsOptional,
   IsBoolean,
+  IsEmail,
+  MinLength,
   MaxLength,
 } from 'class-validator';
 import { MANAGED_ROLES, ManagedRole } from './create-user.dto';
+import { MIN_PASSWORD_LENGTH } from '../../common/password';
 
 /**
  * Partial update. When `role` and/or `vendorId` change, the service re-validates the
@@ -15,6 +18,20 @@ import { MANAGED_ROLES, ManagedRole } from './create-user.dto';
  * must keep vendorId consistent. Passing vendorId as null clears the link.
  */
 export class UpdateUserDto {
+  /** Re-assign the login email (unique per tenant). Absence = unchanged. */
+  @IsOptional()
+  @IsEmail({}, { message: 'A valid email is required' })
+  @MaxLength(254)
+  email?: string;
+
+  /** Admin password reset. Absence = unchanged; when set, clears any lockout. */
+  @IsOptional()
+  @IsString()
+  @MinLength(MIN_PASSWORD_LENGTH, { message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` })
+  @MaxLength(200)
+  password?: string;
+
+  /** Optional contact number ("" / null clears it). Absence = unchanged. */
   @IsOptional()
   @IsMobilePhone('en-IN', {}, { message: 'Must be a valid 10-digit Indian mobile number' })
   phone?: string;

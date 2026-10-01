@@ -3,7 +3,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { SendOtpDto, VerifyOtpDto, RefreshTokenDto, AssumeTenantDto } from './dto/auth.dto';
+import { LoginDto, RefreshTokenDto, AssumeTenantDto } from './dto/auth.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Public, Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -13,22 +13,17 @@ import type { JwtPayload } from '../common/decorators/current-user.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  /** Step 1 — Request OTP (tightly rate-limited: 5 requests per minute per IP) */
-  @Public()
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @Post('send-otp')
-  @HttpCode(HttpStatus.OK)
-  async sendOtp(@Body() dto: SendOtpDto) {
-    return this.authService.sendOtp(dto.phone, dto.channel, dto.clientId);
-  }
-
-  /** Step 2 — Verify OTP and receive tokens (10 attempts per minute per IP) */
+  /**
+   * Email + password login → rolling-session tokens (replaced phone + OTP, 2026-10-01).
+   * Rate-limited per IP (10/min) as a coarse brute-force bound; the service also locks an account
+   * after repeated failures.
+   */
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @Post('verify-otp')
+  @Post('login')
   @HttpCode(HttpStatus.OK)
-  async verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtp(dto.phone, dto.otp, dto.clientId);
+  async login(@Body() dto: LoginDto) {
+    return this.authService.login(dto.clientId, dto.email, dto.password);
   }
 
   /** Refresh access token */

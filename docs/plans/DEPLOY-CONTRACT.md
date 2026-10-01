@@ -34,9 +34,9 @@ value. Nothing here is applied to the cloud; this is scaffolding for a later `ap
 **api (Cloud Run service env):** `NODE_ENV=production`, `PORT=8080` (Cloud Run injects PORT — read it),
 `DATABASE_URL` (secret), `JWT_SECRET` (secret), `JWT_EXPIRES_IN=60m`, `STORAGE_DRIVER=gcs`,
 `GCS_BUCKET=posm-<env>-files`, `GCP_PROJECT_ID=$PROJECT_ID`, `CORS_ORIGINS=<frontend URL(s)>`,
-`MSG91_AUTH_KEY`/`MSG91_OTP_TEMPLATE_ID`/`MSG91_SMTP_PASS`/`MSG91_SMTP_USER`/`MSG91_SMTP_HOST`/`MSG91_SMTP_PORT`/`REPORTS_FROM_EMAIL`,
-`RBAC_ENFORCEMENT=false`, `LOG_LEVEL=info`. STAGING adds `FIXED_OTP=123456` + `ALLOW_FIXED_OTP=true`;
-PROD sets NEITHER (real MSG91; the fixed-OTP guard fails closed on prod).
+`MSG91_AUTH_KEY`/`MSG91_SMTP_PASS`/`MSG91_SMTP_USER`/`MSG91_SMTP_HOST`/`MSG91_SMTP_PORT`/`REPORTS_FROM_EMAIL`,
+`RBAC_ENFORCEMENT=false`, `LOG_LEVEL=info`. **Login is email + password (no OTP, 2026-10-01)** — no
+`FIXED_OTP`/`ALLOW_FIXED_OTP` in any env; MSG91 is kept for email reports only.
 ⚠️ Cloud Run sets `PORT` (default 8080) — the api must listen on `process.env.PORT`. Confirm `main.ts`
 uses it; if it hardcodes 4000, that's an app-readiness fix (flag it, don't silently rewrite scope).
 **frontend (Cloud Run service env + build args):** build arg `NEXT_PUBLIC_API_URL=<api service URL>`,
@@ -59,7 +59,7 @@ MUST match the api's — the proxy verifies tokens), `PORT` (Cloud Run), `NODE_E
 
 ## Guardrails for every agent
 - Do not run `gcloud`/`terraform apply`/any cloud call — scaffolding only, placeholders for real ids.
-- Do not weaken the prod fixed-OTP guard. Do not commit real secrets. `.env.*.example` files hold
+- Do not weaken auth (password hashing, lockout) or commit real secrets. `.env.*.example` files hold
   placeholders only.
 - Keep changes within your file set above. If you find a cross-cutting need, NOTE it in your final
   report for the integrator — do not edit another agent's files.

@@ -1,16 +1,14 @@
 'use server';
 
 /**
- * Login server action — verify OTP and establish the httpOnly session.
+ * Login server action — email + password (replaced phone + OTP, 2026-10-01). Establishes the
+ * httpOnly session.
  *
- * The proxy treats `/api/auth/verify-otp` as a PUBLIC pass-through: it forwards the request to
- * the backend but does NOT set any cookie. So the token/refresh pair the backend returns must
- * be turned into httpOnly cookies HERE, server-side, exactly like the chassis refresh/logout
- * actions — the access token must never be exposed to client JS (AF-6). The client login page
- * calls this action, then stores only the non-sensitive `user` object for client routing.
- *
- * send-otp needs no cookie, so it stays a plain client fetch through the `/api` proxy; only
- * the token-minting verify step runs here.
+ * The proxy treats `/api/auth/login` as a PUBLIC pass-through: it forwards the request to the
+ * backend but does NOT set any cookie. So the token/refresh pair the backend returns must be
+ * turned into httpOnly cookies HERE, server-side, so the access token is never exposed to client
+ * JS (AF-6). The client login page calls this action, then stores only the non-sensitive `user`
+ * object for client routing.
  */
 
 import { cookies } from 'next/headers';
@@ -26,7 +24,7 @@ export interface LoginUser {
   id: string;
   name: string;
   role: string;
-  phone: string;
+  email: string;
 }
 
 export type LoginResult =
@@ -34,8 +32,8 @@ export type LoginResult =
   | { ok: false; error: string };
 
 export async function loginAction(
-  phone: string,
-  otp: string,
+  email: string,
+  password: string,
   clientId: string,
 ): Promise<LoginResult> {
   let body: {
@@ -45,15 +43,15 @@ export async function loginAction(
   } | null = null;
 
   try {
-    const res = await fetch(`${API_URL}/v1/auth/verify-otp`, {
+    const res = await fetch(`${API_URL}/v1/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, otp, clientId }),
+      body: JSON.stringify({ email, password, clientId }),
       signal: AbortSignal.timeout(12_000),
     });
     body = await res.json().catch(() => null);
     if (!res.ok) {
-      return { ok: false, error: body?.error ?? 'Could not verify the OTP. Please try again.' };
+      return { ok: false, error: body?.error ?? 'Could not sign in. Please try again.' };
     }
   } catch {
     return { ok: false, error: 'Network error. Please check your connection and try again.' };

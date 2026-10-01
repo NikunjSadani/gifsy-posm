@@ -6,8 +6,8 @@
 # machine:   docker compose up --build        (then open http://localhost:3000)
 #
 # Everything below is a throwaway local credential/config — nothing here is a real secret.
-# OTP is fixed to 123456 (FIXED_OTP) and media goes to a local volume (STORAGE_DRIVER=local),
-# exactly like `npm run start:dev` — no MSG91 / GCS calls are made.
+# Login is email + password; media goes to a local volume (STORAGE_DRIVER=local), exactly like
+# `npm run start:dev` — no MSG91 / GCS calls are made.
 #
 # Ports (host → container):
 #   postgres 5433 → 5432   (5433 avoids clashing with a native Postgres on 5432)
@@ -59,10 +59,7 @@ services:
       DATABASE_URL: postgresql://posm_user:posm_pass@postgres:5432/posm_dev?schema=public
       JWT_SECRET: local-dev-only-change-me # MUST equal the frontend's JWT_SECRET below
       JWT_EXPIRES_IN: 60m
-      # Local parity: fixed OTP + local-disk media. NODE_ENV=production here, so the fixed-OTP
-      # guard requires the explicit ALLOW_FIXED_OTP opt-in (the same switch staging uses).
-      FIXED_OTP: "123456"
-      ALLOW_FIXED_OTP: "true"
+      # Login is email + password (no OTP). Seed users with emails + a known dev password to sign in.
       STORAGE_DRIVER: local
       LOCAL_STORAGE_DIR: /app/.localstorage
       CORS_ORIGINS: http://localhost:3000

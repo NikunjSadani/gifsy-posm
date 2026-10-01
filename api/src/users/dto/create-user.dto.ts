@@ -4,8 +4,11 @@ import {
   IsMobilePhone,
   IsIn,
   IsOptional,
+  IsEmail,
+  MinLength,
   MaxLength,
 } from 'class-validator';
+import { MIN_PASSWORD_LENGTH } from '../../common/password';
 
 /**
  * Roles an admin may provision here. GIFSY_ADMIN (platform operator) is intentionally NOT
@@ -21,9 +24,25 @@ export const MANAGED_ROLES = [
 export type ManagedRole = (typeof MANAGED_ROLES)[number];
 
 export class CreateUserDto {
+  /** Login id — REQUIRED, unique per tenant (replaced phone+OTP, 2026-10-01). */
+  @IsEmail({}, { message: 'A valid email is required' })
+  @MaxLength(254)
+  email: string;
+
+  /**
+   * Optional at create — when omitted the account has no password and cannot log in until an
+   * admin sets one (admin-managed). Minimum length enforced when supplied.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(MIN_PASSWORD_LENGTH, { message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` })
+  @MaxLength(200)
+  password?: string;
+
+  /** Optional contact number (no longer the login id). */
+  @IsOptional()
   @IsMobilePhone('en-IN', {}, { message: 'Must be a valid 10-digit Indian mobile number' })
-  @IsNotEmpty()
-  phone: string;
+  phone?: string;
 
   @IsString()
   @IsNotEmpty()

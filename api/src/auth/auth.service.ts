@@ -8,18 +8,13 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { User } from '@prisma/client';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
-import { Msg91Service } from '../notifications/msg91.service';
-import { isFixedOtpAllowed } from '../common/fixed-otp';
-import { generateNumericOtp, hashOtp } from '../common/otp';
-import { normalizeIndianPhone } from '../common/phone';
 import {
-  OTP_EXPIRY_MINUTES,
-  OTP_MAX_ATTEMPTS,
-  OTP_RESEND_WINDOW_HOURS,
-  OTP_MAX_RESENDS_PER_WINDOW,
-  SESSION_TTL_DAYS,
-  ACCESS_TTL,
-} from './auth.constants';
+  comparePassword,
+  normalizeEmail,
+  MAX_LOGIN_ATTEMPTS,
+  LOGIN_LOCKOUT_MINUTES,
+} from '../common/password';
+import { SESSION_TTL_DAYS, ACCESS_TTL } from './auth.constants';
 import * as crypto from 'crypto';
 
 /**
@@ -38,7 +33,6 @@ export class AuthService {
     private readonly prisma:  PrismaService,
     private readonly jwt:     JwtService,
     private readonly config:  ConfigService,
-    private readonly msg91:   Msg91Service,
   ) {}
 
   // ── Current user ──────────────────────────────────────────────────────────────
@@ -59,178 +53,76 @@ export class AuthService {
     };
   }
 
-  // ── Send OTP ────────────────────────────────────────────────────────────────
+  // ── Login (email + password) ──────────────────────────────────────────────────
 
-  async sendOtp(
-    phone: string,
-    channel: 'SMS' | 'WHATSAPP',
+  /**
+   * Email + password login (replaced phone + OTP, owner decision 2026-10-01). Resolves the ACTIVE
+   * user by `(clientId, email)`, enforces a brute-force lockout, verifies the bcrypt hash, then
+   * mints the SAME rolling session the rest of the app uses. The error is intentionally IDENTICAL
+   * for unknown-email / no-password-set / wrong-password so a caller cannot enumerate accounts.
+   */
+  async login(
     clientId: string,
-  ): Promise<{ success: boolean; expiresIn: number }> {
-    if (!phone || phone.replace(/\D/g, '').length !== 10) {
-      throw new BadRequestException('Invalid phone number — must be 10 digits');
-    }
-    // A login OTP is ALWAYS tenant-scoped. Enforced at the DTO too, but re-asserted here so the
-    // guarantee holds on EVERY entry path (defense in depth): no clientId ⇒ no account gate + a
-    // null-tenant code that verify can't redeem, which is exactly the unbranded-SMS-abuse hole
-    // this closes. Never send an OTP without knowing which tenant it authenticates.
-    if (!clientId) {
-      throw new BadRequestException('A tenant is required to send a login OTP.');
-    }
-    const cleanPhone = phone.replace(/\D/g, '');
-
-    // Registration gate: refuse to send an OTP to a number that has no ACTIVE account under this
-    // tenant — immediate "no account" feedback, and it stops an attacker from pumping SMS at
-    // arbitrary numbers. Runs even under the FIXED_OTP bypass so it is testable on staging.
-    // Match the User row by its canonical E.164 phone (users are stored normalized).
-    const account = await this.prisma.user.findFirst({
-      where: { phone: normalizeIndianPhone(cleanPhone), clientId, isActive: true },
-      select: { id: true },
-    });
-    if (!account) {
-      throw new UnauthorizedException(
-        'No account found. Please contact your administrator to be onboarded first.',
-      );
-    }
-
-    const fixedOtpActive = isFixedOtpAllowed() && !!this.config.get<string>('FIXED_OTP');
-
-    // Per-phone send cap over a rolling window (anti-SMS-bombing). Counted in the DB so it
-    // holds across ALL Cloud Run instances — the controller's per-IP/@Throttle is per-instance
-    // and a multi-instance distribution would bypass an in-memory cap. Skipped only under the
-    // fixed-OTP bypass so UAT can request freely.
-    const now = Date.now();
-    const windowStart = new Date(now - OTP_RESEND_WINDOW_HOURS * 60 * 60 * 1000);
-    if (!fixedOtpActive) {
-      const recentSends = await this.prisma.otpCode.count({
-        where: { phone: cleanPhone, purpose: 'LOGIN', createdAt: { gte: windowStart } },
-      });
-      if (recentSends >= OTP_MAX_RESENDS_PER_WINDOW) {
-        this.logger.warn(`OTP send cap hit for ****${cleanPhone.slice(-4)}`);
-        throw new HttpException(
-          'Too many OTP requests for this number. Please wait a while before trying again.',
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-      // (A small window-boundary race can let a couple extra through under high concurrency —
-      // acceptable for an anti-abuse cap; each send still costs an SMS and the per-IP throttle
-      // bounds the concurrent source.)
-    }
-
-    const otp = generateNumericOtp();
-    const expiresAt = new Date(now + OTP_EXPIRY_MINUTES * 60 * 1000);
-
-    // Prune this phone's rows that have aged out of the send-cap window, then opportunistically
-    // sweep globally-dead rows (>1 day past a 10-min expiry) so the table stays bounded without
-    // a scheduler. In-window rows are RETAINED so the cap above counts real sends.
-    await this.prisma.otpCode.deleteMany({
-      where: { phone: cleanPhone, createdAt: { lt: windowStart } },
-    });
-    await this.prisma.otpCode.deleteMany({
-      where: { expiresAt: { lt: new Date(now - 24 * 60 * 60 * 1000) } },
-    });
-
-    // Supersede: invalidate this phone's prior UNCONSUMED codes so only the freshest is live.
-    // (verifyOtp also reads the NEWEST unconsumed row, so this is belt-and-suspenders — a
-    // superseded code can never be verified.) Retains the rows for the send-cap count above.
-    await this.prisma.otpCode.updateMany({
-      where: { phone: cleanPhone, purpose: 'LOGIN', consumedAt: null },
-      data:  { consumedAt: new Date(now) },
-    });
-
-    // Store only the HASH of the code — a DB read cannot recover a live OTP.
-    await this.prisma.otpCode.create({
-      data: {
-        phone:       cleanPhone,
-        clientId:    clientId ?? null,
-        codeHash:    hashOtp(otp),
-        purpose:     'LOGIN',
-        channel,
-        maxAttempts: OTP_MAX_ATTEMPTS,
-        expiresAt,
-      },
-    });
-
-    // Per-tenant template resolution is a later-wave concern; pass undefined (global template).
-    await this.msg91.sendOtp(cleanPhone, otp, channel);
-
-    this.logger.log(`OTP sent to ****${cleanPhone.slice(-4)} via ${channel}`);
-    return { success: true, expiresIn: OTP_EXPIRY_MINUTES * 60 };
-  }
-
-  // ── Verify OTP + issue tokens ────────────────────────────────────────────────
-
-  async verifyOtp(
-    phone: string,
-    otp: string,
-    clientId: string,
+    email: string,
+    password: string,
   ): Promise<{ accessToken: string; refreshToken: string; user: Partial<User> }> {
-    const cleanPhone = phone.replace(/\D/g, '');
-
-    // Read the NEWEST unconsumed code for THIS phone AND tenant (a fresh send supersedes older
-    // ones). Binding `clientId` is the tenant-isolation guard: an OTP minted for tenant A can
-    // never be redeemed against tenant B (a phone provisioned in both tenants gets independent
-    // codes), and an unbranded/no-tenant code can never authenticate a branded login.
-    const record = await this.prisma.otpCode.findFirst({
-      where:   { phone: cleanPhone, purpose: 'LOGIN', consumedAt: null, clientId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (!record) {
-      throw new UnauthorizedException('No active OTP found for this number. Please request a new OTP.');
+    // A login is ALWAYS tenant-scoped (defense in depth; the DTO also requires it).
+    if (!clientId) {
+      throw new BadRequestException('A tenant is required to log in.');
     }
-    if (record.attempts >= record.maxAttempts) {
-      throw new ForbiddenException('Too many attempts — please request a new OTP.');
+    if (!email || !password) {
+      throw new UnauthorizedException('Invalid email or password.');
     }
-    if (new Date() > record.expiresAt) {
-      throw new UnauthorizedException('OTP expired — please request a new one.');
-    }
+    const normEmail = normalizeEmail(email);
+    const invalid = new UnauthorizedException('Invalid email or password.');
 
-    // FIXED_OTP is a dev/staging convenience bypass, gated by isFixedOtpAllowed. Otherwise the
-    // submitted code is HASHED and compared to the stored hash (the plaintext is never stored).
-    const fixedOtp = isFixedOtpAllowed() ? this.config.get<string>('FIXED_OTP') : undefined;
-    const isCorrect = fixedOtp ? otp === fixedOtp : hashOtp(otp) === record.codeHash;
-
-    if (!isCorrect) {
-      // Atomic increment — a read-modify-write (`record.attempts + 1`) lets concurrent verifies
-      // all persist the same value and exceed the per-OTP attempt cap under parallelism.
-      await this.prisma.otpCode.update({
-        where: { id: record.id },
-        data:  { attempts: { increment: 1 } },
-      });
-      const remaining = record.maxAttempts - record.attempts - 1;
-      throw new UnauthorizedException(
-        `Invalid OTP. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`,
-      );
-    }
-
-    // Consume the OTP (mark used, so it cannot be replayed).
-    await this.prisma.otpCode.update({
-      where: { id: record.id },
-      data:  { consumedAt: new Date() },
-    });
-
-    // Resolve the login user — the ACTIVE account IS the login (unique (clientId, phone)).
-    // Match by canonical E.164 phone (users are stored normalized).
     const user = await this.prisma.user.findFirst({
-      where: { phone: normalizeIndianPhone(cleanPhone), clientId, isActive: true },
+      where: { clientId, email: normEmail },
     });
-    if (!user) {
-      throw new UnauthorizedException(
-        'No account found. Please contact your administrator to be onboarded first.',
+    // Uniform failure for missing account / inactive / no password set — no enumeration signal.
+    if (!user || !user.isActive || !user.passwordHash) {
+      throw invalid;
+    }
+
+    // Brute-force lockout: a locked account is refused until the window elapses.
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      throw new ForbiddenException(
+        'Account temporarily locked after too many failed attempts. Please try again later.',
       );
+    }
+
+    const ok = await comparePassword(password, user.passwordHash);
+    if (!ok) {
+      // Count the failure; lock (and reset the counter) once the cap is hit.
+      const attempts = user.failedLoginAttempts + 1;
+      const data: { failedLoginAttempts: number; lockedUntil?: Date } =
+        attempts >= MAX_LOGIN_ATTEMPTS
+          ? { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOGIN_LOCKOUT_MINUTES * 60 * 1000) }
+          : { failedLoginAttempts: attempts };
+      await this.prisma.user.update({ where: { id: user.id }, data });
+      throw invalid;
     }
 
     // VENDOR login gate — a vendor login is blocked when its Vendor entity is inactive.
     await this.assertVendorLoginAllowed(user);
+
+    // Success — clear any failed-attempt/lock state, then mint the rolling session.
+    if (user.failedLoginAttempts !== 0 || user.lockedUntil) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
+      });
+    }
 
     const tokens = await this.generateTokens(user);
     this.logger.log(`User ${user.id} (${user.role}) logged in — client: ${clientId}`);
 
     return {
       ...tokens,
-      user: { id: user.id, name: user.name, role: user.role, phone: user.phone },
+      user: { id: user.id, name: user.name, role: user.role, email: user.email },
     };
   }
+
 
   // ── Generate JWT + Refresh token ─────────────────────────────────────────────
 
@@ -253,9 +145,10 @@ export class AuthService {
       sub:      user.id,
       role:     user.role,
       clientId,
-      phone:    user.phone,
       name:     user.name,
       sid,
+      ...(user.email ? { email: user.email } : {}),
+      ...(user.phone ? { phone: user.phone } : {}),
       ...(opts?.assumed ? { assumed: true } : {}),
       ...(user.vendorId ? { vendorId: user.vendorId } : {}),
     };

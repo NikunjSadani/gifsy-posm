@@ -1,35 +1,20 @@
-import { IsString, IsNotEmpty, IsMobilePhone, IsIn, Length } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, MaxLength } from 'class-validator';
 
-export class SendOtpDto {
-  @IsMobilePhone('en-IN', {}, { message: 'Must be a valid 10-digit Indian mobile number' })
-  @IsNotEmpty()
-  phone: string;
-
-  @IsIn(['SMS', 'WHATSAPP'], { message: 'channel must be SMS or WHATSAPP' })
-  channel: 'SMS' | 'WHATSAPP';
-
-  /**
-   * The tenant the OTP is for (the FE resolves it from the request Host, pre-auth). REQUIRED:
-   * it gates the "no account" check, binds the minted OTP to this tenant (so it can't redeem
-   * against another), and closes the unbranded path that would otherwise send an SMS to ANY
-   * number (SMS-cost / harassment abuse) and skip the account gate. verify-otp already requires
-   * clientId, so a legit branded login always supplies it.
-   */
-  @IsString()
-  @IsNotEmpty()
-  clientId: string;
-}
-
-export class VerifyOtpDto {
-  @IsMobilePhone('en-IN', {}, { message: 'Must be a valid 10-digit Indian mobile number' })
-  @IsNotEmpty()
-  phone: string;
+/**
+ * POST /v1/auth/login — email + password (replaced phone + OTP, 2026-10-01). `clientId` is the
+ * tenant (the FE supplies it, resolved from NEXT_PUBLIC_CLIENT_ID / host); it scopes the lookup so
+ * an email in tenant A can never authenticate against tenant B.
+ */
+export class LoginDto {
+  @IsEmail({}, { message: 'A valid email is required' })
+  @MaxLength(254)
+  email: string;
 
   @IsString()
-  @Length(4, 6, { message: 'OTP must be 4–6 digits' })
-  otp: string;
+  @IsNotEmpty({ message: 'Password is required' })
+  @MaxLength(200)
+  password: string;
 
-  /** The subdomain slug resolved by the proxy — passed from the frontend. */
   @IsString()
   @IsNotEmpty()
   clientId: string;

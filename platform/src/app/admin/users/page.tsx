@@ -38,7 +38,7 @@ import { displayPhone } from '@/lib/admin/format';
 
 type Editing = { mode: 'create' } | { mode: 'edit'; user: AdminUser } | null;
 
-const emptyForm = { name: '', phone: '', role: '' as '' | ManagedRole, vendorId: '', promoterCode: '' };
+const emptyForm = { name: '', email: '', password: '', phone: '', role: '' as '' | ManagedRole, vendorId: '', promoterCode: '' };
 
 export default function UsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -96,7 +96,8 @@ export default function UsersPage() {
     return users.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
-        u.phone.toLowerCase().includes(q) ||
+        (u.email ?? '').toLowerCase().includes(q) ||
+        (u.phone ?? '').toLowerCase().includes(q) ||
         ROLE_LABELS[u.role]?.toLowerCase().includes(q),
     );
   }, [users, search]);
@@ -109,9 +110,10 @@ export default function UsersPage() {
   };
   const openEdit = (u: AdminUser) => {
     setEditing({ mode: 'edit', user: u });
-    // Stored phone is +91XXXXXXXXXX — show the bare 10 digits for editing.
-    const bare = /^\+91(\d{10})$/.exec(u.phone)?.[1] ?? u.phone;
-    setForm({ name: u.name, phone: bare, role: u.role, vendorId: u.vendorId ?? '', promoterCode: u.promoterCode ?? '' });
+    // Stored phone is +91XXXXXXXXXX — show the bare 10 digits for editing (may be absent now).
+    const bare = u.phone ? (/^\+91(\d{10})$/.exec(u.phone)?.[1] ?? u.phone) : '';
+    // Password is never shown; a blank field on edit leaves the current password unchanged.
+    setForm({ name: u.name, email: u.email ?? '', password: '', phone: bare, role: u.role, vendorId: u.vendorId ?? '', promoterCode: u.promoterCode ?? '' });
     setFieldErrors({});
     setFormError(null);
   };
@@ -128,32 +130,43 @@ export default function UsersPage() {
   };
 
   const submit = async () => {
-    const errs = validateUser({ name: form.name, phone: form.phone, role: form.role, vendorId: form.vendorId });
+    const isEdit = editing?.mode === 'edit';
+    const errs = validateUser({
+      name: form.name, email: form.email, password: form.password,
+      phone: form.phone, role: form.role, vendorId: form.vendorId, isEdit,
+    });
     setFieldErrors(errs);
     if (!isValid(errs)) return;
 
     const role = form.role as ManagedRole;
     const vendorLinked = isVendorRole(role);
+    const pw = form.password.trim();
     setSaving(true);
     setFormError(null);
 
     let res;
-    if (editing?.mode === 'edit') {
+    if (isEdit) {
       const body: UserUpdate = {
         name: form.name.trim(),
+        email: form.email.trim(),
+        // Optional contact; "" clears it.
         phone: form.phone.trim(),
         role,
         // A vendor role sends its vendorId; a non-vendor role clears the link (null).
         vendorId: vendorLinked ? form.vendorId : null,
         // Send the promoter code for vendor logins; a non-vendor role sends "" to clear it.
         promoterCode: vendorLinked ? form.promoterCode.trim() : '',
+        // Only send a password when the admin typed a new one (blank = keep current).
+        ...(pw ? { password: pw } : {}),
       };
-      res = await usersApi.update(editing.user.id, body);
+      res = await usersApi.update(editing!.user.id, body);
     } else {
       const body: UserCreate = {
         name: form.name.trim(),
-        phone: form.phone.trim(),
+        email: form.email.trim(),
         role,
+        ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
+        ...(pw ? { password: pw } : {}),
         ...(vendorLinked ? { vendorId: form.vendorId } : {}),
         ...(vendorLinked && form.promoterCode.trim() ? { promoterCode: form.promoterCode.trim() } : {}),
       };
@@ -199,7 +212,8 @@ export default function UsersPage() {
 
   const columns: Column<AdminUser>[] = [
     { key: 'name', header: 'Name', render: (u) => <span className="font-medium text-gray-900">{u.name}</span> },
-    { key: 'phone', header: 'Phone', render: (u) => <span className="font-mono text-gray-700">{displayPhone(u.phone)}</span> },
+    { key: 'email', header: 'Email', render: (u) => <span className="text-gray-700">{u.email || '—'}</span> },
+    { key: 'phone', header: 'Phone', render: (u) => <span className="font-mono text-gray-700">{u.phone ? displayPhone(u.phone) : '—'}</span> },
     { key: 'role', header: 'Role', render: (u) => <Badge variant="info">{ROLE_LABELS[u.role] ?? u.role}</Badge> },
     {
       key: 'vendor',
@@ -316,8 +330,27 @@ export default function UsersPage() {
           maxLength={120}
           autoFocus
         />
+        <Input
+          label="Email"
+          type="email"
+          placeholder="login email (unique)"
+          value={form.email}
+          onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+          error={fieldErrors.email}
+          maxLength={254}
+        />
+        <Input
+          label={editing?.mode === 'edit' ? 'Password (leave blank to keep current)' : 'Password (optional — can be set later)'}
+          type="password"
+          placeholder={editing?.mode === 'edit' ? 'Set a new password' : 'Min 8 characters'}
+          value={form.password}
+          onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+          error={fieldErrors.password}
+          maxLength={200}
+          autoComplete="new-password"
+        />
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={phoneId} className="text-sm font-medium text-gray-700">Mobile number</label>
+          <label htmlFor={phoneId} className="text-sm font-medium text-gray-700">Phone (optional)</label>
           <div className="flex items-stretch rounded-lg border border-gray-300 focus-within:border-[var(--brand-primary)] overflow-hidden">
             <span className="flex items-center px-3 text-gray-500 bg-gray-50 text-sm font-medium border-r border-gray-200">+91</span>
             <input

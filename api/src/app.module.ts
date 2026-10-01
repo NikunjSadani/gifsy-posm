@@ -1,6 +1,5 @@
 import { Module }                   from '@nestjs/common';
 import { ConfigModule }             from '@nestjs/config';
-import { isFixedOtpAllowed }        from './common/fixed-otp';
 import { APP_GUARD, APP_INTERCEPTOR, APP_FILTER } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule }           from '@nestjs/schedule';
@@ -68,9 +67,8 @@ import { SettingsModule }     from './settings/settings.module';
         ttl:   60_000,  // 1 minute window (ms)
         limit: 60,
       }],
-      // Skip ALL rate limiting when FIXED_OTP is honored (local dev + the E2E harness). Gated
-      // by isFixedOtpAllowed (non-prod NODE_ENV / staging opt-in; never on the prod DB).
-      skipIf: () => isFixedOtpAllowed() && !!process.env.FIXED_OTP,
+      // Skip ALL rate limiting outside production (local dev + CI). Production always throttles.
+      skipIf: () => process.env.NODE_ENV !== 'production',
     }),
     PrismaModule,
     StorageModule,

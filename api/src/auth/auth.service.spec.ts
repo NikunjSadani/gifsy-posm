@@ -21,8 +21,7 @@ import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { Msg91Service } from '../notifications/msg91.service';
-import { hashOtp } from '../common/otp';
+import { hashPassword } from '../common/password';
 
 // SHA-256 hex — mirrors AuthService.hashToken, so a test can assert the atomic claim / revoke
 // key on the HASH of a known plaintext refresh token (never the plaintext itself).
@@ -33,7 +32,6 @@ const mockPrisma = {
   // user.findUnique: getMe + the refresh post-mint sessionsInvalidBefore re-read (defaults
   // undefined so the re-read is a no-op unless a test opts in).
   user:        { findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
-  otpCode:     { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn(), deleteMany: jest.fn(), count: jest.fn() },
   // predecessor lookup is findUnique (keyed on refreshTokenHash); findFirst is the FIX-1
   // live-successor lookup (rotatedFromId, revokedAt:null).
   userSession: { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
@@ -58,10 +56,6 @@ const mockConfig = {
   }),
 };
 
-const mockMsg91 = {
-  sendOtp: jest.fn().mockResolvedValue({ requestId: null }),
-};
-
 const gifsyOp = { sub: 'op1', role: 'GIFSY_ADMIN', clientId: 'gifsy', phone: '98', name: 'Op' } as any;
 
 // A live, unrevoked predecessor session (POSM shape: hashed refresh, user embedded).
@@ -84,7 +78,6 @@ describe('AuthService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: JwtService,    useValue: mockJwt    },
         { provide: ConfigService, useValue: mockConfig },
-        { provide: Msg91Service,  useValue: mockMsg91  },
       ],
     }).compile();
 
@@ -96,176 +89,90 @@ describe('AuthService', () => {
       return cfg[key];
     });
     mockJwt.sign.mockReturnValue('mock.jwt.token');
-    mockMsg91.sendOtp.mockResolvedValue({ requestId: null });
   });
 
   it('is defined', () => {
     expect(service).toBeDefined();
   });
 
-  // ── sendOtp ─────────────────────────────────────────────────────────────────
-  describe('sendOtp', () => {
+  // ── login (email + password) ──────────────────────────────────────────────────
+  describe('login', () => {
+    const PW = 'correct-horse-battery';
+    let hash: string;
+    beforeAll(async () => { hash = await hashPassword(PW); });
+
+    const activeUser = (over: Record<string, any> = {}) => ({
+      id: 'u1', clientId: 'deoleo', email: 'asm@kwality.in', passwordHash: hash,
+      failedLoginAttempts: 0, lockedUntil: null, role: 'ASM', name: 'ASM One',
+      phone: null, vendorId: null, isActive: true, ...over,
+    });
+
     beforeEach(() => {
-      mockPrisma.otpCode.count.mockResolvedValue(0);
-      mockPrisma.otpCode.deleteMany.mockResolvedValue({ count: 0 });
-      mockPrisma.otpCode.updateMany.mockResolvedValue({ count: 0 });
-      mockPrisma.otpCode.create.mockResolvedValue({ id: 'otp_1' });
-      mockPrisma.user.findFirst.mockResolvedValue({ id: 'seed-user' }); // registration gate: account exists
-    });
-
-    it('rejects an invalid phone (< 10 digits)', async () => {
-      await expect(service.sendOtp('12345', 'SMS', 'deoleo')).rejects.toThrow();
-    });
-
-    it('rejects (429) when the per-phone send cap over the window is reached', async () => {
-      mockPrisma.otpCode.count.mockResolvedValue(5); // OTP_MAX_RESENDS_PER_WINDOW
-      await expect(service.sendOtp('9876543210', 'SMS', 'deoleo')).rejects.toMatchObject({ status: 429 });
-      // Nothing created and no SMS sent once capped.
-      expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
-      expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
-    });
-
-    it('counts only LOGIN sends inside the rolling window for the cap', async () => {
-      await service.sendOtp('9876543210', 'SMS', 'deoleo');
-      const where = mockPrisma.otpCode.count.mock.calls[0][0].where;
-      expect(where.phone).toBe('9876543210');
-      expect(where.purpose).toBe('LOGIN');
-      expect(where.createdAt.gte).toBeInstanceOf(Date);
-    });
-
-    it('SUPERSEDES prior unconsumed codes for the phone (only the freshest stays live)', async () => {
-      await service.sendOtp('9876543210', 'SMS', 'deoleo');
-      // updateMany marks this phone's unconsumed LOGIN codes consumed.
-      const call = mockPrisma.otpCode.updateMany.mock.calls[0][0];
-      expect(call.where).toMatchObject({ phone: '9876543210', purpose: 'LOGIN', consumedAt: null });
-      expect(call.data.consumedAt).toBeInstanceOf(Date);
-    });
-
-    it('stores the code HASHED (never the plaintext) — codeHash is a 64-char SHA-256 hex', async () => {
-      await service.sendOtp('9876543210', 'SMS', 'deoleo');
-      const data = mockPrisma.otpCode.create.mock.calls[0][0].data;
-      expect(data.codeHash).toMatch(/^[0-9a-f]{64}$/);
-      // The plaintext code is never persisted under any field.
-      expect(data.code).toBeUndefined();
-      // The stored value is a HASH of a 6-digit code, not a 6-digit code itself.
-      expect(data.codeHash).not.toMatch(/^\d{6}$/);
-      expect(mockMsg91.sendOtp).toHaveBeenCalled();
-    });
-
-    it('registration gate: refuses (401) a tenant-scoped send to a number with NO ACTIVE account', async () => {
-      mockPrisma.user.findFirst.mockResolvedValue(null); // no active holder under the tenant
-      await expect(service.sendOtp('9876543210', 'SMS', 'deoleo')).rejects.toMatchObject({ status: 401 });
-      const where = mockPrisma.user.findFirst.mock.calls[0][0].where;
-      // The User row is matched by canonical E.164 (users are stored normalized).
-      expect(where).toMatchObject({ phone: '+919876543210', clientId: 'deoleo', isActive: true });
-      expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
-      expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
-    });
-
-    it('REQUIRES a tenant: a send with no clientId is refused (400) — no account gate, no OTP, no SMS', async () => {
-      // The unbranded path is closed (SMS-pump / account-gate-skip hole). The service re-asserts
-      // clientId even though the DTO also requires it (defense in depth on every entry path).
-      await expect(service.sendOtp('9876543210', 'SMS', '')).rejects.toMatchObject({ status: 400 });
-      expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
-      expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
-      expect(mockMsg91.sendOtp).not.toHaveBeenCalled();
-    });
-  });
-
-  // ── verifyOtp ───────────────────────────────────────────────────────────────
-  describe('verifyOtp', () => {
-    const phone = '9876543210';
-    const clientId = 'deoleo';
-    const code = '123456';
-    const validOtp = () => ({
-      id: 'otp_1', codeHash: hashOtp(code), attempts: 0, maxAttempts: 3,
-      expiresAt: new Date(Date.now() + 60_000), consumedAt: null,
-    });
-
-    it('returns access + refresh tokens on the correct (hash-matched) OTP', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
-      mockPrisma.otpCode.update.mockResolvedValue({});
-      mockPrisma.user.findFirst.mockResolvedValue({ id: 'user_1', role: 'ASM', clientId, phone, name: 'A', isActive: true, vendorId: null });
       mockPrisma.userSession.create.mockResolvedValue({ id: 'sess_1' });
-
-      const result = await service.verifyOtp(phone, code, clientId);
-      expect(result.accessToken).toBe('mock.jwt.token');
-      expect(result.refreshToken).toBeTruthy();
-      expect(result.user).toMatchObject({ id: 'user_1', role: 'ASM' });
+      mockPrisma.user.update.mockResolvedValue({});
     });
 
-    it('reads the NEWEST unconsumed code for the phone (supersede-aware)', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
-      mockPrisma.otpCode.update.mockResolvedValue({});
-      mockPrisma.user.findFirst.mockResolvedValue({ id: 'user_1', role: 'ASM', clientId, phone, name: 'A', isActive: true, vendorId: null });
-      mockPrisma.userSession.create.mockResolvedValue({ id: 'sess_1' });
-
-      await service.verifyOtp(phone, code, clientId);
-      const call = mockPrisma.otpCode.findFirst.mock.calls[0][0];
-      // clientId in the where is the tenant-isolation guard: an OTP minted for another tenant (or
-      // an unbranded/no-tenant code) can never be redeemed against THIS login.
-      expect(call.where).toMatchObject({ phone, purpose: 'LOGIN', consumedAt: null, clientId });
-      expect(call.orderBy).toEqual({ createdAt: 'desc' });
+    it('rejects a missing tenant (400)', async () => {
+      await expect(service.login('', 'asm@kwality.in', PW)).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('CONSUMES the OTP on success (marks consumedAt so it cannot be replayed)', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
-      mockPrisma.otpCode.update.mockResolvedValue({});
-      mockPrisma.user.findFirst.mockResolvedValue({ id: 'user_1', role: 'ASM', clientId, phone, name: 'A', isActive: true, vendorId: null });
-      mockPrisma.userSession.create.mockResolvedValue({ id: 'sess_1' });
-
-      await service.verifyOtp(phone, code, clientId);
-      const consumeCall = mockPrisma.otpCode.update.mock.calls.find(
-        (c: any) => c[0]?.data?.consumedAt instanceof Date,
-      );
-      expect(consumeCall).toBeTruthy();
-      expect(consumeCall[0].where).toEqual({ id: 'otp_1' });
-    });
-
-    it('throws on a wrong OTP and INCREMENTS attempts (attempt-cap accounting)', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
-      mockPrisma.otpCode.update.mockResolvedValue({});
-      await expect(service.verifyOtp(phone, '000000', clientId)).rejects.toThrow('Invalid OTP');
-      // Atomic increment (was a read-then-write `record.attempts + 1`): two concurrent wrong
-      // guesses can no longer both write the same value and under-count the attempt cap.
-      expect(mockPrisma.otpCode.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ attempts: { increment: 1 } }) }),
-      );
-      // A wrong code never mints a session.
-      expect(mockPrisma.userSession.create).not.toHaveBeenCalled();
-    });
-
-    it('locks the OTP after the attempt cap is reached (attempts >= maxAttempts)', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue({ ...validOtp(), attempts: 3 });
-      await expect(service.verifyOtp(phone, code, clientId)).rejects.toThrow('Too many attempts');
-      expect(mockPrisma.otpCode.update).not.toHaveBeenCalled();
-    });
-
-    it('throws on an expired OTP', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue({ ...validOtp(), expiresAt: new Date(Date.now() - 1_000) });
-      await expect(service.verifyOtp(phone, code, clientId)).rejects.toThrow('OTP expired');
-    });
-
-    it('throws when no unconsumed OTP exists for the phone', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(null);
-      await expect(service.verifyOtp(phone, code, clientId)).rejects.toThrow();
-    });
-
-    it('throws "No account found" when the hash matches but no ACTIVE user resolves', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
-      mockPrisma.otpCode.update.mockResolvedValue({});
+    it('unknown email → 401 (uniform, no enumeration) and does NOT mint a session', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
-      await expect(service.verifyOtp(phone, code, clientId)).rejects.toThrow('No account found');
+      await expect(service.login('deoleo', 'nobody@kwality.in', PW)).rejects.toMatchObject({ status: 401 });
       expect(mockPrisma.userSession.create).not.toHaveBeenCalled();
     });
 
-    it('blocks a VENDOR login whose Vendor entity is inactive', async () => {
-      mockPrisma.otpCode.findFirst.mockResolvedValue(validOtp());
-      mockPrisma.otpCode.update.mockResolvedValue({});
-      mockPrisma.user.findFirst.mockResolvedValue({ id: 'v1', role: 'VENDOR_FIELD', clientId, phone, name: 'V', isActive: true, vendorId: 'ven1' });
-      mockPrisma.vendor.findUnique.mockResolvedValue({ isActive: false });
-      await expect(service.verifyOtp(phone, code, clientId)).rejects.toThrow('inactive');
+    it('inactive user → 401', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ isActive: false }));
+      await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toMatchObject({ status: 401 });
+    });
+
+    it('user with no password set → 401', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ passwordHash: null }));
+      await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toMatchObject({ status: 401 });
+    });
+
+    it('wrong password → 401 and increments the failed-attempt counter', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ failedLoginAttempts: 1 }));
+      await expect(service.login('deoleo', 'asm@kwality.in', 'wrong')).rejects.toMatchObject({ status: 401 });
+      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ failedLoginAttempts: 2 }) }),
+      );
+    });
+
+    it('wrong password at the cap → locks the account (lockedUntil set, counter reset)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ failedLoginAttempts: 4 })); // 5th fail
+      await expect(service.login('deoleo', 'asm@kwality.in', 'wrong')).rejects.toMatchObject({ status: 401 });
+      const data = mockPrisma.user.update.mock.calls[0][0].data;
+      expect(data.lockedUntil).toBeInstanceOf(Date);
+      expect(data.failedLoginAttempts).toBe(0);
+    });
+
+    it('a currently-locked account → 403, without checking the password', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(
+        activeUser({ lockedUntil: new Date(Date.now() + 10 * 60_000) }),
+      );
+      await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toBeInstanceOf(ForbiddenException);
       expect(mockPrisma.userSession.create).not.toHaveBeenCalled();
+    });
+
+    it('correct password → mints a session + returns the user (email), clears failed state', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ failedLoginAttempts: 2 }));
+      const res = await service.login('deoleo', 'ASM@Kwality.in', PW); // case-insensitive email
+      expect(res.accessToken).toBeTruthy();
+      expect(res.refreshToken).toBeTruthy();
+      expect(res.user).toMatchObject({ id: 'u1', email: 'asm@kwality.in', role: 'ASM' });
+      expect(mockPrisma.userSession.create).toHaveBeenCalledTimes(1);
+      // failed-attempt state reset on success
+      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { failedLoginAttempts: 0, lockedUntil: null } }),
+      );
+    });
+
+    it('a VENDOR_FIELD login with an inactive vendor → 403', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(activeUser({ role: 'VENDOR_FIELD', vendorId: 'v1' }));
+      mockPrisma.vendor.findUnique.mockResolvedValue({ isActive: false });
+      await expect(service.login('deoleo', 'asm@kwality.in', PW)).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 
@@ -530,31 +437,4 @@ describe('AuthService', () => {
     });
   });
 
-  // ── FIXED_OTP bypass (dev/staging only) ───────────────────────────────────────
-  describe('FIXED_OTP mode', () => {
-    it('accepts the fixed OTP regardless of the stored hash when FIXED_OTP is honored', async () => {
-      mockConfig.get.mockImplementation((key: string): any => key === 'FIXED_OTP' ? '123456' : (key === 'JWT_SECRET' ? 'test-secret' : undefined));
-      // Stored hash is for a DIFFERENT code; FIXED_OTP must still let '123456' through.
-      mockPrisma.otpCode.findFirst.mockResolvedValue({ id: 'otp_1', codeHash: hashOtp('999999'), attempts: 0, maxAttempts: 3, expiresAt: new Date(Date.now() + 60_000), consumedAt: null });
-      mockPrisma.otpCode.update.mockResolvedValue({});
-      mockPrisma.user.findFirst.mockResolvedValue({ id: 'user_1', role: 'ASM', clientId: 'deoleo', phone: '9876543210', name: 'A', isActive: true, vendorId: null });
-      mockPrisma.userSession.create.mockResolvedValue({ id: 'sess_1' });
-
-      const res = await service.verifyOtp('9876543210', '123456', 'deoleo');
-      expect(res.accessToken).toBe('mock.jwt.token');
-    });
-
-    it('REFUSES to honor FIXED_OTP under NODE_ENV=production (falls back to the stored hash)', async () => {
-      const prev = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'production';
-      try {
-        mockConfig.get.mockImplementation((key: string): any => key === 'FIXED_OTP' ? '123456' : (key === 'JWT_SECRET' ? 'test-secret' : undefined));
-        mockPrisma.otpCode.findFirst.mockResolvedValue({ id: 'otp_1', codeHash: hashOtp('999999'), attempts: 0, maxAttempts: 3, expiresAt: new Date(Date.now() + 60_000), consumedAt: null });
-        mockPrisma.otpCode.update.mockResolvedValue({});
-        await expect(service.verifyOtp('9876543210', '123456', 'deoleo')).rejects.toThrow('Invalid OTP');
-      } finally {
-        process.env.NODE_ENV = prev;
-      }
-    });
-  });
 });

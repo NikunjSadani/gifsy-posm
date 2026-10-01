@@ -8,9 +8,9 @@ proven main-Gifsy platform topology and governed by `~/.claude/PLATFORM-BLUEPRIN
 
 - Repo is **local-only**: a single `develop` branch, **no git remote**, no CI, empty `terraform/`,
   no Dockerfiles, only local `.env` files.
-- The **app is deploy-ready**: `start:prod` (`node dist/main`), fixed-OTP backdoor **fails closed**
-  on prod/unknown `NODE_ENV` (honored only on dev / `posm_staging`), migrations are
-  `migrate deploy`-safe (self-healing), media + OTP switch by env (`STORAGE_DRIVER`, MSG91).
+- The **app is deploy-ready**: `start:prod` (`node dist/main`), `main.ts` fails fast on missing prod
+  secrets, migrations are `migrate deploy`-safe (self-healing), media switches by env
+  (`STORAGE_DRIVER`). Login is **email + password** (no OTP, 2026-10-01); MSG91 is email-only.
 - Target architecture is already written in `POSM-BUILD-PLAN.md`: Cloud Run (min=0, `asia-south1`),
   GCS media, MSG91, Cloudflare Worker edge — i.e. the same shape your main Gifsy platform runs.
 
@@ -25,7 +25,7 @@ Mirror the main-Gifsy pattern, adapted for this standalone product:
 | Frontend | `next dev` :3000 | Cloud Run `posm-frontend-staging` | Cloud Run `posm-frontend-prod` |
 | DB | local PG `posm_dev` :5433 | `posm_staging` on the shared Cloud SQL instance | `posm_prod` (see §5 decision) |
 | Media | local disk (`STORAGE_DRIVER=local`) | GCS `posm-staging-files` | GCS `posm-prod-files` |
-| OTP/email | `FIXED_OTP=123456` | `FIXED_OTP=123456` | **real MSG91** |
+| Login | email + password | email + password | email + password (no OTP) |
 | Secrets | `.env` | Secret Manager (staging) | Secret Manager (prod) |
 | Edge/domain | localhost | `uat-posm.<domain>` (or `*.gifsy.in`) | `posm.<domain>` / client domain |
 | Min instances | — | 0 | 0 (or 1 for warm prod — decision) |
@@ -64,11 +64,11 @@ bootstrap GCP project/APIs → WIF + repo secrets → Cloud SQL instance + `posm
 Registry → `terraform apply` (staging) → first staging deploy → migrate → smoke.
 
 **Wave C — staging verification (me):** real-login-per-role E2E on the staging URL (reuse the
-`platform/e2e` harness, env-parameterised), role/tenant isolation, media upload→view, OTP path,
+`platform/e2e` harness, env-parameterised), role/tenant isolation, media upload→view, the login path,
 the new report + HO flow + bulk upload, honest unhappy paths. Evidence, not claims (WoW #4).
 
 **Wave D — production (your go):** `terraform apply` (prod) → DNS/Cloudflare → `main` cutover via
-`workflow_dispatch` → migrate → verify serving image SHA + boot smoke → real MSG91 OTP check.
+`workflow_dispatch` → migrate → verify serving image SHA + boot smoke → a real email+password login check.
 
 **Wave E — hardening + sign-off:** Cloud Monitoring dashboards + uptime/error-rate/latency alerts,
 Cloud SQL automated backups + PITR, a rollback drill, and a **DUAL adversarial audit** of the
@@ -84,7 +84,7 @@ I write every file and hand you the exact commands; these need your access/decis
    Registry, IAM). Decision: dedicated `kwality-posm` project vs the shared Gifsy project (§5).
 3. **Cloud SQL** — the **`gifsy-shared` instance does not exist yet** (blueprint "to build"); it must
    be created (or decide POSM gets its own instance — §5).
-4. **Secrets** — prod **MSG91** SMTP + OTP credentials; any client-specific keys. (JWT/DB secrets I
+4. **Secrets** — prod **MSG91** SMTP credentials (email reports); any client-specific keys. (JWT/DB secrets I
    generate.)
 5. **Domain** — the client-facing hostname + Cloudflare access (or your DNS).
 6. **Privileged runs** — either you run `terraform apply` / `gcloud` (I supply exact commands), or
