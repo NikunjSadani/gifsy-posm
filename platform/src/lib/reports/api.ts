@@ -27,6 +27,17 @@ export interface ReportConfig {
   staleRecceHours: number;
   /** An install with no audit after this many hours is flagged stale. */
   staleInstallHours: number;
+  /** Per-ASM pending-recce reminder (threshold-triggered). */
+  asmRecceReminders: AsmRecceReminderConfig;
+}
+
+/** Per-ASM "recce pending your approval" reminder settings. */
+export interface AsmRecceReminderConfig {
+  enabled: boolean;
+  /** Hours a recce must be pending ASM approval before a reminder is eligible. */
+  thresholdHours: number;
+  /** Re-remind a given recce at most once per this many hours. */
+  reminderIntervalHours: number;
 }
 
 /** GET /api/reports/preview — the rendered digest HTML + the underlying counts. */

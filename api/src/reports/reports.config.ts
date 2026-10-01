@@ -6,6 +6,18 @@
  * controller (GET/PUT config) and the cron sweep.
  */
 
+/**
+ * Threshold-triggered "pending ASM approval" reminder config. When enabled, the hourly cron emails
+ * EACH ASM the list of THEIR outlets whose recce has been pending approval longer than
+ * `thresholdHours` (with days-pending per outlet), re-reminding at most every `reminderIntervalHours`
+ * per recce. Targeted to the assigned ASM's email — separate from the tenant-wide digest.
+ */
+export interface AsmRecceReminderConfig {
+  enabled: boolean;
+  thresholdHours: number;        // pending longer than this → eligible (>= 1)
+  reminderIntervalHours: number; // re-remind a given recce at most this often (>= 1)
+}
+
 /** The per-tenant email-digest configuration (stored at Client.settings.emailReports). */
 export interface EmailReportsConfig {
   enabled: boolean;
@@ -16,7 +28,15 @@ export interface EmailReportsConfig {
   staleRecceHours: number;
   /** A SUBMITTED installation older than this many hours is "stale" (>= 1). */
   staleInstallHours: number;
+  /** Per-ASM pending-recce reminder (threshold-triggered). */
+  asmRecceReminders: AsmRecceReminderConfig;
 }
+
+export const DEFAULT_ASM_RECCE_REMINDER: AsmRecceReminderConfig = {
+  enabled: false,
+  thresholdHours: 24,
+  reminderIntervalHours: 24,
+};
 
 /** The SAFE defaults applied when a tenant has no emailReports config (or a malformed one). */
 export const DEFAULT_EMAIL_REPORTS_CONFIG: EmailReportsConfig = {
@@ -25,6 +45,7 @@ export const DEFAULT_EMAIL_REPORTS_CONFIG: EmailReportsConfig = {
   sendHourLocal: 8,
   staleRecceHours: 24,
   staleInstallHours: 48,
+  asmRecceReminders: DEFAULT_ASM_RECCE_REMINDER,
 };
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -74,6 +95,7 @@ function cleanRecipients(raw: unknown): string[] {
 export function readEmailReportsConfig(settings: unknown): EmailReportsConfig {
   const root = isObject(settings) ? settings : {};
   const node = isObject(root.emailReports) ? root.emailReports : {};
+  const asm = isObject(node.asmRecceReminders) ? node.asmRecceReminders : {};
   return {
     enabled: Boolean(node.enabled ?? DEFAULT_EMAIL_REPORTS_CONFIG.enabled),
     recipients: cleanRecipients(node.recipients),
@@ -83,6 +105,14 @@ export function readEmailReportsConfig(settings: unknown): EmailReportsConfig {
       node.staleInstallHours,
       DEFAULT_EMAIL_REPORTS_CONFIG.staleInstallHours,
     ),
+    asmRecceReminders: {
+      enabled: Boolean(asm.enabled ?? DEFAULT_ASM_RECCE_REMINDER.enabled),
+      thresholdHours: positiveHours(asm.thresholdHours, DEFAULT_ASM_RECCE_REMINDER.thresholdHours),
+      reminderIntervalHours: positiveHours(
+        asm.reminderIntervalHours,
+        DEFAULT_ASM_RECCE_REMINDER.reminderIntervalHours,
+      ),
+    },
   };
 }
 

@@ -5,6 +5,7 @@ import { Msg91Service } from '../notifications/msg91.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import {
   EmailReportsConfig,
+  DEFAULT_ASM_RECCE_REMINDER,
   mergeEmailReportsConfig,
   readEmailReportsConfig,
 } from './reports.config';
@@ -102,6 +103,7 @@ export class ReportsService {
       sendHourLocal: dto.sendHourLocal,
       staleRecceHours: dto.staleRecceHours,
       staleInstallHours: dto.staleInstallHours,
+      asmRecceReminders: dto.asmRecceReminders ?? DEFAULT_ASM_RECCE_REMINDER,
     };
 
     // Read-modify-write the settings blob so the emailReports key merges in WITHOUT clobbering
@@ -255,6 +257,122 @@ export class ReportsService {
         );
       }
     }
+  }
+
+  // ── Per-ASM pending-recce reminders (threshold-triggered) ──────────────────────────
+
+  /**
+   * Email EACH ASM the list of THEIR outlets whose recce is still pending their approval beyond the
+   * tenant's `thresholdHours`, with days-pending per outlet. Threshold-triggered (runs every hourly
+   * tick); a per-recce `lastRemindedAt` ledger re-reminds a given recce at most every
+   * `reminderIntervalHours`, so an ASM is not spammed. Targeted to the ASM's own email — tenant-
+   * scoped on every query. One tenant's (or one ASM's) failure never aborts the rest.
+   */
+  async runAsmRecceReminders(now: Date = new Date()): Promise<void> {
+    let clients: { id: string; name: string; settings: unknown }[];
+    try {
+      clients = await this.prisma.client.findMany({ select: { id: true, name: true, settings: true } });
+    } catch (e) {
+      this.logger.error(`asm-reminder cron: failed to list clients: ${this.reason(e)}`);
+      return;
+    }
+
+    for (const client of clients) {
+      try {
+        const cfg = readEmailReportsConfig(client.settings).asmRecceReminders;
+        if (!cfg.enabled) continue;
+
+        const thresholdCutoff = new Date(now.getTime() - cfg.thresholdHours * 3_600_000);
+        const remindCutoff = new Date(now.getTime() - cfg.reminderIntervalHours * 3_600_000);
+
+        // Eligible: a SUBMITTED recce (pending ASM approval) in this tenant, received before the
+        // threshold, on a site that HAS an assigned ASM, and not reminded within the interval.
+        const recces = await this.prisma.recce.findMany({
+          where: {
+            clientId: client.id,
+            status: 'SUBMITTED',
+            receivedAt: { lte: thresholdCutoff },
+            site: { asmUserId: { not: null } },
+            OR: [{ lastRemindedAt: null }, { lastRemindedAt: { lte: remindCutoff } }],
+          },
+          select: {
+            id: true,
+            receivedAt: true,
+            site: {
+              select: {
+                code: true, name: true, town: true, asmUserId: true,
+                asm: { select: { email: true, name: true, isActive: true } },
+              },
+            },
+          },
+        });
+        if (recces.length === 0) continue;
+
+        // Group by the assigned ASM — only ACTIVE ASMs with an email can be mailed (others stay
+        // eligible, un-stamped, so they are picked up once that ASM has an email/is reactivated).
+        interface Grp { email: string; name: string; ids: string[]; items: { label: string; days: number; hours: number }[] }
+        const byAsm = new Map<string, Grp>();
+        for (const r of recces) {
+          const asm = r.site.asm;
+          if (!asm || !asm.isActive || !asm.email) continue;
+          const hours = Math.floor((now.getTime() - r.receivedAt.getTime()) / 3_600_000);
+          const days = Math.floor(hours / 24);
+          const key = r.site.asmUserId as string;
+          let g = byAsm.get(key);
+          if (!g) { g = { email: asm.email, name: asm.name, ids: [], items: [] }; byAsm.set(key, g); }
+          g.ids.push(r.id);
+          g.items.push({ label: `${r.site.name} (${r.site.code})${r.site.town ? ` — ${r.site.town}` : ''}`, days, hours });
+        }
+
+        for (const g of byAsm.values()) {
+          // Longest-pending first — the most urgent at the top.
+          g.items.sort((a, b) => b.hours - a.hours);
+          const subject = `${g.items.length} recce${g.items.length === 1 ? '' : 's'} pending your approval — ${client.name}`;
+          const html = this.buildAsmReminderHtml(client.name, g.name, g.items, now);
+          try {
+            await this.msg91.sendEmail({ to: [g.email], subject, html });
+            // Stamp ONLY the recces actually included in a successful send, so a send failure
+            // leaves them eligible for the next tick (at-least-once) and no item is silently dropped.
+            await this.prisma.recce.updateMany({ where: { id: { in: g.ids } }, data: { lastRemindedAt: now } });
+            this.logger.log(`asm-reminder: "${client.name}" → ${g.email} (${g.items.length} pending)`);
+          } catch (sendErr) {
+            this.logger.error(`asm-reminder: send failed for ${g.email} (${client.id}): ${this.reason(sendErr)}`);
+          }
+        }
+      } catch (e) {
+        this.logger.error(`asm-reminder cron: tenant ${client.id} failed: ${this.reason(e)}`);
+      }
+    }
+  }
+
+  /** Build the per-ASM reminder email — a table of pending outlets + how long each has waited. */
+  buildAsmReminderHtml(
+    tenantName: string,
+    asmName: string,
+    items: { label: string; days: number; hours: number }[],
+    now: Date,
+  ): string {
+    const esc = (s: string) => this.escapeHtml(s);
+    const age = (it: { days: number; hours: number }) =>
+      it.days >= 1 ? `${it.days} day${it.days === 1 ? '' : 's'}` : `${it.hours}h`;
+    const rows = items
+      .map(
+        (it) =>
+          `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;">${esc(it.label)}</td>` +
+          `<td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap;font-weight:600;color:${it.days >= 3 ? '#b91c1c' : '#b45309'};">${age(it)}</td></tr>`,
+      )
+      .join('');
+    return (
+      `<div style="font-family:Arial,Helvetica,sans-serif;color:#111;max-width:640px;">` +
+      `<p>Hi ${esc(asmName)},</p>` +
+      `<p>You have <strong>${items.length}</strong> recce${items.length === 1 ? '' : 's'} pending your approval for <strong>${esc(tenantName)}</strong>. Please review and approve (or reject) them.</p>` +
+      `<table style="border-collapse:collapse;width:100%;font-size:14px;margin:12px 0;">` +
+      `<thead><tr><th style="text-align:left;padding:8px 12px;border-bottom:2px solid #ddd;">Outlet</th>` +
+      `<th style="text-align:right;padding:8px 12px;border-bottom:2px solid #ddd;">Pending</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>` +
+      `<p style="color:#666;font-size:12px;">Items pending 3+ days are shown in red. This is an automated reminder — reply is not monitored.</p>` +
+      `</div>`
+    );
   }
 
   // ── Counts (tenant-scoped — the isolation chokepoint) ──────────────────────────────

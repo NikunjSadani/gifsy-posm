@@ -319,6 +319,10 @@ model Recce {
   rejectionReasonCode RejectReasonCode?
   rejectionReason    String?
 
+  // Last time a "pending ASM approval" reminder email that INCLUDED this recce was sent — the
+  // per-recce ledger that throttles the threshold-triggered ASM reminder (reports feature).
+  lastRemindedAt     DateTime?
+
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

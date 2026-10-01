@@ -28,5 +28,14 @@ export class ReportsCron {
         `daily-email-digest cron failed: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+    // Threshold-triggered per-ASM pending-recce reminders — independent of the daily digest, so a
+    // digest failure above never skips reminders (and vice-versa). Its own per-recce ledger throttles.
+    try {
+      await this.reports.runAsmRecceReminders();
+    } catch (e) {
+      this.logger.error(
+        `asm-recce-reminder cron failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 }

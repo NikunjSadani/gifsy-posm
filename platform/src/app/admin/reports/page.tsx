@@ -50,6 +50,10 @@ export default function AdminReportsPage() {
   const [sendHourLocal, setSendHourLocal] = useState(9);
   const [staleRecceRaw, setStaleRecceRaw] = useState('24');
   const [staleInstallRaw, setStaleInstallRaw] = useState('48');
+  // ASM pending-recce reminder (threshold-triggered)
+  const [asmReminderEnabled, setAsmReminderEnabled] = useState(false);
+  const [asmThresholdRaw, setAsmThresholdRaw] = useState('24');
+  const [asmIntervalRaw, setAsmIntervalRaw] = useState('24');
   const [saving, setSaving] = useState(false);
 
   // ─── Preview panel ────────────────────────────────────────────────────────
@@ -68,6 +72,10 @@ export default function AdminReportsPage() {
     setSendHourLocal(c.sendHourLocal);
     setStaleRecceRaw(String(c.staleRecceHours));
     setStaleInstallRaw(String(c.staleInstallHours));
+    const asm = c.asmRecceReminders ?? { enabled: false, thresholdHours: 24, reminderIntervalHours: 24 };
+    setAsmReminderEnabled(asm.enabled);
+    setAsmThresholdRaw(String(asm.thresholdHours));
+    setAsmIntervalRaw(String(asm.reminderIntervalHours));
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -105,7 +113,13 @@ export default function AdminReportsPage() {
   const staleRecce = parsePositiveInt(staleRecceRaw);
   const staleInstall = parsePositiveInt(staleInstallRaw);
   const hasInvalidRecipients = parsed.invalid.length > 0;
-  const thresholdsValid = staleRecce !== null && staleInstall !== null;
+  const asmThreshold = parsePositiveInt(asmThresholdRaw);
+  const asmInterval = parsePositiveInt(asmIntervalRaw);
+  // ASM-reminder thresholds only need to be valid WHEN the reminder is enabled.
+  // Mirror the backend DTO's 1–720h bound so a save can't bounce with a 400.
+  const asmInRange = (n: number | null): boolean => n !== null && n >= 1 && n <= 720;
+  const asmValid = !asmReminderEnabled || (asmInRange(asmThreshold) && asmInRange(asmInterval));
+  const thresholdsValid = staleRecce !== null && staleInstall !== null && asmValid;
   const canSave = !saving && !hasInvalidRecipients && thresholdsValid;
 
   const savedRecipientCount = savedConfig?.recipients.length ?? 0;
@@ -121,6 +135,12 @@ export default function AdminReportsPage() {
       sendHourLocal,
       staleRecceHours: staleRecce,
       staleInstallHours: staleInstall,
+      asmRecceReminders: {
+        enabled: asmReminderEnabled,
+        // When disabled, send the last-valid (or default) values so the DTO still validates.
+        thresholdHours: asmThreshold ?? 24,
+        reminderIntervalHours: asmInterval ?? 24,
+      },
     };
     const res = await saveConfig(body);
     setSaving(false);
@@ -285,6 +305,74 @@ export default function AdminReportsPage() {
                 Thresholds must be whole numbers of hours greater than 0.
               </p>
             )}
+
+            {/* ─── ASM pending-recce reminder ──────────────────────────────── */}
+            <div className="pt-4 mt-1 border-t border-gray-100 space-y-4">
+              <label className="flex items-center justify-between gap-4 cursor-pointer select-none">
+                <span>
+                  <span className="block text-sm font-medium text-gray-800">ASM pending-recce reminders</span>
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    Email each ASM about recces awaiting their approval past the threshold below — only their own
+                    assigned outlets, with the days each has been pending.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={asmReminderEnabled}
+                  onChange={(e) => setAsmReminderEnabled(e.target.checked)}
+                  className="w-5 h-5 flex-none accent-[var(--brand-primary)] cursor-pointer"
+                />
+              </label>
+
+              {asmReminderEnabled && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="asmThreshold" className="block text-sm font-medium text-gray-800 mb-1.5">
+                        Remind after (hours)
+                      </label>
+                      <input
+                        id="asmThreshold"
+                        type="number"
+                        min={1}
+                        max={720}
+                        inputMode="numeric"
+                        value={asmThresholdRaw}
+                        onChange={(e) => setAsmThresholdRaw(e.target.value)}
+                        className={`w-full rounded-xl border-2 focus:outline-none px-3 py-2.5 text-sm text-gray-900 transition-colors ${
+                          asmThreshold === null ? 'border-red-300 focus:border-red-500' : 'border-gray-200 focus:border-[var(--brand-primary)]'
+                        }`}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">How long a recce sits unapproved before the first reminder.</p>
+                    </div>
+                    <div>
+                      <label htmlFor="asmInterval" className="block text-sm font-medium text-gray-800 mb-1.5">
+                        Re-remind every (hours)
+                      </label>
+                      <input
+                        id="asmInterval"
+                        type="number"
+                        min={1}
+                        max={720}
+                        inputMode="numeric"
+                        value={asmIntervalRaw}
+                        onChange={(e) => setAsmIntervalRaw(e.target.value)}
+                        className={`w-full rounded-xl border-2 focus:outline-none px-3 py-2.5 text-sm text-gray-900 transition-colors ${
+                          asmInterval === null ? 'border-red-300 focus:border-red-500' : 'border-gray-200 focus:border-[var(--brand-primary)]'
+                        }`}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Minimum gap between repeat reminders for the same recce.</p>
+                    </div>
+                  </div>
+                  {!asmValid && (
+                    <p className="-mt-1 text-xs text-red-600 flex items-center gap-1.5">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      Both must be whole numbers of hours between 1 and 720.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
 
             {/* Actions */}
             <div className="flex flex-wrap items-center gap-2 pt-1">

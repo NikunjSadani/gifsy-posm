@@ -4,9 +4,30 @@ import {
   IsBoolean,
   IsEmail,
   IsInt,
+  IsOptional,
   Max,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+/** Per-ASM pending-recce reminder settings (threshold-triggered). */
+export class AsmRecceReminderDto {
+  @IsBoolean()
+  enabled: boolean;
+
+  /** Hours a recce must be pending ASM approval before it's eligible for a reminder. */
+  @IsInt()
+  @Min(1)
+  @Max(720)
+  thresholdHours: number;
+
+  /** Re-remind a given recce at most once per this many hours. */
+  @IsInt()
+  @Min(1)
+  @Max(720)
+  reminderIntervalHours: number;
+}
 
 /**
  * Body for PUT /v1/reports/config — the full per-tenant email-digest config (replace, not
@@ -40,4 +61,10 @@ export class UpdateEmailReportsConfigDto {
   @IsInt()
   @Min(1)
   staleInstallHours: number;
+
+  /** Per-ASM pending-recce reminder config. Optional for backward-compat; defaulted in the service. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AsmRecceReminderDto)
+  asmRecceReminders?: AsmRecceReminderDto;
 }

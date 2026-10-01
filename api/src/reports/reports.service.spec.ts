@@ -28,7 +28,7 @@ function makePrisma() {
       findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue({}),
     },
-    recce: { count: jest.fn().mockResolvedValue(0) },
+    recce: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     installation: { count: jest.fn().mockResolvedValue(0) },
     manualTask: { count: jest.fn().mockResolvedValue(0) },
     manualTaskSubmission: { count: jest.fn().mockResolvedValue(0) },
@@ -394,5 +394,80 @@ describe('reports.time (IST helpers)', () => {
     const b = istDateOnlyUtc(new Date('2026-08-28T17:00:00Z')); // 22:30 IST 28th
     expect(a).toEqual(b);
     expect(a).toEqual(new Date(Date.UTC(2026, 7, 28)));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-ASM pending-recce reminders (threshold-triggered)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ReportsService.runAsmRecceReminders', () => {
+  const reminderSettings = (over = {}) => ({
+    settings: { emailReports: { asmRecceReminders: { enabled: true, thresholdHours: 24, reminderIntervalHours: 24, ...over } } },
+  });
+  const recceRow = (over: any = {}) => ({
+    id: over.id ?? 'r1',
+    receivedAt: over.receivedAt ?? new Date(Date.now() - 3 * 24 * 3600_000), // 3 days ago
+    site: { code: 'A1', name: 'Alpha', town: 'Pune', asmUserId: 'asm1',
+      asm: { email: 'asm1@kw.in', name: 'ASM One', isActive: true }, ...over.site },
+  });
+
+  it('does nothing when the feature is disabled', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', settings: { emailReports: { asmRecceReminders: { enabled: false } } } }]);
+    await service.runAsmRecceReminders(new Date());
+    expect(fns.recce.findMany).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('emails each ASM only THEIR pending outlets and stamps lastRemindedAt on those recces', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', ...reminderSettings() }]);
+    fns.recce.findMany.mockResolvedValue([
+      recceRow({ id: 'r1' }),
+      recceRow({ id: 'r2', site: { code: 'A2', name: 'Beta', town: null, asmUserId: 'asm1', asm: { email: 'asm1@kw.in', name: 'ASM One', isActive: true } } }),
+      recceRow({ id: 'r3', site: { code: 'B1', name: 'Gamma', town: 'Delhi', asmUserId: 'asm2', asm: { email: 'asm2@kw.in', name: 'ASM Two', isActive: true } } }),
+    ]);
+    const now = new Date();
+    await service.runAsmRecceReminders(now);
+
+    // Query is tenant + SUBMITTED + threshold + has-asm + not-recently-reminded.
+    const where = fns.recce.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ clientId: 'c1', status: 'SUBMITTED' });
+    expect(where.site).toMatchObject({ asmUserId: { not: null } });
+
+    // Two ASMs → two emails, each to the right address.
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    const tos = sendEmail.mock.calls.map((c: any[]) => c[0].to[0]).sort();
+    expect(tos).toEqual(['asm1@kw.in', 'asm2@kw.in']);
+    // ASM One's email lists 2 outlets; the HTML names them.
+    const asm1Call = sendEmail.mock.calls.find((c: any[]) => c[0].to[0] === 'asm1@kw.in')[0];
+    expect(asm1Call.subject).toMatch(/2 recces pending your approval/);
+    expect(asm1Call.html).toContain('Alpha');
+    expect(asm1Call.html).toContain('Beta');
+    // Stamped exactly the recces that were sent (r1,r2 for asm1 and r3 for asm2).
+    const stamped = fns.recce.updateMany.mock.calls.flatMap((c: any[]) => c[0].where.id.in).sort();
+    expect(stamped).toEqual(['r1', 'r2', 'r3']);
+    for (const c of fns.recce.updateMany.mock.calls) expect(c[0].data).toEqual({ lastRemindedAt: now });
+  });
+
+  it('skips an ASM with no email / inactive account (not emailed, not stamped → stays eligible)', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', ...reminderSettings() }]);
+    fns.recce.findMany.mockResolvedValue([
+      recceRow({ id: 'r1', site: { code: 'A1', name: 'Alpha', town: null, asmUserId: 'asm1', asm: { email: null, name: 'No Email', isActive: true } } }),
+      recceRow({ id: 'r2', site: { code: 'B1', name: 'Gamma', town: null, asmUserId: 'asm2', asm: { email: 'asm2@kw.in', name: 'ASM Two', isActive: false } } }),
+    ]);
+    await service.runAsmRecceReminders(new Date());
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(fns.recce.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('a send failure does NOT stamp (so the items remain eligible next run)', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', ...reminderSettings() }]);
+    fns.recce.findMany.mockResolvedValue([recceRow({ id: 'r1' })]);
+    sendEmail.mockRejectedValueOnce(new Error('smtp down'));
+    await service.runAsmRecceReminders(new Date()); // must not throw
+    expect(fns.recce.updateMany).not.toHaveBeenCalled();
   });
 });
