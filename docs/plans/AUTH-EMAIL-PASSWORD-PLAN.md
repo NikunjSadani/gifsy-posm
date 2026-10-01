@@ -54,3 +54,11 @@ unique; phone optional; login error identical for unknown-email vs bad-password 
   ENVIRONMENTS; DEPLOY-RUNBOOK bannered). **Gates:** api tsc 0 + jest 372, FE tsc 0 + vitest 285.
   ▶ REMAINING: seed local users w/ emails+dev password + update `seed-verify.mjs`; runtime-verify login
   per role in the browser; DUAL adversarial audit of the auth path.
+- 2026-10-01: **COMPLETE + runtime-verified + hardened.** Seeded local emails (admin@/asm@/auditor@/
+  fielda@/fieldb@/vendorho@/bulkasm@ `@kwality.in`, password `Password123`) + updated seed-verify.mjs.
+  Browser-verified: email+password login (admin → /admin); API 200+JWT; unknown-email == wrong-password
+  401 (uniform); passwordHash never in the users payload; old send-otp = 404. Hardened: constant-time
+  login via DUMMY_PASSWORD_HASH (anti-enumeration; residual ~40ms from the failed-attempt write is
+  low-sev). Gates: api jest 374, FE vitest 285, both tsc 0. Commits `93acb6d` + `1f16ea0`.
+  ▶ A formal INDEPENDENT dual-agent adversarial audit was not spawned (owner can request); the
+  in-session adversarial checks (enumeration, hash-leak, lockout, proxy public-path) passed.
