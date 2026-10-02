@@ -149,3 +149,14 @@ moment the §3 blockers clear. Say the word and I'll kick off Wave A.
   provisioning actions surfaced during integration: (a) seed staging/prod Client with a stable
   `id:'kwality'` so `NEXT_PUBLIC_CLIENT_ID` works; (b) first `terraform apply` uses a bootstrap
   image + `enable_health_probes=false` (services need an image to exist before CI's first deploy).
+- 2026-10-02: **more features shipped on `develop` (still local-only; nothing deployed)** — grouped
+  admin left-sidebar nav; Execution-report frozen/grouped table + **streamed xlsx export (no 20k cap)**;
+  ASM pending-recce reminder emails (now with a **unique-ledger** against multi-instance duplicates);
+  **nodemailer 6→10** (clears its HIGH advisories); **POSM-type reference photo + field catalogue**;
+  `scripts/start-db.mjs` (local dev DB auto-start). Gates now: **api tsc 0 + jest 389, FE tsc 0 +
+  vitest 295**. Owner-independent pre-deploy de-risking done this day: fresh-DB `migrate deploy` from
+  empty applies all 10 migrations cleanly; `terraform validate` + `fmt` clean; prod-mode (`NODE_ENV=
+  production`) boots and the missing-secret fail-fast fires; all 5 roles authenticate. Added
+  `scripts/bootstrap-gcp.sh` + `GO-LIVE-OWNER-CHECKLIST.md`. ⚠️ No automated E2E/Playwright harness
+  exists in THIS repo (the `[e2e-harness]` memory is the other Gifsy platform) — POSM verification is
+  manual/browser. Owner blockers unchanged (§3 access + §5.1 DB decision).
