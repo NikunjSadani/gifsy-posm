@@ -325,9 +325,30 @@ export class ReportsService {
           g.items.push({ label: `${r.site.name} (${r.site.code})${r.site.town ? ` — ${r.site.town}` : ''}`, days, hours });
         }
 
-        for (const g of byAsm.values()) {
+        // Idempotency window = the IST hour bucket. The cron fires once/hour, so two instances
+        // firing the SAME tick collide on the unique ledger key and only one sends.
+        const periodKey = `${istDateLabel(now)}T${String(istHour(now)).padStart(2, '0')}`;
+
+        for (const [asmUserId, g] of byAsm.entries()) {
           // Longest-pending first — the most urgent at the top.
           g.items.sort((a, b) => b.hours - a.hours);
+
+          // Idempotency CLAIM — insert this ASM's ledger row for the current tick BEFORE emailing.
+          // A P2002 means another instance/fire already claimed this (clientId, asmUserId, periodKey)
+          // → skip WITHOUT sending, which kills the multi-instance duplicate-email race. Mirrors the
+          // daily digest's EmailDigestLog claim. (`lastRemindedAt` stays the across-tick throttle.)
+          try {
+            await this.prisma.asmReminderLog.create({
+              data: { clientId: client.id, asmUserId, periodKey, itemCount: g.items.length },
+            });
+          } catch (claimErr) {
+            if (this.isUniqueViolation(claimErr)) {
+              this.logger.log(`asm-reminder: "${client.name}" → ${g.email} already sent for ${periodKey} — skipping`);
+              continue;
+            }
+            throw claimErr;
+          }
+
           const subject = `${g.items.length} recce${g.items.length === 1 ? '' : 's'} pending your approval — ${client.name}`;
           const html = this.buildAsmReminderHtml(client.name, g.name, g.items, now);
           try {
@@ -337,7 +358,12 @@ export class ReportsService {
             await this.prisma.recce.updateMany({ where: { id: { in: g.ids } }, data: { lastRemindedAt: now } });
             this.logger.log(`asm-reminder: "${client.name}" → ${g.email} (${g.items.length} pending)`);
           } catch (sendErr) {
-            this.logger.error(`asm-reminder: send failed for ${g.email} (${client.id}): ${this.reason(sendErr)}`);
+            // Roll back the claim so a LATER tick re-tries (never lose a reminder to a transient SMTP
+            // failure). A rare duplicate on a partial failure is an acceptable trade, same as the digest.
+            await this.prisma.asmReminderLog
+              .delete({ where: { clientId_asmUserId_periodKey: { clientId: client.id, asmUserId, periodKey } } })
+              .catch(() => undefined);
+            this.logger.error(`asm-reminder: send failed for ${g.email} (${client.id}) — rolled back the claim: ${this.reason(sendErr)}`);
           }
         }
       } catch (e) {

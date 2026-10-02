@@ -535,3 +535,21 @@ model EmailDigestLog {
   @@index([clientId])
   @@map("email_digest_logs")
 }
+
+// Idempotency ledger for the per-ASM pending-recce reminder. One row = "this ASM was reminded for
+// this cron tick". `periodKey` is the IST hour bucket ("YYYY-MM-DDTHH"); the cron fires once/hour,
+// so concurrent instances of the same tick collide on the unique key and only ONE sends — killing
+// the multi-instance duplicate-email race (the per-recce `Recce.lastRemindedAt` is the separate
+// across-tick interval throttle). Mirrors EmailDigestLog.
+model AsmReminderLog {
+  id         String   @id @default(cuid())
+  clientId   String
+  asmUserId  String
+  periodKey  String                                 // IST hour bucket "YYYY-MM-DDTHH" (idempotency key)
+  sentAt     DateTime @default(now())
+  itemCount  Int                                    // recces included in the reminder (snapshot)
+
+  @@unique([clientId, asmUserId, periodKey])
+  @@index([clientId])
+  @@map("asm_reminder_logs")
+}

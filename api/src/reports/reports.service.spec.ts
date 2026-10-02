@@ -36,6 +36,10 @@ function makePrisma() {
       create: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
     },
+    asmReminderLog: {
+      create: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({}),
+    },
   };
   // Interactive-transaction shim: run the callback with the same mock as the tx client.
   fns.$transaction = jest.fn((arg: unknown) =>
@@ -448,6 +452,24 @@ describe('ReportsService.runAsmRecceReminders', () => {
     const stamped = fns.recce.updateMany.mock.calls.flatMap((c: any[]) => c[0].where.id.in).sort();
     expect(stamped).toEqual(['r1', 'r2', 'r3']);
     for (const c of fns.recce.updateMany.mock.calls) expect(c[0].data).toEqual({ lastRemindedAt: now });
+    // Idempotency claim — one ledger row per ASM for this tick, keyed by (clientId, asmUserId, periodKey).
+    expect(fns.asmReminderLog.create).toHaveBeenCalledTimes(2);
+    const claimedAsms = fns.asmReminderLog.create.mock.calls.map((c: any[]) => c[0].data.asmUserId).sort();
+    expect(claimedAsms).toEqual(['asm1', 'asm2']);
+    const claim = fns.asmReminderLog.create.mock.calls[0][0].data;
+    expect(claim).toMatchObject({ clientId: 'c1' });
+    expect(typeof claim.periodKey).toBe('string'); // IST hour bucket
+  });
+
+  it('SKIPS an ASM already claimed this tick (P2002) — no email, not stamped', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', ...reminderSettings() }]);
+    fns.recce.findMany.mockResolvedValue([recceRow({ id: 'r1' })]);
+    fns.asmReminderLog.create.mockRejectedValueOnce(uniqueError()); // another instance won the race
+    await service.runAsmRecceReminders(new Date());
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(fns.recce.updateMany).not.toHaveBeenCalled();
+    expect(fns.asmReminderLog.delete).not.toHaveBeenCalled(); // never sent → nothing to roll back
   });
 
   it('skips an ASM with no email / inactive account (not emailed, not stamped → stays eligible)', async () => {
@@ -462,12 +484,17 @@ describe('ReportsService.runAsmRecceReminders', () => {
     expect(fns.recce.updateMany).not.toHaveBeenCalled();
   });
 
-  it('a send failure does NOT stamp (so the items remain eligible next run)', async () => {
+  it('a send failure does NOT stamp AND rolls back the claim (so it retries next tick)', async () => {
     const { service, fns, sendEmail } = makeService();
     fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', ...reminderSettings() }]);
     fns.recce.findMany.mockResolvedValue([recceRow({ id: 'r1' })]);
     sendEmail.mockRejectedValueOnce(new Error('smtp down'));
     await service.runAsmRecceReminders(new Date()); // must not throw
     expect(fns.recce.updateMany).not.toHaveBeenCalled();
+    // The claim was committed before the send, so it must be rolled back to allow a later retry.
+    expect(fns.asmReminderLog.delete).toHaveBeenCalledTimes(1);
+    expect(fns.asmReminderLog.delete.mock.calls[0][0].where.clientId_asmUserId_periodKey).toMatchObject({
+      clientId: 'c1', asmUserId: 'asm1',
+    });
   });
 });
