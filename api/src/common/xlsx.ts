@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
+import { PassThrough, type Readable } from 'node:stream';
 
 /**
  * Shared multi-sheet xlsx builder — used by any domain that streams an xlsx
@@ -135,3 +137,64 @@ export function buildXlsx(sheets: XlsxSheet[]): Buffer {
 
 /** @deprecated alias kept for the initial port; prefer XlsxSheet. */
 export type ReportSheet = XlsxSheet;
+
+// ─── Streaming writer (for large, uncapped exports) ──────────────────────────────
+
+/**
+ * Pulls the next batch of row-objects, newest cursor advanced internally by the caller. Returns an
+ * empty array when the source is exhausted — that ends the stream. Keeps memory bounded to one
+ * batch regardless of total row count (vs. buildXlsx, which materialises the whole workbook).
+ */
+export type NextBatch = () => Promise<Record<string, unknown>[]>;
+
+export interface StreamXlsxOptions {
+  sheetName: string;
+  /** The exact column order. Every row is projected onto these keys, so the header is always present
+   *  (even with zero data rows) and a row missing a key renders an empty cell — never a shifted column. */
+  headers: string[];
+  nextBatch: NextBatch;
+}
+
+/**
+ * Stream a single-sheet .xlsx to a Readable without ever holding more than one batch of rows in
+ * memory — the uncapped counterpart to {@link buildXlsx}. Returns immediately; the workbook is
+ * written asynchronously as the HTTP layer consumes the stream. EVERY header and string cell is
+ * `cellSafe`-guarded, exactly like buildXlsx, so a streamed export is no more an injection sink than
+ * an in-memory one. A failure mid-write destroys the stream (the response is already streaming, so
+ * the status code can no longer change — the download simply aborts, which the client surfaces).
+ */
+export function streamXlsx({ sheetName, headers, nextBatch }: StreamXlsxOptions): Readable {
+  const out = new PassThrough();
+  const safeHeaders = headers.map(cellSafe);
+
+  void (async () => {
+    try {
+      const wb = new ExcelJS.stream.xlsx.WorkbookWriter({
+        stream: out,
+        useStyles: false,
+        useSharedStrings: false,
+      });
+      const ws = wb.addWorksheet(sheetName);
+      ws.addRow(safeHeaders).commit();
+
+      for (;;) {
+        const batch = await nextBatch();
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          ws.addRow(
+            headers.map((h) => {
+              const v = row[h];
+              return typeof v === 'string' ? cellSafe(v) : (v ?? '');
+            }),
+          ).commit();
+        }
+      }
+      ws.commit();
+      await wb.commit(); // finalises the zip + ends `out`
+    } catch (err) {
+      out.destroy(err instanceof Error ? err : new Error(String(err)));
+    }
+  })();
+
+  return out;
+}

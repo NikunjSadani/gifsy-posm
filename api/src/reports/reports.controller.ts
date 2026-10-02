@@ -64,18 +64,19 @@ export class ReportsController {
   }
 
   /**
-   * GET /v1/reports/outlet-execution.xlsx — the same report as a downloadable .xlsx (every matching
-   * row up to the server cap). Returned as a StreamableFile (passed through the global interceptor
-   * unwrapped) with an attachment disposition.
+   * GET /v1/reports/outlet-execution.xlsx — the same report as a downloadable .xlsx, EVERY matching
+   * row (no row cap). The service streams rows in batches straight into the response, so a large
+   * tenant export never materialises the whole workbook in memory. Returned as a StreamableFile
+   * (passed through the global interceptor unwrapped) with an attachment disposition.
    */
   @Get('outlet-execution.xlsx')
-  async outletExecutionXlsx(
+  outletExecutionXlsx(
     @CurrentUser() user: JwtPayload,
     @Query() query: ListOutletReportDto,
-  ): Promise<StreamableFile> {
-    const buffer = await this.reports.outletExecutionXlsx(user, query);
+  ): StreamableFile {
+    const stream = this.reports.outletExecutionXlsxStream(user, query);
     const stamp = new Date().toISOString().slice(0, 10);
-    return new StreamableFile(buffer, {
+    return new StreamableFile(stream, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="outlet-execution-${stamp}.xlsx"`,
     });

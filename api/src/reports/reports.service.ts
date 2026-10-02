@@ -13,15 +13,16 @@ import { istDateLabel, istDateOnlyUtc, istHour } from './reports.time';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
 import { ListOutletReportDto } from './dto/list-outlet-report.dto';
 import { tenantScope } from '../common/tenant-scope';
-import { buildXlsx } from '../common/xlsx';
+import { streamXlsx } from '../common/xlsx';
+import type { Readable } from 'node:stream';
 import {
   OUTLET_REPORT_COLUMNS,
   buildOutletExecutionRow,
   type RepSite,
 } from './outlet-execution.helper';
 
-/** Hard cap on rows returned by the Outlet Execution xlsx export (bounds untrusted-scope work). */
-const OUTLET_REPORT_MAX_ROWS = 20_000;
+/** Rows pulled per DB round-trip while streaming the xlsx — bounds peak memory, not the total. */
+const OUTLET_EXPORT_BATCH = 1_000;
 
 /** Prisma include that feeds the Outlet Execution row builder (one live recce + its install). */
 const OUTLET_REPORT_INCLUDE = {
@@ -597,12 +598,36 @@ export class ReportsService {
     return { columns: [...OUTLET_REPORT_COLUMNS], rows, total, page, limit };
   }
 
-  /** GET /v1/reports/outlet-execution.xlsx — every matching row (up to the cap) as an .xlsx buffer. */
-  async outletExecutionXlsx(user: JwtPayload, q: ListOutletReportDto): Promise<Buffer> {
-    const { rows } = await this.loadOutletRows(user, q, 0, OUTLET_REPORT_MAX_ROWS);
-    // A header-only sheet when there are no rows still carries the column contract (jsonToSheetSafe
-    // derives headers from the first row, so seed one all-empty row to keep the header present).
-    const sheetRows = rows.length > 0 ? rows : [Object.fromEntries(OUTLET_REPORT_COLUMNS.map((c) => [c, '']))];
-    return buildXlsx([{ name: 'Outlet Execution', rows: sheetRows }]);
+  /**
+   * GET /v1/reports/outlet-execution.xlsx — EVERY matching row as a streamed .xlsx (no row cap).
+   * Rows are pulled in {@link OUTLET_EXPORT_BATCH}-sized pages by a stable `id` cursor (unique, so
+   * inserts during a long export can't skip or duplicate rows) and written straight to the response
+   * stream, so peak memory is one batch regardless of tenant size. The explicit header list keeps a
+   * zero-row export as a header-only sheet. Returns a Readable the controller hands to StreamableFile.
+   */
+  outletExecutionXlsxStream(user: JwtPayload, q: ListOutletReportDto): Readable {
+    const where = this.outletReportWhere(user, q);
+    let cursorId: string | undefined;
+    let exhausted = false;
+
+    const nextBatch = async (): Promise<Record<string, string>[]> => {
+      if (exhausted) return [];
+      const sites = await this.prisma.site.findMany({
+        where,
+        orderBy: [{ code: 'asc' }, { id: 'asc' }],
+        take: OUTLET_EXPORT_BATCH,
+        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+        include: OUTLET_REPORT_INCLUDE,
+      });
+      if (sites.length < OUTLET_EXPORT_BATCH) exhausted = true;
+      if (sites.length > 0) cursorId = sites[sites.length - 1].id;
+      return sites.map((s) => buildOutletExecutionRow(s as unknown as RepSite));
+    };
+
+    return streamXlsx({
+      sheetName: 'Outlet Execution',
+      headers: [...OUTLET_REPORT_COLUMNS],
+      nextBatch,
+    });
   }
 }
