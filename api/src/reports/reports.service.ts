@@ -384,6 +384,30 @@ export class ReportsService {
     }
   }
 
+  /**
+   * Retention sweep for the idempotency ledgers (AsmReminderLog + EmailDigestLog). A ledger row only
+   * matters inside its own window (an hour-to-day idempotency bucket), so anything older than
+   * `retentionDays` is dead weight and safe to delete — it can never affect a current claim. Keeps the
+   * two append-only ledgers from growing unbounded. Called once a day from the cron; failure is logged,
+   * never thrown.
+   */
+  async pruneStaleLedgers(now: Date = new Date(), retentionDays = 30): Promise<void> {
+    const cutoff = new Date(now.getTime() - retentionDays * 24 * 3_600_000);
+    try {
+      const [reminders, digests] = await Promise.all([
+        this.prisma.asmReminderLog.deleteMany({ where: { sentAt: { lt: cutoff } } }),
+        this.prisma.emailDigestLog.deleteMany({ where: { sentAt: { lt: cutoff } } }),
+      ]);
+      if (reminders.count || digests.count) {
+        this.logger.log(
+          `ledger prune: removed ${reminders.count} asm-reminder + ${digests.count} digest row(s) older than ${retentionDays}d`,
+        );
+      }
+    } catch (e) {
+      this.logger.error(`ledger prune failed: ${this.reason(e)}`);
+    }
+  }
+
   /** Build the per-ASM reminder email — a table of pending outlets + how long each has waited. */
   buildAsmReminderHtml(
     tenantName: string,

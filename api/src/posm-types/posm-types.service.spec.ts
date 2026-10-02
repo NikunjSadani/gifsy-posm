@@ -20,6 +20,7 @@ const mockPrisma = {
 
 const owner = { sub: 'op1', role: 'GIFSY_ADMIN', clientId: 'gifsy', phone: '9', name: 'Op' } as any;
 const clientAdmin = { sub: 'ca1', role: 'CLIENT_ADMIN', clientId: 'kwality', phone: '9', name: 'CA' } as any;
+const fieldUser = { sub: 'f1', role: 'VENDOR_FIELD', clientId: 'kwality', phone: '9', name: 'F' } as any;
 
 const dupError = () =>
   new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'x' } as any);
@@ -43,10 +44,16 @@ describe('PosmTypesService', () => {
       expect(mockPrisma.posmType.findMany.mock.calls[0][0].where).toEqual({});
     });
 
-    it('CLIENT_ADMIN read is pinned to its own tenant', async () => {
+    it('CLIENT_ADMIN read is pinned to its own tenant (and sees inactive — for management)', async () => {
       mockPrisma.posmType.findMany.mockResolvedValue([]);
       await service.list(clientAdmin);
       expect(mockPrisma.posmType.findMany.mock.calls[0][0].where).toEqual({ clientId: 'kwality' });
+    });
+
+    it('a non-admin (field) role only gets ACTIVE types — isActive filtered server-side', async () => {
+      mockPrisma.posmType.findMany.mockResolvedValue([]);
+      await service.list(fieldUser);
+      expect(mockPrisma.posmType.findMany.mock.calls[0][0].where).toEqual({ clientId: 'kwality', isActive: true });
     });
   });
 
@@ -58,6 +65,19 @@ describe('PosmTypesService', () => {
       expect(data.clientId).toBe('kwality');
       expect(data.defaultDimensions).toEqual({ width: 2, height: 3, unit: 'ft' });
       expect(mockPrisma.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'CREATE', entityType: 'POSM_TYPE', entityId: 'p1' });
+    });
+
+    it('rejects a create whose imageKey is outside the caller tenant media folder (400, no DB write)', async () => {
+      await expect(
+        service.create(clientAdmin, { code: 'X', name: 'X', imageKey: 'posm-media/other-tenant/x.png' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.posmType.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a create whose imageKey IS in the caller tenant media folder', async () => {
+      mockPrisma.posmType.create.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true });
+      await service.create(clientAdmin, { code: 'X', name: 'X', imageKey: 'posm-media/kwality/2026-10/u-x.png' } as any);
+      expect(mockPrisma.posmType.create).toHaveBeenCalled();
     });
 
     it('a duplicate (clientId, code) surfaces as a 409', async () => {

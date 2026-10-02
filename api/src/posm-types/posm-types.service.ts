@@ -31,10 +31,30 @@ export class PosmTypesService {
 
   async list(user: JwtPayload) {
     const scope = tenantScope(user);
+    // Admins manage the full catalogue (incl. deactivated, to reactivate); every other role
+    // (field / ASM / auditor) only ever needs the ACTIVE reference data, so don't ship them
+    // deactivated types from the server (the field catalogue + recce picker also filter, but the
+    // API shouldn't rely on the client to hide them).
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
     return this.prisma.posmType.findMany({
-      where: scope ? { clientId: scope } : {},
+      where: {
+        ...(scope ? { clientId: scope } : {}),
+        ...(isAdmin ? {} : { isActive: true }),
+      },
       orderBy: [{ isActive: 'desc' }, { code: 'asc' }],
     });
+  }
+
+  /**
+   * A non-empty imageKey must be a media key in the CALLER'S OWN tenant folder (posm-media/<clientId>/).
+   * The media view layer already refuses to serve a cross-tenant key, so this is defense-in-depth +
+   * data integrity: it stops an admin storing a cross-tenant or junk key that would only render a
+   * broken image. '' (clear) and undefined (unchanged) are always allowed.
+   */
+  private assertOwnImageKey(imageKey: string | undefined, clientId: string): void {
+    if (imageKey && !imageKey.startsWith(`posm-media/${clientId}/`)) {
+      throw new BadRequestException('Invalid image reference — upload the photo via this app.');
+    }
   }
 
   async get(user: JwtPayload, id: string) {
@@ -49,6 +69,7 @@ export class PosmTypesService {
       throw new BadRequestException('Assume a tenant before creating tenant data.');
     }
     const clientId = user.clientId; // writes pin to the caller's tenant
+    this.assertOwnImageKey(dto.imageKey, clientId);
     try {
       const posmType = await this.prisma.posmType.create({
         data: {
@@ -71,6 +92,7 @@ export class PosmTypesService {
 
   async update(user: JwtPayload, id: string, dto: UpdatePosmTypeDto) {
     const existing = await this.findScopedOrThrow(user, id);
+    this.assertOwnImageKey(dto.imageKey, existing.clientId);
     try {
       const posmType = await this.prisma.posmType.update({
         where: { id: existing.id },

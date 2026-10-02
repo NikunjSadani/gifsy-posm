@@ -35,10 +35,12 @@ function makePrisma() {
     emailDigestLog: {
       create: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     asmReminderLog: {
       create: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
   // Interactive-transaction shim: run the callback with the same mock as the tx client.
@@ -496,6 +498,15 @@ describe('ReportsService.runAsmRecceReminders', () => {
     expect(fns.asmReminderLog.delete.mock.calls[0][0].where.clientId_asmUserId_periodKey).toMatchObject({
       clientId: 'c1', asmUserId: 'asm1',
     });
+  });
+
+  it('pruneStaleLedgers deletes BOTH ledgers older than the retention cutoff', async () => {
+    const { service, fns } = makeService();
+    const now = new Date('2026-10-02T00:00:00Z');
+    await service.pruneStaleLedgers(now, 30);
+    const cutoff = new Date(now.getTime() - 30 * 24 * 3600_000);
+    expect(fns.asmReminderLog.deleteMany).toHaveBeenCalledWith({ where: { sentAt: { lt: cutoff } } });
+    expect(fns.emailDigestLog.deleteMany).toHaveBeenCalledWith({ where: { sentAt: { lt: cutoff } } });
   });
 
   it('a POST-send stamp failure does NOT roll back the claim (ledger guards the window; no repeating dup)', async () => {

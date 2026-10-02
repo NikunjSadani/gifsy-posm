@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ReportsService } from './reports.service';
+import { istHour } from './reports.time';
 
 /**
  * The hourly digest scheduler. Fires at the top of every hour and delegates to
@@ -36,6 +37,18 @@ export class ReportsCron {
       this.logger.error(
         `asm-recce-reminder cron failed: ${e instanceof Error ? e.message : String(e)}`,
       );
+    }
+
+    // Retention sweep for the idempotency ledgers — once a day (at 03:00 IST, a quiet hour) so the
+    // hourly cron doesn't delete-scan every tick. Independent try/catch; the service also guards itself.
+    if (istHour(new Date()) === 3) {
+      try {
+        await this.reports.pruneStaleLedgers();
+      } catch (e) {
+        this.logger.error(
+          `ledger prune cron failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
   }
 }
