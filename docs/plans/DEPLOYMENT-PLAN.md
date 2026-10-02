@@ -160,3 +160,13 @@ moment the §3 blockers clear. Say the word and I'll kick off Wave A.
   `scripts/bootstrap-gcp.sh` + `GO-LIVE-OWNER-CHECKLIST.md`. ⚠️ No automated E2E/Playwright harness
   exists in THIS repo (the `[e2e-harness]` memory is the other Gifsy platform) — POSM verification is
   manual/browser. Owner blockers unchanged (§3 access + §5.1 DB decision).
+  - 2026-10-02 (cont.): closed the last owner-independent gaps. Added `api/scripts/seed-prod.mjs` — the
+    prod bootstrap seed (Client with stable id `kwality` + one CLIENT_ADMIN from env; idempotent,
+    prod-safe, no test data) — resolving the Wave-B "seed staging/prod Client" dependency; verified on a
+    throwaway DB (client+admin created, password verifies, idempotent re-run, inputs validated, demo DB
+    untouched). Added `scripts/smoke-test.sh` (frontend→proxy→api→DB one-command check; PASSED on the
+    local stack). Static-reviewed the deploy pipeline (3 workflows + both Dockerfiles + migrate
+    entrypoint): **no defects** — Dockerfile build-args match the workflows, api image does `prisma
+    generate` + carries migrations, migrate-before-deploy + drift-check correct, prod is manual-only with
+    separate images, expand/contract + rollback already documented in DEPLOY-RUNBOOK §4. Checklist updated
+    (Steps 4b seed + 6b smoke).
