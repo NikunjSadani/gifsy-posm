@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Ban, RotateCcw, Search } from 'lucide-react';
+import { Plus, Pencil, Ban, RotateCcw, Search, ImagePlus, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DataTable, type Column } from '@/components/admin/data-table';
@@ -17,10 +17,11 @@ import { StatusBadge } from '@/components/admin/status-badge';
 import { posmTypesApi, type PosmTypeCreate, type PosmTypeUpdate } from '@/lib/admin/api';
 import type { PosmType } from '@/lib/admin/types';
 import { validatePosmType, isValid, type FieldErrors } from '@/lib/admin/validation';
+import { uploadMedia, mediaViewUrl } from '@/lib/field/media-upload';
 
 type Editing = { mode: 'create' } | { mode: 'edit'; posmType: PosmType } | null;
 
-const emptyForm = { code: '', name: '', width: '', height: '', unit: '' };
+const emptyForm = { code: '', name: '', width: '', height: '', unit: '', imageKey: '' };
 
 export default function PosmTypesPage() {
   const [items, setItems] = useState<PosmType[]>([]);
@@ -33,6 +34,7 @@ export default function PosmTypesPage() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const [confirm, setConfirm] = useState<PosmType | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -74,9 +76,23 @@ export default function PosmTypesPage() {
       width: p.defaultDimensions?.width != null ? String(p.defaultDimensions.width) : '',
       height: p.defaultDimensions?.height != null ? String(p.defaultDimensions.height) : '',
       unit: p.defaultDimensions?.unit ?? '',
+      imageKey: p.imageKey ?? '',
     });
     setFieldErrors({});
     setFormError(null);
+  };
+
+  const onPickImage = async (file: File | null) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const { key } = await uploadMedia(file);
+      setForm((f) => ({ ...f, imageKey: key }));
+    } catch {
+      toast.error('Could not upload the image — try a different file (JPG/PNG, under 5 MB).');
+    } finally {
+      setUploadingImage(false);
+    }
   };
 
   const submit = async () => {
@@ -94,12 +110,14 @@ export default function PosmTypesPage() {
     setFormError(null);
     let res;
     if (editing?.mode === 'edit') {
-      const body: PosmTypeUpdate = { ...base };
+      // Always send imageKey so clearing an existing image ('' → null) persists.
+      const body: PosmTypeUpdate = { ...base, imageKey: form.imageKey };
       if (dims) body.defaultDimensions = dims;
       res = await posmTypesApi.update(editing.posmType.id, body);
     } else {
       const body: PosmTypeCreate = { ...base };
       if (dims) body.defaultDimensions = dims;
+      if (form.imageKey) body.imageKey = form.imageKey;
       res = await posmTypesApi.create(body);
     }
     setSaving(false);
@@ -143,6 +161,20 @@ export default function PosmTypesPage() {
       : '—';
 
   const columns: Column<PosmType>[] = [
+    {
+      key: 'image',
+      header: '',
+      className: 'w-14',
+      render: (p) =>
+        p.imageKey ? (
+          // eslint-disable-next-line @next/next/no-img-element -- auth-gated media stream, not a static asset
+          <img src={mediaViewUrl(p.imageKey)} alt="" className="h-9 w-9 rounded object-cover border border-gray-200 bg-gray-50" />
+        ) : (
+          <div className="h-9 w-9 rounded bg-gray-100 flex items-center justify-center text-gray-300">
+            <ImagePlus className="h-4 w-4" />
+          </div>
+        ),
+    },
     { key: 'code', header: 'Code', render: (p) => <span className="font-mono text-gray-900">{p.code}</span> },
     { key: 'name', header: 'Name', render: (p) => <span className="font-medium text-gray-900">{p.name}</span> },
     { key: 'dims', header: 'Default dimensions', render: (p) => <span className="text-gray-600">{dimsLabel(p)}</span> },
@@ -214,7 +246,7 @@ export default function PosmTypesPage() {
         onOpenChange={(o) => !o && setEditing(null)}
         title={editing?.mode === 'edit' ? 'Edit POSM type' : 'New POSM type'}
         submitLabel={editing?.mode === 'edit' ? 'Save changes' : 'Create POSM type'}
-        loading={saving}
+        loading={saving || uploadingImage}
         error={formError}
         onSubmit={submit}
       >
@@ -265,6 +297,52 @@ export default function PosmTypesPage() {
               maxLength={16}
             />
           </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-1.5">
+            Reference photo <span className="font-normal text-gray-400">(optional)</span>
+          </p>
+          {form.imageKey ? (
+            <div className="flex items-start gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated media stream, not a static asset */}
+              <img
+                src={mediaViewUrl(form.imageKey)}
+                alt="POSM reference"
+                className="h-24 w-24 rounded-lg object-cover border border-gray-200 bg-gray-50"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-red-600 hover:bg-red-50"
+                onClick={() => setForm((f) => ({ ...f, imageKey: '' }))}
+              >
+                <X className="h-4 w-4" />
+                Remove
+              </Button>
+            </div>
+          ) : (
+            <label className="flex items-center justify-center gap-2 cursor-pointer rounded-xl border-2 border-dashed border-gray-200 hover:border-[var(--brand-primary)] px-3 py-4 text-sm text-gray-500 transition-colors">
+              {uploadingImage ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Uploading…
+                </>
+              ) : (
+                <>
+                  <ImagePlus className="h-4 w-4" /> Upload a reference photo
+                </>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={uploadingImage}
+                onChange={(e) => void onPickImage(e.target.files?.[0] ?? null)}
+              />
+            </label>
+          )}
+          <p className="text-xs text-gray-400 mt-1">Shown to field executives in the POSM catalogue (JPG/PNG, under 5 MB).</p>
         </div>
       </FormDialog>
 

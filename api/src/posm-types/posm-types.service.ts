@@ -58,6 +58,8 @@ export class PosmTypesService {
           ...(dto.defaultDimensions !== undefined
             ? { defaultDimensions: toJson(dto.defaultDimensions) }
             : {}),
+          // Empty string clears the image; a non-empty key sets it.
+          ...(dto.imageKey !== undefined ? { imageKey: dto.imageKey || null } : {}),
         },
       });
       await this.audit(user, 'CREATE', posmType.id, undefined, posmType);
@@ -78,6 +80,8 @@ export class PosmTypesService {
           ...(dto.defaultDimensions !== undefined
             ? { defaultDimensions: toJson(dto.defaultDimensions) }
             : {}),
+          // Empty string clears the image; a non-empty key sets it.
+          ...(dto.imageKey !== undefined ? { imageKey: dto.imageKey || null } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
         },
       });

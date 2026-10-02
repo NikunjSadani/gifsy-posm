@@ -41,4 +41,10 @@ export class CreatePosmTypeDto {
   @ValidateNested()
   @Type(() => DimensionsDto)
   defaultDimensions?: DimensionsDto;
+
+  /** Reference-photo media key (from POST /media/upload). Empty string clears it. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(512)
+  imageKey?: string;
 }

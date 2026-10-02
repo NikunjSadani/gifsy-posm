@@ -52,6 +52,8 @@ export interface PosmType {
   code: string;
   name: string;
   defaultDimensions?: PosmDimensions | null;
+  /** Reference-photo media key for the field catalogue (view via /api/media/view?key=). */
+  imageKey?: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

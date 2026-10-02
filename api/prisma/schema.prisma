@@ -240,6 +240,7 @@ model PosmType {
   code              String
   name              String
   defaultDimensions Json?                    // {width,height,unit} template
+  imageKey          String?                  // reference photo (posm-media/<clientId>/… key) for the field catalogue
   isActive          Boolean  @default(true)
 
   client     Client       @relation(fields: [clientId], references: [id])
