@@ -14,12 +14,20 @@ import { Spinner } from '@/components/ui/spinner';
 import { pageCount } from '@/components/audit/pagination';
 import { vendorsApi } from '@/lib/admin/api';
 import type { Vendor } from '@/lib/admin/types';
+import { cn } from '@/lib/utils';
 import {
   fetchOutletReport,
   downloadOutletReportXlsx,
   type OutletReportResult,
   type OutletReportFilters,
 } from '@/lib/reports/outlet-execution';
+import { groupOutletColumns, PINNED_KEYS } from '@/lib/reports/outlet-columns';
+
+/** Fixed widths (px) for the frozen identity columns — the 2nd column's sticky `left` is the 1st's
+ *  width, so these MUST stay in step with the `w-*`/`left-*` classes used below. */
+const PIN_LEFT = ['left-0', 'left-28']; // 0, 112px (= w-28)
+const PIN_WIDTH = ['w-28 min-w-[7rem] max-w-[7rem]', 'w-48 min-w-[12rem] max-w-[12rem]'];
+const LAST_PINNED = PINNED_KEYS[PINNED_KEYS.length - 1];
 
 const PAGE_SIZE = 50;
 
@@ -76,6 +84,23 @@ export default function ExecutionReportPage() {
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const totalPages = pageCount(total, PAGE_SIZE);
+
+  // Grouped display model (pure + unit-tested): pinned identity group first, then Details /
+  // Element 1 / Element 2 / Overall status. `flatCols` is the left→right render order, tagged with
+  // the pin index and the group-boundary flag so the header and body iterate identically.
+  const groups = useMemo(() => groupOutletColumns(columns), [columns]);
+  const flatCols = useMemo(
+    () =>
+      groups.flatMap((g, gi) =>
+        g.columns.map((c, ci) => ({
+          key: c.key,
+          label: c.label,
+          pinIndex: PINNED_KEYS.indexOf(c.key as (typeof PINNED_KEYS)[number]),
+          groupStart: gi > 0 && ci === 0, // first column of a non-first group → left divider
+        })),
+      ),
+    [groups],
+  );
 
   return (
     <div className="fade-in">
@@ -142,25 +167,67 @@ export default function ExecutionReportPage() {
         </div>
       ) : (
         <>
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
-            <table className="min-w-max text-sm">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-auto max-h-[70vh]">
+            <table className="border-separate border-spacing-0 text-sm">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  {columns.map((c) => (
-                    <th key={c} className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wide text-gray-500 whitespace-nowrap">
-                      {c}
+                {/* Row 1 — group headers (span their columns). */}
+                <tr>
+                  {groups.map((g, gi) => (
+                    <th
+                      key={g.label}
+                      colSpan={g.columns.length}
+                      className={cn(
+                        'sticky top-0 h-9 px-3 text-left text-[10px] font-bold uppercase tracking-widest text-gray-500 bg-gray-100 border-b border-gray-200 whitespace-nowrap',
+                        g.pinned ? 'left-0 z-30 border-r-2 border-r-gray-200' : 'z-20',
+                        gi > 0 && 'border-l border-l-gray-200',
+                      )}
+                    >
+                      {g.label}
                     </th>
                   ))}
+                </tr>
+                {/* Row 2 — column headers (sticky below the group row). */}
+                <tr>
+                  {flatCols.map((c) => {
+                    const pinned = c.pinIndex >= 0;
+                    return (
+                      <th
+                        key={c.key}
+                        className={cn(
+                          'sticky top-9 h-9 px-3 text-left text-[11px] font-bold uppercase tracking-wide text-gray-500 bg-gray-50 border-b border-gray-200 whitespace-nowrap',
+                          pinned ? `${PIN_LEFT[c.pinIndex]} ${PIN_WIDTH[c.pinIndex]} z-30` : 'z-20',
+                          c.key === LAST_PINNED && 'border-r-2 border-r-gray-200',
+                          c.groupStart && 'border-l border-l-gray-200',
+                        )}
+                      >
+                        {c.label}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r, i) => (
-                  <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
-                    {columns.map((c) => (
-                      <td key={c} className="px-3 py-2 text-gray-700 whitespace-nowrap">
-                        {r[c] || <span className="text-gray-300">—</span>}
-                      </td>
-                    ))}
+                  <tr key={i} className="group hover:bg-gray-50/60">
+                    {flatCols.map((c) => {
+                      const pinned = c.pinIndex >= 0;
+                      return (
+                        <td
+                          key={c.key}
+                          className={cn(
+                            'h-10 px-3 text-gray-700 whitespace-nowrap border-b border-gray-50',
+                            pinned
+                              ? `${PIN_LEFT[c.pinIndex]} ${PIN_WIDTH[c.pinIndex]} sticky z-10 bg-white group-hover:bg-gray-50 truncate`
+                              : '',
+                            c.key === LAST_PINNED && 'border-r-2 border-r-gray-200',
+                            c.groupStart && 'border-l border-l-gray-100',
+                          )}
+                          title={pinned ? r[c.key] : undefined}
+                        >
+                          {r[c.key] || <span className="text-gray-300">—</span>}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
