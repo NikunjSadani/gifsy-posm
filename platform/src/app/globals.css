@@ -76,6 +76,15 @@ body {
   animation: fadeIn 0.3s ease-out;
 }
 
+/* Slide-in from the left — admin mobile nav drawer */
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+.slide-in-left {
+  animation: slideInLeft 0.2s ease-out;
+}
+
 /* Pulse for alerts — Kwality red */
 @keyframes pulse-red {
   0%, 100% { box-shadow: 0 0 0 0 rgba(227, 0, 15, 0.4); }
