@@ -497,4 +497,17 @@ describe('ReportsService.runAsmRecceReminders', () => {
       clientId: 'c1', asmUserId: 'asm1',
     });
   });
+
+  it('a POST-send stamp failure does NOT roll back the claim (ledger guards the window; no repeating dup)', async () => {
+    const { service, fns, sendEmail } = makeService();
+    fns.client.findMany.mockResolvedValue([{ id: 'c1', name: 'Acme', ...reminderSettings() }]);
+    fns.recce.findMany.mockResolvedValue([recceRow({ id: 'r1' })]);
+    // Email SENDS fine, but stamping lastRemindedAt afterwards fails (DB blip).
+    fns.recce.updateMany.mockRejectedValueOnce(new Error('db blip'));
+    await service.runAsmRecceReminders(new Date()); // must not throw
+    expect(sendEmail).toHaveBeenCalledTimes(1); // the email went out
+    // Claim must STAY (the interval-bucket ledger row now guards against a re-send this window) —
+    // rolling it back here is exactly what caused the repeating-duplicate bug the audit found.
+    expect(fns.asmReminderLog.delete).not.toHaveBeenCalled();
+  });
 });

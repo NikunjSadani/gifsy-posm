@@ -325,9 +325,13 @@ export class ReportsService {
           g.items.push({ label: `${r.site.name} (${r.site.code})${r.site.town ? ` — ${r.site.town}` : ''}`, days, hours });
         }
 
-        // Idempotency window = the IST hour bucket. The cron fires once/hour, so two instances
-        // firing the SAME tick collide on the unique ledger key and only one sends.
-        const periodKey = `${istDateLabel(now)}T${String(istHour(now)).padStart(2, '0')}`;
+        // Idempotency window = the reminder-INTERVAL bucket (epoch-aligned), NOT the hour. Keying the
+        // ledger to the full interval (like the daily digest keys to the whole day) makes the CLAIM
+        // the sole cross-tick guard: two instances in the same window collide on the unique key, and a
+        // post-send fault that fails to stamp `lastRemindedAt` still can't re-send within the window
+        // because the claim row persists. `lastRemindedAt` is then just a belt-and-suspenders filter.
+        const windowMs = cfg.reminderIntervalHours * 3_600_000;
+        const periodKey = String(Math.floor(now.getTime() / windowMs));
 
         for (const [asmUserId, g] of byAsm.entries()) {
           // Longest-pending first — the most urgent at the top.
@@ -351,20 +355,28 @@ export class ReportsService {
 
           const subject = `${g.items.length} recce${g.items.length === 1 ? '' : 's'} pending your approval — ${client.name}`;
           const html = this.buildAsmReminderHtml(client.name, g.name, g.items, now);
+
+          // SEND is the only failure that rolls back the claim: a genuine SMTP failure means no email
+          // went out, so release the window and let a later tick retry (at-least-once).
           try {
             await this.msg91.sendEmail({ to: [g.email], subject, html });
-            // Stamp ONLY the recces actually included in a successful send, so a send failure
-            // leaves them eligible for the next tick (at-least-once) and no item is silently dropped.
-            await this.prisma.recce.updateMany({ where: { id: { in: g.ids } }, data: { lastRemindedAt: now } });
-            this.logger.log(`asm-reminder: "${client.name}" → ${g.email} (${g.items.length} pending)`);
           } catch (sendErr) {
-            // Roll back the claim so a LATER tick re-tries (never lose a reminder to a transient SMTP
-            // failure). A rare duplicate on a partial failure is an acceptable trade, same as the digest.
             await this.prisma.asmReminderLog
               .delete({ where: { clientId_asmUserId_periodKey: { clientId: client.id, asmUserId, periodKey } } })
               .catch(() => undefined);
             this.logger.error(`asm-reminder: send failed for ${g.email} (${client.id}) — rolled back the claim: ${this.reason(sendErr)}`);
+            continue;
           }
+
+          // The email WENT OUT. Stamp the included recces as reminded — but if THIS write fails, do NOT
+          // roll back the claim: the interval-bucket claim row already prevents a re-send for this window,
+          // so a failed stamp degrades to the ledger guard instead of causing a repeating duplicate email.
+          try {
+            await this.prisma.recce.updateMany({ where: { id: { in: g.ids } }, data: { lastRemindedAt: now } });
+          } catch (stampErr) {
+            this.logger.error(`asm-reminder: emailed ${g.email} but failed to stamp lastRemindedAt (ledger still guards the window): ${this.reason(stampErr)}`);
+          }
+          this.logger.log(`asm-reminder: "${client.name}" → ${g.email} (${g.items.length} pending)`);
         }
       } catch (e) {
         this.logger.error(`asm-reminder cron: tenant ${client.id} failed: ${this.reason(e)}`);
@@ -605,7 +617,10 @@ export class ReportsService {
     const [sites, total] = await Promise.all([
       this.prisma.site.findMany({
         where,
-        orderBy: [{ code: 'asc' }],
+        // `id` tiebreaker (matching the xlsx export): Site.code is unique only PER tenant, so the
+        // un-assumed GIFSY platform-wide view can have two tenants share a code — without a unique
+        // tiebreaker, skip/take paging could skip or duplicate a row across pages.
+        orderBy: [{ code: 'asc' }, { id: 'asc' }],
         skip,
         take,
         include: OUTLET_REPORT_INCLUDE,
