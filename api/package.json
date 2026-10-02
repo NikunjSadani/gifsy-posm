@@ -8,6 +8,10 @@
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "db:start": "node ../scripts/start-db.mjs",
+    "db:stop": "node ../scripts/start-db.mjs stop",
+    "db:status": "node ../scripts/start-db.mjs status",
+    "prestart:dev": "node ../scripts/start-db.mjs",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
