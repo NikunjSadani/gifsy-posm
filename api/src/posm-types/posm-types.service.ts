@@ -129,8 +129,13 @@ export class PosmTypesService {
 
   private async findScopedOrThrow(user: JwtPayload, id: string) {
     const scope = tenantScope(user);
+    // Non-admin READS (the widened GET /:id) are confined to ACTIVE types, mirroring list() — a field
+    // user can't fetch a deactivated type they can't see in their list. The write handlers
+    // (update/deactivate/reactivate) that also use this are admin-only, so isAdmin is always true for
+    // them → no isActive filter → an admin can still load an inactive type (e.g. to reactivate it).
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
     const posmType = await this.prisma.posmType.findFirst({
-      where: { id, ...(scope ? { clientId: scope } : {}) },
+      where: { id, ...(scope ? { clientId: scope } : {}), ...(isAdmin ? {} : { isActive: true }) },
     });
     if (!posmType) throw new NotFoundException('POSM type not found');
     return posmType;

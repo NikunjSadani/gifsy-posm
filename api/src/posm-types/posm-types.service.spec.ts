@@ -106,6 +106,18 @@ describe('PosmTypesService', () => {
       expect(mockPrisma.posmType.findFirst.mock.calls[0][0].where).toEqual({ id: 'other', clientId: 'kwality' });
     });
 
+    it('a NON-admin get() is confined to ACTIVE types (mirrors the list)', async () => {
+      mockPrisma.posmType.findFirst.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'STD', name: 'Std', isActive: true });
+      await service.get(fieldUser, 'p1');
+      expect(mockPrisma.posmType.findFirst.mock.calls[0][0].where).toEqual({ id: 'p1', clientId: 'kwality', isActive: true });
+    });
+
+    it('an ADMIN get() is NOT isActive-filtered (can read a deactivated type, e.g. to reactivate)', async () => {
+      mockPrisma.posmType.findFirst.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'STD', name: 'Std', isActive: false });
+      await service.get(clientAdmin, 'p1');
+      expect(mockPrisma.posmType.findFirst.mock.calls[0][0].where).toEqual({ id: 'p1', clientId: 'kwality' });
+    });
+
     it('deactivate sets isActive=false and audits DELETE', async () => {
       const existing = { id: 'p1', clientId: 'kwality', code: 'STD', name: 'Standee', isActive: true };
       mockPrisma.posmType.findFirst.mockResolvedValue(existing);

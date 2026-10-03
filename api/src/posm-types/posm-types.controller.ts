@@ -34,6 +34,9 @@ export class PosmTypesController {
     return this.posmTypes.list(user);
   }
 
+  // Same roles as the list: "can see it in the list ⇒ can fetch it by id" (read-only reference data).
+  // The service keeps non-admins to ACTIVE types only, mirroring list(); writes stay admin-only below.
+  @Roles('VENDOR_FIELD', 'VENDOR_HO', 'ASM', 'AUDITOR', 'CLIENT_ADMIN', 'GIFSY_ADMIN')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.posmTypes.get(user, id);
