@@ -152,11 +152,12 @@ curl -fsS $FE_URL/version ; echo                # should equal the git SHA
 #    API not publicly invokable? use:  gcloud run services proxy posm-api-$ENV --region $REGION --port 8081
 #    then curl http://localhost:8081/health
 
-# 4. Config sanity — prod must NOT have the OTP bypass
+# 4. Config sanity
 gcloud run services describe posm-api-$ENV --region $REGION --project $PROJECT_ID \
-  --format='yaml(spec.template.spec.containers[0].env)' | grep -E 'FIXED_OTP|ALLOW_FIXED_OTP|STORAGE_DRIVER|GCS_BUCKET|NODE_ENV'
-#    prod: expect NO FIXED_OTP / ALLOW_FIXED_OTP lines, STORAGE_DRIVER=gcs, GCS_BUCKET=posm-prod-files
-#    staging: FIXED_OTP=123456 and ALLOW_FIXED_OTP=true, GCS_BUCKET=posm-staging-files
+  --format='yaml(spec.template.spec.containers[0].env)' | grep -E 'STORAGE_DRIVER|GCS_BUCKET|NODE_ENV'
+#    expect STORAGE_DRIVER=gcs, NODE_ENV=production, GCS_BUCKET=posm-<env>-files.
+#    There is NO login-OTP env in any environment (auth is email + password) — FIXED_OTP must be
+#    absent everywhere; if it ever appears, it is dead config, strip it.
 
 # 5. Recent errors
 gcloud run services logs read posm-api-$ENV --region $REGION --project $PROJECT_ID --limit 50

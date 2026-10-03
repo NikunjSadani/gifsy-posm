@@ -50,8 +50,8 @@ enable_health_probes = false
 api_min_instances      = 0 # 1 = warm prod (no cold start, costs always-on instance) — DEPLOYMENT-PLAN section 5.4
 frontend_min_instances = 0
 
-# ---- Email (MSG91 SMTP). Secrets are added out-of-band (see README). Prod uses REAL MSG91 OTP:
-#      there is no FIXED_OTP on prod and Terraform refuses to set one. ----
+# ---- Email (MSG91 SMTP). Secrets are added out-of-band (see README). Auth is email + password;
+#      there is NO login OTP in any env. MSG91 is only for email reports + ASM reminders. ----
 msg91_smtp_host    = "REPLACE_ME_MSG91_SMTP_HOST"
 msg91_smtp_port    = "587"
 reports_from_email = "REPLACE_ME@REPLACE_ME_DOMAIN"

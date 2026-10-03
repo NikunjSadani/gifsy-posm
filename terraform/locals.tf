@@ -127,8 +127,7 @@ locals {
       RBAC_ENFORCEMENT   = "false"
       LOG_LEVEL          = var.log_level
     },
-    # STAGING ONLY. Prod sets NEITHER (real MSG91; the app's fixed-OTP guard fails closed on prod).
-    local.is_staging ? { FIXED_OTP = "123456", ALLOW_FIXED_OTP = "true" } : {},
+    # (No login-OTP env in any environment — auth is email + password; OTP was removed 2026-10-01.)
   )
 
   container_port = 8080

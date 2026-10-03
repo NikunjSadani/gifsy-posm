@@ -136,14 +136,6 @@ resource "google_cloud_run_v2_service" "api" {
     ]
 
     precondition {
-      condition = !(local.is_prod && (
-        contains(keys(var.api_extra_env), "FIXED_OTP") ||
-        contains(keys(var.api_extra_env), "ALLOW_FIXED_OTP")
-      ))
-      error_message = "FIXED_OTP / ALLOW_FIXED_OTP must never be set on prod (real MSG91 only)."
-    }
-
-    precondition {
       condition     = var.vpc_network == null || var.vpc_subnetwork != null
       error_message = "vpc_subnetwork is required when vpc_network is set."
     }

@@ -163,8 +163,8 @@ served while any `msg91-*` secret is still `REPLACE_ME_OUT_OF_BAND`.**
 * Frontend `NEXT_PUBLIC_API_URL` build arg = output `api_url` (or the edge URL for the api).
 * The api image must contain the Prisma CLI, `prisma.config.ts` and `prisma/migrations` (the job runs
   `npx prisma migrate deploy` in it) and must listen on `process.env.PORT` (Cloud Run injects 8080).
-* Staging gets `FIXED_OTP=123456` + `ALLOW_FIXED_OTP=true`; prod gets neither, and a Terraform
-  precondition rejects them in `api_extra_env` for prod.
+* No login-OTP env in any environment — auth is email + password (OTP removed 2026-10-01). MSG91 is
+  used only for email reports + ASM reminders.
 * GCS V4 signed URLs on Cloud Run need no key: the api SA is granted `serviceAccountTokenCreator` on
   itself (IAM `signBlob`). Bucket CORS is not configured (media is served via signed URLs / the api).
 
