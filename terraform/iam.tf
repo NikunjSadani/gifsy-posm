@@ -27,11 +27,14 @@ resource "google_service_account" "frontend" {
 }
 
 # --- Cloud SQL connector (needed for the /cloudsql socket) ---
-# Project-level because roles/cloudsql.client cannot be granted on an individual instance via
-# IAM policy. On a SHARED project/instance this means the api SA can connect-through to any
-# instance in the project; DB-level isolation is the per-env database + user. (Documented in README.)
+# Project-level because roles/cloudsql.client cannot be granted on an individual instance via IAM
+# policy. It is granted in the INSTANCE's project (local.sql_project) — which is project_id for a
+# dedicated instance, or the shared instance's project (e.g. opshub-506704) cross-project. The api
+# SA can therefore connect-through to any instance in THAT project; DB-level isolation is the per-env
+# database + confined posm_app user. (Documented in README.)
+# ⚠️ Cross-project: the Terraform principal must have projectIamAdmin on local.sql_project to set this.
 resource "google_project_iam_member" "api_cloudsql_client" {
-  project = var.project_id
+  project = local.sql_project
   role    = "roles/cloudsql.client"
   member  = local.api_sa_member
 }

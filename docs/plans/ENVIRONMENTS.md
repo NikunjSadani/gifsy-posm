@@ -169,7 +169,7 @@ reverse proxy in front of this app's cookie + redirect logic):
 ## 7. Open decisions that affect this document
 
 From `DEPLOYMENT-PLAN.md` §5 — fill in as the owner decides, then update the table in §1:
-1. POSM prod DB placement (`gifsy-shared` per blueprint vs dedicated instance vs dedicated project).
+1. ✅ RESOLVED 2026-10-03 — POSM prod + staging DB on the shared `opshub-db` instance (project `opshub-506704`, cross-project), upgraded to `db-g1-small` at go-live. (See DEPLOYMENT-PLAN §5.1.)
 2. Dedicated GCP project vs shared Gifsy project (`$PROJECT_ID`).
 3. **Domain/branding + edge option (§6).**
 4. Prod min-instances (0 vs 1) and DR posture (backups only vs PITR vs standby).

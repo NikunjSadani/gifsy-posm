@@ -61,16 +61,20 @@ resource "google_sql_database_instance" "dedicated" {
 }
 
 # --- Option B: pre-existing instance (create_sql_instance = false) ---
+# May live in another project (local.sql_project / var.sql_instance_project) — e.g. the shared
+# opshub-db in opshub-506704 that POSM prod co-locates on.
 data "google_sql_database_instance" "existing" {
   count = var.create_sql_instance ? 0 : 1
 
-  project = var.project_id
+  project = local.sql_project
   name    = var.sql_instance
 }
 
 # --- Per-environment database + user (both options) ---
+# Created in local.sql_project so they land on the instance's OWNING project (cross-project when the
+# shared instance is in opshub-506704).
 resource "google_sql_database" "posm" {
-  project  = var.project_id
+  project  = local.sql_project
   instance = var.sql_instance
   name     = local.db_name
 
@@ -81,7 +85,7 @@ resource "google_sql_database" "posm" {
 }
 
 resource "google_sql_user" "app" {
-  project  = var.project_id
+  project  = local.sql_project
   instance = var.sql_instance
   name     = var.db_user
   password = random_password.db.result

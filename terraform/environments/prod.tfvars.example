@@ -17,12 +17,20 @@ manage_shared_resources = false
 enable_apis             = true
 github_repo             = "" # only needed when manage_shared_resources = true
 
-# ---- Cloud SQL: DECISION REQUIRED (DEPLOYMENT-PLAN section 5.1; see README "Shared vs dedicated") ----
-# Option 1 (blueprint default): prod DB on the shared instance
-sql_instance        = "gifsy-shared"
-create_sql_instance = false
-# Option 2 (recommended for a paying client): a dedicated instance for prod
+# ---- Cloud SQL: DECIDED 2026-10-03 (DEPLOYMENT-PLAN section 5.1) — shared opshub-db, CROSS-PROJECT ----
+# POSM prod = a dedicated posm_prod DB on the shared `opshub-db` instance (in the OpsHub project),
+# upgraded to db-g1-small (ZONAL, matches loyaltybase) at go-live. POSM Cloud Run runs in THIS
+# (project_id) project and connects cross-project to opshub-db.
+sql_instance         = "opshub-db"
+sql_instance_project = "opshub-506704" # the OpsHub project that owns the instance
+create_sql_instance  = false
+# ⚠️ Cross-project apply prereqs — the Terraform principal needs, ON opshub-506704:
+#    roles/cloudsql.admin (create posm_prod DB + user) + roles/resourcemanager.projectIamAdmin
+#    (grant cloudsql.client to the POSM api SA) + cloudsql.instances.get. See README.
+#
+# Alternative (dedicated instance for prod, if you ever split POSM onto its own):
 # sql_instance          = "posm-prod"
+# sql_instance_project  = null
 # create_sql_instance   = true
 # sql_tier              = "db-custom-1-3840"
 # sql_availability_type = "ZONAL"   # REGIONAL = HA (2x cost)

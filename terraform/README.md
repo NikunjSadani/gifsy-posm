@@ -26,14 +26,21 @@ One apply manages ONE environment (`staging` or `prod`) in its own state.
 
 ## Shared vs dedicated Cloud SQL (decision — DEPLOYMENT-PLAN section 5.1)
 
-Controlled by two variables: `sql_instance` (name) and `create_sql_instance` (bool).
+Controlled by three variables: `sql_instance` (name), `sql_instance_project` (owning project, for a
+cross-project shared instance), and `create_sql_instance` (bool).
 
-* **Shared / pre-existing** (`create_sql_instance = false`): `sql_instance` must already exist in
-  `project_id`/`region` (e.g. `gifsy-shared`, which per the blueprint is "to build" — it does NOT
-  exist yet, so create it first or choose dedicated). Terraform reads it with a data source and only
-  creates the database `posm_<env>` and the user on it. Cheapest; blast radius is shared with the other
-  tenants of that instance (staging, opshub…). Per the 2026-08-25 blueprint, POSM *prod* would land
-  here — but Kwality is a paying client, so re-confirm that failure-domain call.
+* **Shared / pre-existing** (`create_sql_instance = false`) — **DECIDED 2026-10-03:** POSM prod
+  *and* staging use the shared **`opshub-db`** instance, which lives in the **OpsHub project
+  `opshub-506704`** (set `sql_instance_project = "opshub-506704"`). It already exists; at go-live it is
+  upgraded `db-f1-micro`→`db-g1-small` (ZONAL, matching loyaltybase). Terraform reads it with a data
+  source and only creates the database `posm_<env>` and the user on it. Blast radius is shared with
+  OpsHub (and instance-level backups/PITR: a restore of one rolls back the other — no per-DB restore).
+  * **Cross-project prerequisites** (the instance is in a *different* project from POSM's Cloud Run):
+    the Terraform principal needs, **on `opshub-506704`**, `roles/cloudsql.admin` (create the
+    `posm_<env>` database + user), `roles/resourcemanager.projectIamAdmin` (grant `cloudsql.client` to
+    the POSM api SA — the binding is created there, not in `project_id`), and `cloudsql.instances.get`
+    (read the instance). `sql_instance_project` defaults to `project_id`, so same-project setups need
+    none of this.
 * **Dedicated** (`create_sql_instance = true`): Terraform creates a Postgres instance named
   `sql_instance` (backups + PITR on, deletion protection on, public IP reachable ONLY through the
   Cloud SQL connector — no authorized networks; optional private IP via `sql_private_network` +

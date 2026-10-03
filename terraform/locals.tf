@@ -32,6 +32,14 @@ locals {
   image_registry_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/${local.ar_repo_id}"
 
   # --- Cloud SQL ---
+  # The project that owns the instance. A DEDICATED instance (Option A) is always created in
+  # project_id; a PRE-EXISTING instance (Option B) may live in another project (sql_instance_project,
+  # e.g. the shared opshub-db in opshub-506704) — the DB, user, and cloudsql.client grant must all
+  # target THAT project, not project_id.
+  sql_project = var.create_sql_instance ? var.project_id : coalesce(var.sql_instance_project, var.project_id)
+
+  # connection_name embeds the OWNING project (project:region:instance), so once the data source
+  # points at sql_project this flows cross-project into Cloud Run, the migrate job, and DATABASE_URL.
   sql_connection_name = var.create_sql_instance ? google_sql_database_instance.dedicated[0].connection_name : data.google_sql_database_instance.existing[0].connection_name
 
   # Prisma/pg connection string over the Cloud SQL unix socket. `@localhost/` + `?host=` is

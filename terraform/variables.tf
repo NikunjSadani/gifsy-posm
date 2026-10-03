@@ -59,12 +59,18 @@ variable "github_repo" {
 ############################################
 
 variable "sql_instance" {
-  description = "Cloud SQL instance NAME (not the connection name). If create_sql_instance = false it must already exist in project_id/region (e.g. the shared `gifsy-shared`); if true it is the name of the dedicated instance Terraform creates."
+  description = "Cloud SQL instance NAME (not the connection name). If create_sql_instance = false it must already exist (e.g. the shared `opshub-db`); if true it is the name of the dedicated instance Terraform creates in project_id."
   type        = string
 }
 
+variable "sql_instance_project" {
+  description = "GCP project that OWNS the pre-existing Cloud SQL instance, when it lives in a DIFFERENT project from this deployment (create_sql_instance = false). POSM runs in its own project but shares the opshub `opshub-db` instance, so set this to `opshub-506704`. null = same project (project_id). Ignored when create_sql_instance = true (a dedicated instance is always created in project_id). ⚠️ Cross-project apply prerequisites: the Terraform principal needs roles/cloudsql.admin (create the posm_prod database + user) AND roles/resourcemanager.projectIamAdmin (grant cloudsql.client to the POSM api SA) on THIS project — i.e. on the instance's project — plus cloudsql.instances.get to read the instance. See README \"Shared vs dedicated → cross-project\"."
+  type        = string
+  default     = null
+}
+
 variable "create_sql_instance" {
-  description = "true = create a DEDICATED Postgres instance named sql_instance (e.g. a `posm-prod` instance for the paying client). false = use the PRE-EXISTING instance sql_instance (e.g. the shared `gifsy-shared`); only the database + user are created on it."
+  description = "true = create a DEDICATED Postgres instance named sql_instance in project_id (e.g. a `posm-prod` instance). false = use the PRE-EXISTING instance sql_instance (e.g. the shared `opshub-db`, possibly in sql_instance_project); only the database + user are created on it."
   type        = bool
   default     = false
 }

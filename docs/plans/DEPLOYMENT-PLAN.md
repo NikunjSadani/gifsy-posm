@@ -82,8 +82,9 @@ I write every file and hand you the exact commands; these need your access/decis
    approve the WIF binding.
 2. **GCP** — a project + **billing enabled** + required APIs (Run, SQL, Secret Manager, Artifact
    Registry, IAM). Decision: dedicated `kwality-posm` project vs the shared Gifsy project (§5).
-3. **Cloud SQL** — the **`gifsy-shared` instance does not exist yet** (blueprint "to build"); it must
-   be created (or decide POSM gets its own instance — §5).
+3. **Cloud SQL** — ✅ DECIDED (§5.1): the shared **`opshub-db`** instance (project `opshub-506704`,
+   already exists) — upgrade `db-f1-micro`→`db-g1-small` at go-live; Terraform creates only the
+   `posm_<env>` DB + user on it, cross-project.
 4. **Secrets** — prod **MSG91** SMTP credentials (email reports); any client-specific keys. (JWT/DB secrets I
    generate.)
 5. **Domain** — the client-facing hostname + Cloudflare access (or your DNS).
@@ -158,8 +159,9 @@ moment the §3 blockers clear. Say the word and I'll kick off Wave A.
   state/secrets. **Gates:** api tsc 0 + jest 388, FE tsc 0 + vitest 281, terraform validate OK, all
   YAML valid. Commits on `develop` (`…` Wave A). NOTE: the full DUAL adversarial audit of the deploy
   + prod-auth path is Wave E (pre-go-live), not done yet.
-  ▶ **Still blocking Wave B (owner):** §5.1 production-DB decision; §3 access (GitHub remote, GCP
-  project + billing, the `gifsy-shared` Cloud SQL instance, prod MSG91 secrets, domain). Plus two
+  ▶ **Still blocking Wave B (owner):** §5.1 production-DB decision ✅ RESOLVED (shared `opshub-db`,
+  cross-project, upgrade to g1-small at go-live); §3 access (GitHub remote, GCP project + billing,
+  upgrade the `opshub-db` Cloud SQL instance + cross-project IAM, prod MSG91 secrets, domain). Plus two
   provisioning actions surfaced during integration: (a) seed staging/prod Client with a stable
   `id:'kwality'` so `NEXT_PUBLIC_CLIENT_ID` works; (b) first `terraform apply` uses a bootstrap
   image + `enable_health_probes=false` (services need an image to exist before CI's first deploy).

@@ -16,7 +16,8 @@ env-var inventory: `DEPLOY-ENV-VARS.md`; infra-as-code: `terraform/README.md`; p
 ```bash
 export PROJECT_ID=<gcp-project-id>        # OWNER DECISION (dedicated vs shared Gifsy project)
 export REGION=asia-south1
-export SQL_INSTANCE=<cloud-sql-instance>  # e.g. gifsy-shared — OWNER DECISION for prod placement
+export SQL_INSTANCE=opshub-db             # DECIDED: shared instance (exists; upgrade to g1-small at go-live)
+export SQL_INSTANCE_PROJECT=opshub-506704 # the OpsHub project that owns it (cross-project)
 export ENV=staging                        # or prod — set deliberately before every env-specific command
 ```
 **Approval rule:** every prod-affecting step (prod dispatch, prod migration, prod secret change, prod DB
@@ -45,11 +46,15 @@ Each step lists what unblocks the next. Do not skip ahead — later steps assume
    ```
    (Trim/extend to whatever `terraform/README.md` lists as required.)
 4. **Terraform state bucket + `terraform init`** per `terraform/README.md`.
-5. **Cloud SQL instance** — create `$SQL_INSTANCE` if it does not exist (the blueprint's `gifsy-shared`
-   is *not yet built*). Enable automated backups + PITR **before** any prod data lands:
+5. **Cloud SQL instance** — `$SQL_INSTANCE` (`opshub-db`) **already exists** in `$SQL_INSTANCE_PROJECT`
+   (`opshub-506704`); do NOT create it. At go-live **upgrade it** `db-f1-micro`→`db-g1-small` (restart;
+   shared blast radius with OpsHub — maintenance window). Ensure backups + PITR are on **before** any
+   prod data lands (add `--project=$SQL_INSTANCE_PROJECT`):
    ```bash
-   gcloud sql instances patch $SQL_INSTANCE --backup-start-time=21:00 --enable-point-in-time-recovery
+   gcloud sql instances patch $SQL_INSTANCE --project=$SQL_INSTANCE_PROJECT --tier=db-g1-small --backup-start-time=21:00 --enable-point-in-time-recovery
    ```
+   Grant the POSM api SA `roles/cloudsql.client` on `$SQL_INSTANCE_PROJECT` (Terraform does this when
+   the principal has projectIamAdmin there; otherwise grant by hand).
 6. **`terraform plan`, then `apply` for staging** (owner runs, or explicitly authorises a run), using
    `terraform/environments/staging.tfvars.example` copied to `staging.tfvars` and filled in. This creates
    Artifact Registry `posm`, DB `posm_staging` + user `posm_app`, bucket `posm-staging-files`,
@@ -227,9 +232,10 @@ gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name=
 
 ### 5a. DB restore from backup
 
-⚠️ **`$SQL_INSTANCE` may be shared** (the blueprint's `gifsy-shared` also holds staging/opshub/other
-products). A `gcloud sql backups restore` onto the live instance **overwrites the ENTIRE instance — every
-database on it.** Do NOT do that for a POSM-only problem. Default procedure restores into a **new
+⚠️ **`$SQL_INSTANCE` IS shared** — `opshub-db` holds POSM staging + prod **and OpsHub's own
+databases**. A `gcloud sql backups restore` onto the live instance **overwrites the ENTIRE instance —
+every database on it, including OpsHub prod** (backups/PITR are instance-level; there is no per-database
+restore). Do NOT do that for a POSM-only problem. Default procedure restores into a **new
 scratch instance**, then moves just the `posm_<env>` database.
 
 ```bash

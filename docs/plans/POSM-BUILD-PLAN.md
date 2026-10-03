@@ -9,7 +9,7 @@
 A standalone, multi-tenant field-execution product: **recce → ASM approval → installation → audit** of point-of-sale material, for a pan-India vendor fleet (7–10 scoped login IDs per vendor, ~50k sites/yr, seasonal). Built on the shared Gifsy chassis. Client identity (**Kwality**) is internal — client-facing docs stay name-free.
 
 ## 2. Architecture (settled by PLATFORM-BLUEPRINT Part 4)
-- **Standalone multi-tenant PRODUCT.** Own service + own `posm` database on a **shared** Cloud SQL instance (share with OpsHub — the `gifsy-shared` pattern; instance target confirmed at provision time, schema is instance-agnostic). NOT a loyalty module.
+- **Standalone multi-tenant PRODUCT.** Own service + own `posm_<env>` database on a **shared** Cloud SQL instance — DECIDED 2026-10-03: the shared **`opshub-db`** (OpsHub project `opshub-506704`, cross-project), upgraded to `db-g1-small` at go-live. Schema is instance-agnostic. NOT a loyalty module.
 - **Stack:** NestJS 11 + Prisma (backend `api/`, owns DB + all logic) · Next.js 16 PWA (`platform/`, proxies `/api/*` → `/v1/*`) · GCS media · MSG91 email/OTP · **OpenStreetMap** (free) + Google Maps deep-link. Cloud Run **min=0**. Region `asia-south1`. Cloudflare Worker edge.
 - Diagram: the published architecture artifact.
 - Pay-per-install ⇒ **DUAL adversarial audit mandatory** on the anti-fraud path; runtime-verify on real devices per role.

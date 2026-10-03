@@ -16,11 +16,13 @@ manage_shared_resources = true
 enable_apis             = true
 github_repo             = "REPLACE_ME_OWNER/gifsy-posm" # WIF is bound to this repo only
 
-# ---- Cloud SQL: STAGING normally uses the PRE-EXISTING shared instance ----
-sql_instance        = "gifsy-shared" # the existing instance's NAME (it must already exist)
-create_sql_instance = false          # false = only create database posm_staging + user on it
-db_user             = "posm_app"
-# (If instead you want a dedicated instance: create_sql_instance = true and set sql_tier etc.)
+# ---- Cloud SQL: DECIDED 2026-10-03 — staging ALSO on the shared opshub-db, CROSS-PROJECT ----
+sql_instance         = "opshub-db"      # the existing instance NAME (must already exist)
+sql_instance_project = "opshub-506704"  # the OpsHub project that owns it (cross-project)
+create_sql_instance  = false            # false = only create database posm_staging + user on it
+db_user              = "posm_app"
+# ⚠️ Same cross-project apply prereqs as prod (cloudsql.admin + projectIamAdmin on opshub-506704).
+# (If instead you want a dedicated instance: create_sql_instance = true, sql_instance_project = null, set sql_tier etc.)
 
 # ---- Cloud Run ----
 # First apply (nothing pushed yet): keep the placeholder images (the defaults) and turn probes OFF,
