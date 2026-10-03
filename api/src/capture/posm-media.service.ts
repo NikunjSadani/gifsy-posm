@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { platformWide } from '../common/tenant-scope';
@@ -30,7 +31,30 @@ const MEDIA_FOLDER_PREFIX = 'posm-media/';
  */
 @Injectable()
 export class PosmMediaService {
-  constructor(private readonly storage: StorageService) {}
+  constructor(
+    private readonly storage: StorageService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /**
+   * The vendor that OWNS a recce/install EVIDENCE photo, resolved from the ReccePosm/InstallPosm whose
+   * `photo.key` matches (the key itself has no vendor segment). Returns the owning site's vendorId, or
+   * `null` when the key is not a recce/install photo — a tenant-shared POSM-type catalogue image, or a
+   * fresh un-submitted upload — which is NOT vendor-owned and stays tenant-viewable.
+   */
+  private async resolveOwnerVendorId(key: string): Promise<string | null> {
+    const rp = await this.prisma.reccePosm.findFirst({
+      where: { photo: { path: ['key'], equals: key } },
+      select: { recce: { select: { site: { select: { vendorId: true } } } } },
+    });
+    if (rp?.recce?.site) return rp.recce.site.vendorId ?? null;
+
+    const ip = await this.prisma.installPosm.findFirst({
+      where: { photo: { path: ['key'], equals: key } },
+      select: { installation: { select: { site: { select: { vendorId: true } } } } },
+    });
+    return ip?.installation?.site?.vendorId ?? null;
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Upload (magic-byte guarded) + auth-gated view
@@ -80,6 +104,17 @@ export class PosmMediaService {
     // Un-assumed GIFSY reads any tenant; every other caller — incl. an ASSUMED operator — is
     // pinned to its (assumed) tenant folder.
     if (!platformWide(user) && keyClientId !== user.clientId) throw deny();
+
+    // VENDOR confinement on recce/install EVIDENCE photos: the tenant check alone would let one vendor
+    // stream another vendor's recce/install evidence within the same tenant (a confidentiality leak in
+    // an anti-fraud product). So a vendor caller may not view a recce/install photo owned by a DIFFERENT
+    // vendor. Media with no owning recce/install — tenant-shared POSM-type catalogue images, a rep's own
+    // pre-submit upload — has `ownerVendorId === null` and stays tenant-viewable (don't break those).
+    // Admin/ASM/auditor/GIFSY are not vendor-confined (they review across vendors).
+    if (user.role === 'VENDOR_FIELD' || user.role === 'VENDOR_HO') {
+      const ownerVendorId = await this.resolveOwnerVendorId(key);
+      if (ownerVendorId && ownerVendorId !== user.vendorId) throw deny();
+    }
 
     const file = await this.storage.downloadBytes(key);
     if (!file) throw deny();
