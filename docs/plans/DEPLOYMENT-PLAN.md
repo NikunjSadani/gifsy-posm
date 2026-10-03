@@ -158,8 +158,8 @@ moment the §3 blockers clear. Say the word and I'll kick off Wave A.
   empty applies all 10 migrations cleanly; `terraform validate` + `fmt` clean; prod-mode (`NODE_ENV=
   production`) boots and the missing-secret fail-fast fires; all 5 roles authenticate. Added
   `scripts/bootstrap-gcp.sh` + `GO-LIVE-OWNER-CHECKLIST.md`. ⚠️ No automated E2E/Playwright harness
-  exists in THIS repo (the `[e2e-harness]` memory is the other Gifsy platform) — POSM verification is
-  manual/browser. Owner blockers unchanged (§3 access + §5.1 DB decision).
+  existed in THIS repo (the `[e2e-harness]` memory is the other Gifsy platform) — POSM verification was
+  manual/browser. **(Addressed 2026-10-03 — see below.)** Owner blockers unchanged (§3 access + §5.1 DB decision).
   - 2026-10-02 (cont.): closed the last owner-independent gaps. Added `api/scripts/seed-prod.mjs` — the
     prod bootstrap seed (Client with stable id `kwality` + one CLIENT_ADMIN from env; idempotent,
     prod-safe, no test data) — resolving the Wave-B "seed staging/prod Client" dependency; verified on a
@@ -170,3 +170,8 @@ moment the §3 blockers clear. Say the word and I'll kick off Wave A.
     generate` + carries migrations, migrate-before-deploy + drift-check correct, prod is manual-only with
     separate images, expand/contract + rollback already documented in DEPLOY-RUNBOOK §4. Checklist updated
     (Steps 4b seed + 6b smoke).
+  - 2026-10-03: **Playwright E2E regression harness added** (`platform/e2e/`, `npm run e2e`) — the gap
+    noted above is closed. 24 tests, all green locally: auth per role, cross-role route-gating, admin
+    masters + POSM CRUD, field catalogue, per-role consoles, execution-report grouped table + .xlsx
+    download. Runs against a running stack (local or deployed via `E2E_BASE_URL`); uses system Chrome
+    (`channel: 'chrome'`). Full capture pipeline (camera + geo-fence) is a documented follow-on.
