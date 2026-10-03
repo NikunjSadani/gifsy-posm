@@ -2,9 +2,8 @@ import { test, expect } from '@playwright/test';
 import { ROLES, login } from '../support/roles';
 
 /**
- * Each review/operations portal renders for its role. (The full recce→approve→install→audit capture
- * pipeline — native camera file input + geo-fenced submission — is a deeper follow-on; these verify
- * the consoles themselves load and are reachable per role, catching routing/API-wiring regressions.)
+ * Each review/operations portal renders for its role — catching routing/API-wiring regressions.
+ * (The full recce→approve→install→audit flow is exercised end-to-end in pipeline.spec.ts.)
  */
 test.describe('operational consoles render per role', () => {
   test('ASM → approval dashboard', async ({ page }) => {
