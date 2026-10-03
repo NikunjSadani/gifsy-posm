@@ -155,7 +155,8 @@ resource "google_cloud_run_v2_service" "api" {
     google_secret_manager_secret_version.placeholder,
     google_secret_manager_secret_iam_member.readers,
     google_project_iam_member.api_cloudsql_client,
-    google_sql_user.app,
+    # The runtime ROLE (local.db_app_user) is created by roles.sql, not TF — depend on the database.
+    google_sql_database.posm,
   ]
 }
 
@@ -265,9 +266,10 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
 ############################################
 # MIGRATE JOB — `npx prisma migrate deploy` with the api image
 ############################################
-# Runs as the api runtime SA (needs cloudsql.client + the DATABASE_URL secret). CI executes it
-# and waits (`gcloud run jobs execute posm-migrate-<env> --wait`) BEFORE rolling the services;
-# it updates the job's image to the new SHA first (`gcloud run jobs update --image`).
+# Runs as its OWN migrate SA (cloudsql.client + the ELEVATED migrate-database-url secret — NOT the
+# api SA, so the internet-facing api service can neither hold nor read the elevated DB user). CI
+# executes it and waits (`gcloud run jobs execute posm-migrate-<env> --wait`) BEFORE rolling the
+# services; it updates the job's image to the new SHA first (`gcloud run jobs update --image`).
 # The api image must therefore contain the Prisma CLI, prisma.config.ts and prisma/migrations.
 
 resource "google_cloud_run_v2_job" "migrate" {
@@ -287,7 +289,7 @@ resource "google_cloud_run_v2_job" "migrate" {
     parallelism = 1
 
     template {
-      service_account = google_service_account.api.email
+      service_account = google_service_account.migrate.email
       max_retries     = 0 # a failed migration must be investigated, not blindly retried
       timeout         = "900s"
 
@@ -359,7 +361,7 @@ resource "google_cloud_run_v2_job" "migrate" {
     google_project_service.apis,
     google_secret_manager_secret_version.managed,
     google_secret_manager_secret_iam_member.readers,
-    google_project_iam_member.api_cloudsql_client,
-    google_sql_user.app,
+    google_project_iam_member.migrate_cloudsql_client,
+    google_sql_user.migrate,
   ]
 }

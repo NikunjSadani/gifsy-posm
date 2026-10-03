@@ -37,10 +37,10 @@ create_sql_instance  = false
 # sql_point_in_time_recovery = true
 # sql_deletion_protection    = true
 
-# If staging ALSO uses this same instance and its state already created user `posm_app`, use a
-# different user here so the two states do not fight over one instance-wide user:
-db_user = "posm_app_prod"
-# (db_user = "posm_app" is fine when prod has its own dedicated instance.)
+# DB roles are DERIVED per-env automatically (runtime `posm_app_prod`, migrate `posm_migrate_prod`),
+# so staging + prod never collide on the shared instance — nothing to set here. Override only if you
+# must: db_app_user / db_migrate_user. The confined runtime role is created by terraform/sql/roles.sql
+# (see README "Two-user confinement"), NOT by Terraform.
 
 # ---- Cloud Run ----
 # First apply: placeholder images + probes off; then set real images/probes (see README).

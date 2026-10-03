@@ -19,8 +19,8 @@ github_repo             = "REPLACE_ME_OWNER/gifsy-posm" # WIF is bound to this r
 # ---- Cloud SQL: DECIDED 2026-10-03 — staging ALSO on the shared opshub-db, CROSS-PROJECT ----
 sql_instance         = "opshub-db"      # the existing instance NAME (must already exist)
 sql_instance_project = "opshub-506704"  # the OpsHub project that owns it (cross-project)
-create_sql_instance  = false            # false = only create database posm_staging + user on it
-db_user              = "posm_app"
+create_sql_instance  = false            # false = only create database posm_staging + migrate user on it
+# DB roles derived per-env (runtime posm_app_staging, migrate posm_migrate_staging) — nothing to set.
 # ⚠️ Same cross-project apply prereqs as prod (cloudsql.admin + projectIamAdmin on opshub-506704).
 # (If instead you want a dedicated instance: create_sql_instance = true, sql_instance_project = null, set sql_tier etc.)
 

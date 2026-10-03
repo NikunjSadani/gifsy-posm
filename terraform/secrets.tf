@@ -1,7 +1,8 @@
-# Secret Manager: posm-<env>-{database-url,db-password,jwt-secret,msg91-auth-key,
+# Secret Manager: posm-<env>-{database-url,migrate-database-url,db-password,jwt-secret,msg91-auth-key,
 # msg91-otp-template-id,msg91-smtp-pass,msg91-smtp-user}.
 #
-# Terraform-GENERATED values: database-url, db-password, jwt-secret.
+# Terraform-GENERATED values: database-url (confined runtime role), migrate-database-url (elevated
+# migrate user), db-password (runtime role pw), jwt-secret.
 # OWNER-SUPPLIED values (never in git or tfvars): the four msg91-* secrets. They are created
 # with a placeholder version so Cloud Run can reference `latest`; the owner then adds the real
 # value as a NEW version out-of-band:

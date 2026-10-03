@@ -57,22 +57,34 @@ Each step lists what unblocks the next. Do not skip ahead — later steps assume
    the principal has projectIamAdmin there; otherwise grant by hand).
 6. **`terraform plan`, then `apply` for staging** (owner runs, or explicitly authorises a run), using
    `terraform/environments/staging.tfvars.example` copied to `staging.tfvars` and filled in. This creates
-   Artifact Registry `posm`, DB `posm_staging` + user `posm_app`, bucket `posm-staging-files`,
-   Secret Manager entries, runtime SA `posm-api-staging`, deployer SA `posm-deployer`, WIF
-   `github-pool`/`github`, the Cloud Run services and Job. Exact flags: `terraform/README.md`.
-   ⚠️ Cloud Run services need an image to exist; follow whatever bootstrap-image approach
-   `terraform/README.md` documents (placeholder image + ignore-changes, or apply after the first push).
-7. **Populate secret VALUES** (Terraform creates the empty secrets; values are never in git):
-   see §6 for the command pattern. Staging: JWT secret (generate), DB URL (from the `posm_app`
-   password), and any MSG91 values staging needs (staging uses `FIXED_OTP`, so MSG91 can be dummy
-   for OTP but the SMTP secrets are needed if staging sends reports).
+   Artifact Registry `posm`, DB `posm_staging` + the ELEVATED migrate user `posm_migrate_staging`,
+   bucket `posm-staging-files`, Secret Manager entries (incl. the generated `database-url` /
+   `migrate-database-url` / `db-password` / `jwt-secret`), SAs `posm-api-staging` + `posm-migrate-staging`
+   + deployer `posm-deployer`, WIF `github-pool`/`github`, the Cloud Run services and Job. Exact flags:
+   `terraform/README.md`. ⚠️ Cloud Run services need an image to exist; follow whatever bootstrap-image
+   approach `terraform/README.md` documents (placeholder image + ignore-changes, or apply after first push).
+6b. **Provision the CONFINED runtime role (ONE-TIME, per env, BEFORE the first migrate).** The app's
+   `posm_app_<env>` role is created by SQL, not Terraform (see README "Two-user confinement"). Run as
+   the elevated migrate user — e.g. from Cloud Shell with the Cloud SQL Auth Proxy, or Cloud SQL Studio:
+   ```bash
+   APP_PW="$(gcloud secrets versions access latest --secret=posm-${ENV}-db-password --project $PROJECT_ID)"
+   psql "$(gcloud secrets versions access latest --secret=posm-${ENV}-migrate-database-url --project $PROJECT_ID)" \
+     -v ON_ERROR_STOP=1 -v app_user="posm_app_${ENV}" -v app_pw="$APP_PW" -v db="posm_${ENV}" \
+     -f terraform/sql/roles.sql
+   ```
+   Idempotent + re-runnable (also re-asserts grants after a password rotation). The migrate job (step 9)
+   then creates the tables as the elevated user; default privileges auto-grant them to `posm_app_<env>`.
+7. **Populate the OWNER-supplied secret VALUES** (Terraform already generated `database-url`,
+   `migrate-database-url`, `db-password`, `jwt-secret`): see §6 for the command pattern. Only the MSG91
+   values are owner-supplied — reuse the shared Gifsy SMTP credential (same as loyalty/opshub). Auth is
+   **email + password** (OTP was removed), so there is no OTP secret.
 8. **GitHub ↔ GCP wiring.** Add the repo variables/secrets the workflows read (WIF provider resource
    name, deployer SA email, project id, region — the exact names are in the header of
    `.github/workflows/deploy-staging.yml`). No long-lived JSON keys.
 9. **First staging deploy:** push to `develop` (or re-run `deploy-staging.yml`). Expect: gates → images →
    `posm-migrate-staging` Job → both services. Then verify (§3).
-10. **Staging verification** (Wave C): real login per role (OTP `123456`), role/tenant isolation, media
-    upload → view, report, HO flow, bulk upload, an honest unhappy path. Evidence, not a claim.
+10. **Staging verification** (Wave C): real login per role (**email + password**), role/tenant isolation,
+    media upload → view, report, HO flow, bulk upload, an honest unhappy path. Evidence, not a claim.
 11. **Edge / domain** (only if a domain is chosen — `ENVIRONMENTS.md` §6): Cloudflare worker
     (`cloudflare/`) *or* Cloud Run domain mapping; verify the §6 staging checks (login redirect stays on
     the public host, `/version`, upload).

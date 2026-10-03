@@ -19,14 +19,16 @@ locals {
   db_name          = "posm_${local.env}"
   api_sa_id        = "posm-api-${local.env}"
   frontend_sa_id   = "posm-frontend-${local.env}" # added: the frontend needs JWT_SECRET only (least privilege vs reusing the api SA)
+  migrate_sa_id    = "posm-migrate-${local.env}"  # the migrate job runs as its OWN SA (reads the elevated migrate URL; the api service never does)
   deployer_sa_id   = "posm-deployer"
   wif_pool_id      = "github-pool"
   wif_provider_id  = "github"
 
-  deployer_email  = "${local.deployer_sa_id}@${var.project_id}.iam.gserviceaccount.com"
-  api_sa_member   = "serviceAccount:${google_service_account.api.email}"
-  fe_sa_member    = "serviceAccount:${google_service_account.frontend.email}"
-  deployer_member = "serviceAccount:${local.deployer_email}"
+  deployer_email    = "${local.deployer_sa_id}@${var.project_id}.iam.gserviceaccount.com"
+  api_sa_member     = "serviceAccount:${google_service_account.api.email}"
+  fe_sa_member      = "serviceAccount:${google_service_account.frontend.email}"
+  migrate_sa_member = "serviceAccount:${google_service_account.migrate.email}"
+  deployer_member   = "serviceAccount:${local.deployer_email}"
 
   # --- images (api image is also used by the migrate job) ---
   image_registry_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/${local.ar_repo_id}"
@@ -42,15 +44,24 @@ locals {
   # points at sql_project this flows cross-project into Cloud Run, the migrate job, and DATABASE_URL.
   sql_connection_name = var.create_sql_instance ? google_sql_database_instance.dedicated[0].connection_name : data.google_sql_database_instance.existing[0].connection_name
 
-  # Prisma/pg connection string over the Cloud SQL unix socket. `@localhost/` + `?host=` is
+  # DB roles (instance-wide → per-env suffix keeps staging + prod distinct on a shared instance):
+  #   db_migrate_user — ELEVATED, runs migrations (the google_sql_user created in cloud_sql.tf).
+  #   db_app_user     — CONFINED runtime role the app connects as (created by roles.sql, not TF).
+  db_app_user     = coalesce(var.db_app_user, "posm_app_${local.env}")
+  db_migrate_user = coalesce(var.db_migrate_user, "posm_migrate_${local.env}")
+
+  # Prisma/pg connection strings over the Cloud SQL unix socket. `@localhost/` + `?host=` is
   # deliberate: an EMPTY host (`@/db`) breaks pg-connection-string / the Prisma schema engine.
-  # The password is alphanumeric (random_password special=false) so it needs no URL-encoding.
-  database_url = "postgresql://${var.db_user}:${random_password.db.result}@localhost/${local.db_name}?host=/cloudsql/${local.sql_connection_name}"
+  # Passwords are alphanumeric (random_password special=false) so they need no URL-encoding.
+  # The app (api service) uses the CONFINED runtime role; the migrate job uses the ELEVATED user.
+  database_url         = "postgresql://${local.db_app_user}:${random_password.runtime.result}@localhost/${local.db_name}?host=/cloudsql/${local.sql_connection_name}"
+  migrate_database_url = "postgresql://${local.db_migrate_user}:${random_password.migrate.result}@localhost/${local.db_name}?host=/cloudsql/${local.sql_connection_name}"
 
   # --- secrets (contract: posm-<env>-<name>) ---
   secret_names = toset([
-    "database-url",
-    "db-password", # added: kept so a DBA can reset/rotate the posm_app password without reading the URL
+    "database-url",         # CONFINED runtime role URL — read by the api service + the migrate's roles.sql step
+    "migrate-database-url", # ELEVATED migrate-user URL — read ONLY by the migrate job's SA
+    "db-password",          # the runtime (posm_app) role password — for roles.sql + rotation without reading the URL
     "jwt-secret",
     "msg91-auth-key",
     "msg91-otp-template-id",
@@ -61,11 +72,12 @@ locals {
   # owner replaces out-of-band by adding a new version (Cloud Run reads `latest`).
   # (Names and values are kept in separate locals: a for_each may not iterate a collection
   # that carries sensitive values, so the resource iterates the names and looks values up.)
-  secret_managed_names = toset(["database-url", "db-password", "jwt-secret"])
+  secret_managed_names = toset(["database-url", "migrate-database-url", "db-password", "jwt-secret"])
   secret_managed_values = {
-    "database-url" = local.database_url
-    "db-password"  = random_password.db.result
-    "jwt-secret"   = random_password.jwt.result
+    "database-url"         = local.database_url
+    "migrate-database-url" = local.migrate_database_url
+    "db-password"          = random_password.runtime.result
+    "jwt-secret"           = random_password.jwt.result
   }
   secret_placeholder_names = setsubtract(local.secret_names, local.secret_managed_names)
   secret_placeholder_value = "REPLACE_ME_OUT_OF_BAND"
@@ -83,12 +95,15 @@ locals {
     JWT_SECRET = "jwt-secret" # MUST be the same secret as the api's — the frontend proxy verifies tokens
   }
   migrate_secret_env = {
-    DATABASE_URL = "database-url"
+    DATABASE_URL = "migrate-database-url" # the migrate job runs as the ELEVATED user
   }
-  # Which SA may read which secret (secretmanager.secretAccessor, per-secret — not project-wide)
+  # Which SA may read which secret (secretmanager.secretAccessor, per-secret — not project-wide).
+  # The migrate SA reads ONLY migrate-database-url; the api SA reads database-url (confined) — so a
+  # compromised api service can never obtain the elevated migrate credentials.
   secret_readers = merge(
     { for s in values(local.api_secret_env) : "${s}|api" => { secret = s, member = local.api_sa_member } },
     { for s in values(local.frontend_secret_env) : "${s}|frontend" => { secret = s, member = local.fe_sa_member } },
+    { for s in values(local.migrate_secret_env) : "${s}|migrate" => { secret = s, member = local.migrate_sa_member } },
   )
 
   # --- api plain env (NOT PORT: Cloud Run reserves/injects it; the container port is set below) ---

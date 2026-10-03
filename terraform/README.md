@@ -48,21 +48,43 @@ cross-project shared instance), and `create_sql_instance` (bool).
   (also governed by `sql_tier`, `sql_availability_type`, `sql_point_in_time_recovery`).
 
 Either way the app connects through the Cloud Run Cloud SQL connector (unix socket
-`/cloudsql/<project>:<region>:<instance>`); `DATABASE_URL` is generated and stored in
-`posm-<env>-database-url` (`postgresql://posm_app:<pw>@localhost/posm_<env>?host=/cloudsql/<conn>` —
-`@localhost/` is intentional, an empty host breaks pg/Prisma).
+`/cloudsql/<project>:<region>:<instance>`); the URLs are generated and stored in Secret Manager
+(`@localhost/` is intentional — an empty host breaks pg/Prisma).
+
+### Two-user confinement (enforced DB-level isolation on the shared instance)
+
+Because POSM prod + staging share `opshub-db` with OpsHub, the app's DB role must not be able to
+reach OpsHub's databases. **Why a single Terraform user is not enough:** every Cloud SQL
+API-created user (`google_sql_user`) is a `cloudsqlsuperuser` member, and API-created databases are
+*owned* by `cloudsqlsuperuser` — so such a role can connect to **every** database on the instance,
+regardless of any `REVOKE`. So POSM uses two roles:
+
+* **`db_migrate_user`** (`posm_migrate_<env>`) — the ELEVATED `google_sql_user` Terraform creates
+  (`cloudsqlsuperuser`, needed for `prisma migrate` on PG15+). Used ONLY by the migrate job, which
+  runs as its own `posm-migrate-<env>` SA and reads ONLY `posm-<env>-migrate-database-url`.
+* **`db_app_user`** (`posm_app_<env>`) — the CONFINED runtime role the api service connects as. It is
+  **not** a `google_sql_user`: it is created by `terraform/sql/roles.sql` as a plain `LOGIN`,
+  `NOSUPERUSER`, non-`cloudsqlsuperuser` role, granted CRUD on `posm_<env>` only. Terraform owns its
+  password (`random_password.runtime` → `posm-<env>-database-url` + `posm-<env>-db-password`); the
+  **role is provisioned by running `roles.sql` once** as the migrate user, BEFORE the first migrate
+  (so `ALTER DEFAULT PRIVILEGES` covers the migration-created tables). See DEPLOY-RUNBOOK §Cloud SQL.
+
+The api SA can read only the confined `database-url`; the migrate SA can read only the elevated
+`migrate-database-url` — so a compromised api service never obtains the elevated credentials.
+⚠️ Reciprocal: OpsHub's own databases should likewise `REVOKE CONNECT ... FROM PUBLIC` and keep their
+app roles confined, so POSM's migrate (cloudsqlsuperuser) user — like any such user — cannot be the
+isolation boundary for *their* data.
 
 Gotchas
-* A DB **user is instance-wide**. If staging and prod databases are on the SAME instance and both
-  states create the user, give prod a different name (`db_user = "posm_app_prod"`, as in
-  `prod.tfvars.example`); otherwise the two states fight over one user/password.
-* Terraform-created users are `cloudsqlsuperuser` members (needed for `prisma migrate` on PG15+), so on
-  a shared instance DB-level isolation between `posm_*` and other products' databases is by
-  convention, not enforced by Postgres. `roles/cloudsql.client` is project-level, so the api SA could
-  reach any instance in the project. A *dedicated project* or *dedicated instance* removes this.
+* DB **roles are instance-wide**, so names are DERIVED per env (`posm_app_<env>`,
+  `posm_migrate_<env>`) — staging + prod never collide on the shared instance. Override via
+  `db_app_user` / `db_migrate_user` only if you must.
+* `roles/cloudsql.client` is project-level, granted (to the api + migrate SAs) in the *instance's*
+  project; it lets them connect-through to any instance there — the enforced boundary is the confined
+  runtime role above, not that grant.
 * If ONE dedicated instance should host both envs: create it in one state (`create_sql_instance = true`)
   and point the other state at the same name with `create_sql_instance = false`; apply the creating state first.
-* Database/user have `deletion_policy = "ABANDON"`: `terraform destroy` never drops client data.
+* Database + migrate user have `deletion_policy = "ABANDON"`: `terraform destroy` never drops client data.
 
 ## Prerequisites
 

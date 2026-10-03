@@ -26,6 +26,16 @@ resource "google_service_account" "frontend" {
   depends_on = [google_project_service.apis]
 }
 
+# Migrate-job SA — runs `prisma migrate deploy` as the ELEVATED DB user. Separate from the api SA so
+# the internet-facing api service never holds (nor can read) the elevated migrate credentials.
+resource "google_service_account" "migrate" {
+  project      = var.project_id
+  account_id   = local.migrate_sa_id
+  display_name = "gifsy-posm migrate job (${local.env})"
+
+  depends_on = [google_project_service.apis]
+}
+
 # --- Cloud SQL connector (needed for the /cloudsql socket) ---
 # Project-level because roles/cloudsql.client cannot be granted on an individual instance via IAM
 # policy. It is granted in the INSTANCE's project (local.sql_project) — which is project_id for a
@@ -37,6 +47,13 @@ resource "google_project_iam_member" "api_cloudsql_client" {
   project = local.sql_project
   role    = "roles/cloudsql.client"
   member  = local.api_sa_member
+}
+
+# The migrate job's SA also needs to connect-through the Cloud SQL connector (same instance/project).
+resource "google_project_iam_member" "migrate_cloudsql_client" {
+  project = local.sql_project
+  role    = "roles/cloudsql.client"
+  member  = local.migrate_sa_member
 }
 
 # --- Media bucket: objectAdmin on its OWN bucket only ---
@@ -73,6 +90,12 @@ resource "google_service_account_iam_member" "deployer_acts_as_api" {
 
 resource "google_service_account_iam_member" "deployer_acts_as_frontend" {
   service_account_id = google_service_account.frontend.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = local.deployer_member
+}
+
+resource "google_service_account_iam_member" "deployer_acts_as_migrate" {
+  service_account_id = google_service_account.migrate.name
   role               = "roles/iam.serviceAccountUser"
   member             = local.deployer_member
 }

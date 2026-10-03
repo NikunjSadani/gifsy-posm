@@ -122,10 +122,16 @@ variable "sql_private_network" {
   default     = null
 }
 
-variable "db_user" {
-  description = "Application DB user. Contract name is `posm_app`. If the staging and prod databases live on the SAME instance and both states create the user, give the second env a different name (e.g. posm_app_prod) — a DB user is instance-wide and each state generates its own password."
+variable "db_app_user" {
+  description = "CONFINED runtime DB role the app connects as — created by terraform/sql/roles.sql as a plain LOGIN role (NOT a cloudsqlsuperuser member), granted CRUD on posm_<env> only. null = derive `posm_app_<env>`. DB roles are instance-wide, so the per-env suffix keeps staging + prod distinct when they share one instance."
   type        = string
-  default     = "posm_app"
+  default     = null
+}
+
+variable "db_migrate_user" {
+  description = "ELEVATED migration DB user (Cloud SQL API user → cloudsqlsuperuser) that runs `prisma migrate deploy`. null = derive `posm_migrate_<env>`. Instance-wide → unique per env on a shared instance."
+  type        = string
+  default     = null
 }
 
 ############################################

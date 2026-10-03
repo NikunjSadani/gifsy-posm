@@ -22,9 +22,11 @@ value. Nothing here is applied to the cloud; this is scaffolding for a later `ap
   - frontend image: `asia-south1-docker.pkg.dev/$PROJECT_ID/posm/posm-frontend:<GIT_SHA>`
 - Cloud Run services: `posm-api-staging`, `posm-frontend-staging`, `posm-api-prod`, `posm-frontend-prod` (min instances 0).
 - Cloud Run Jobs (migrations, in-VPC): `posm-migrate-staging`, `posm-migrate-prod` (run `prisma migrate deploy`).
-- Cloud SQL: instance = TF var `sql_instance` (DECIDED: the shared `opshub-db`, pre-existing, in project `opshub-506704` via `sql_instance_project` — cross-project); databases `posm_staging`, `posm_prod`; db users `posm_app` (staging) / `posm_app_prod` (prod — instance-wide, must differ when sharing one instance); passwords in Secret Manager.
+- Cloud SQL: instance = TF var `sql_instance` (DECIDED: the shared `opshub-db`, pre-existing, in project `opshub-506704` via `sql_instance_project` — cross-project); databases `posm_staging`, `posm_prod`. **Two roles per env** (two-user confinement): ELEVATED migrate user `posm_migrate_<env>` (TF `google_sql_user`, runs migrations) + CONFINED runtime role `posm_app_<env>` (created by `terraform/sql/roles.sql`, used by the app). Passwords in Secret Manager.
 - GCS media buckets: `posm-staging-files`, `posm-prod-files` (STORAGE_DRIVER=gcs).
-- Secret Manager (per env `<env>`∈{staging,prod}): `posm-<env>-database-url`, `posm-<env>-jwt-secret`,
+- Secret Manager (per env `<env>`∈{staging,prod}): `posm-<env>-database-url` (confined runtime role),
+  `posm-<env>-migrate-database-url` (elevated migrate user — read only by the migrate SA),
+  `posm-<env>-db-password` (runtime role pw), `posm-<env>-jwt-secret`,
   `posm-<env>-msg91-auth-key`, `posm-<env>-msg91-otp-template-id`, `posm-<env>-msg91-smtp-pass`,
   `posm-<env>-msg91-smtp-user`.
 - WIF: pool `github-pool`, provider `github`, deployer SA `posm-deployer@$PROJECT_ID.iam.gserviceaccount.com`;
