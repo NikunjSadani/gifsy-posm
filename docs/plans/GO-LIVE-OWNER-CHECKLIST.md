@@ -11,11 +11,17 @@ Canonical detail: `DEPLOYMENT-PLAN.md` (§3 blockers, §5 decisions), `terraform
 
 ## Step 0 — Decisions (nothing can start until these are made)
 
-- [ ] **D1 — Production DB placement (THE #1 call).** Where does `posm_prod` live?
-  - `gifsy-shared` instance (cheapest; shared blast radius — and it **doesn't exist yet**), OR
-  - a **dedicated `posm-prod` instance** (own failure domain; recommended for a paying client), OR
-  - a **dedicated GCP project** (strongest isolation).
-  - → sets Terraform `sql_instance` + `create_sql_instance`.
+- [x] **D1 — Production DB placement (THE #1 call). ✅ DECIDED 2026-10-03.**
+  `posm_prod` = a dedicated database on the **shared `opshub-db` instance** (project `opshub-506704`).
+  At go-live, **upgrade `opshub-db` from `db-f1-micro` → `db-g1-small`** (ZONAL, 1.7 GB — matches
+  loyaltybase `gifsy-db`). POSM Cloud Run lives in its **own GCP project**, connecting **cross-project**
+  to `opshub-db`. Lock DB users: POSM runtime user confined to `posm_prod` (no access to opshub's
+  financial DBs); elevated user for migrations.
+  - → Terraform: `create_sql_instance = false`, `sql_instance = opshub-db`, and a **cross-project**
+    SQL data source + `cloudsql.client` grant to the POSM SA on `opshub-506704` (deploy-time TF
+    adjustment — current scaffolding assumes same-project; note this in `terraform/README.md`).
+  - ⚠️ The tier bump is a **restart** (brief downtime) and a **shared blast radius** (opshub + POSM
+    together) — schedule it in a maintenance window.
 - [ ] **D2 — Domain.** `posm.gifsy.in` vs a Kwality-facing domain. (Staging can be `uat-posm.gifsy.in`.)
 - [ ] **D3 — Warm prod?** Cloud Run min instances `0` (cheaper, ~cold-start delay) vs `1` (warm, costs more).
 
@@ -67,10 +73,14 @@ Idempotent and prod-safe: creates only the `Client` (id `kwality`) + one `CLIENT
 and never resets an existing admin. Everything else (vendors, sites, field users) loads via the admin
 UI / bulk upload afterwards.
 
-## Step 5 — Cloud SQL (only if you chose shared, D1)
+## Step 5 — Cloud SQL (per D1: shared `opshub-db`)
 
-- [ ] If using a shared instance that doesn't exist yet (`gifsy-shared`), create it first, or switch D1 to
-      dedicated. `bootstrap-gcp.sh` with `SQL_INSTANCE=` will tell you whether it exists.
+- [ ] **Upgrade `opshub-db`** (project `opshub-506704`) from `db-f1-micro` → `db-g1-small` in a
+      maintenance window (restart; affects opshub + POSM together).
+- [ ] Create the `posm_prod` **database** on `opshub-db` + a **locked runtime user** scoped to it
+      (no grants on opshub's DBs) and an elevated migration user.
+- [ ] Grant the POSM Cloud Run service account `roles/cloudsql.client` on `opshub-506704` (cross-project).
+- [ ] Bootstrap: `SQL_INSTANCE=opshub-db` (it already exists → the script just records it).
 
 ## Step 6 — DNS (after staging is up)
 
@@ -92,6 +102,21 @@ proxy (frontend → api → DB), and an authed read returns. Run it after stagin
 Terraform apply (staging first, then prod) → first CI deploy → migrate on a clean DB → **seed tenant +
 admin (Step 4b)** → smoke-test → edge/domain → backups + PITR → rollback drill → **dual adversarial audit
 of the deploy** → **on-device UAT per role with you** (the real "done" bar).
+
+## Post-go-live fast-follow — right-size the shared DB on real data
+
+Go-live sizing is **g1-small (1.7 GB)** on the shared `opshub-db`. That should hold opshub + POSM at
+launch, but it's a deliberate "match loyaltybase, verify later" call — so once real traffic lands:
+
+- [ ] Watch the shared instance's **memory under real report load** — specifically when *both* products'
+      reporting runs concurrently, and when a bulk upload or a migration overlaps peak traffic. Those are
+      the RAM spikers (concurrent sorts/aggregations + `maintenance_work_mem`), not user headcount.
+- [ ] Alert on `database/memory/components.usage` ≥ **90%**; treat `components.cache + components.free`
+      **< 10%** as the OOM-risk line.
+- [ ] If it trends there, **bump to `db-custom-1-3840` (1 vCPU / 3.75 GB)** — the next rung (no interim
+      RAM between 1.7 and 3.75 GB). It's a restart + shared blast radius, so do it in a window.
+- Note: Cloud SQL does **not** auto-scale RAM (only storage), so this won't self-heal — it needs the
+  manual bump above. Context + rationale in `DEPLOYMENT-PLAN.md` §5.1.
 
 ## One product note to confirm with the client before go-live
 

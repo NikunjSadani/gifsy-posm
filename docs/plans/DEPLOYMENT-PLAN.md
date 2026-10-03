@@ -112,12 +112,26 @@ I write every file and hand you the exact commands; these need your access/decis
 
 ## 5. Decisions to confirm before Wave A (genuine forks)
 
-1. **Where does POSM production live?** The blueprint (owner-agreed 2026-08-25) tiers DBs by trust:
-   `gifsy-db` = loyalty **live-client-prod only**; `gifsy-shared` = **staging + opshub + kwality_posm**.
-   By that rule POSM prod goes on `gifsy-shared` (its own `posm_prod` DB, one-DB-per-product). ⚠️ But
-   Kwality is a **paying client** — putting its *production* on an instance shared with staging/opshub
-   is a failure-domain call worth re-confirming now (options: keep on `gifsy-shared` per blueprint /
-   dedicated `posm-prod` instance / dedicated project). **This is the #1 decision.**
+1. **Where does POSM production live? — ✅ DECIDED 2026-10-03.** POSM prod = a dedicated `posm_prod`
+   database on the **shared `opshub-db` instance** (project `opshub-506704`), one-DB-per-product. At
+   go-live that instance is **upgraded from `db-f1-micro` to `db-g1-small` (ZONAL, 1.7 GB, matching
+   loyaltybase `gifsy-db`)**. POSM's Cloud Run runs in **its own GCP project**, connecting cross-project
+   to `opshub-db` (POSM SA needs `cloudsql.client` on `opshub-506704`). DB users are locked down: the
+   POSM runtime user is confined to `posm_prod` (no access to opshub's financial DBs); migrations use an
+   elevated user. **No infra change during the build** — local dev stays as-is; the tier bump +
+   `posm_prod` DB + locked users happen at go-live.
+   - *Rationale (grounded in live gcloud + 7-day Cloud Monitoring, 2026-10-03):* on both instances CPU
+     (~13%) and connections (3) are non-issues; **memory is the only constraint**. opshub's f1-micro
+     memory is pegged; g1-small is ~2.8× its RAM and should hold opshub+POSM together at launch.
+     g1-small (1.7 GB) → `db-custom-1-3840` (3.75 GB) is the next rung — **no interim RAM exists** between
+     the shared-core ceiling (1.7 GB) and the dedicated-core floor (3.75 GB).
+   - ⚠️ *Shared blast radius:* an OOM spike from **either** product OOM-stops the whole instance (brief
+     restart, joint opshub+POSM outage). Cloud SQL does **not** auto-scale RAM — only storage — so the
+     only fix is a manual tier bump (which itself needs a restart). Hence the fast-follow ↓.
+   - ▶ **Fast-follow (post-go-live):** monitor the shared instance's memory under **real report load**
+     (both products' reporting + any bulk-upload/migration overlap). If `components.cache + components.free`
+     trends below ~10%, or `components.usage` approaches 90%, **bump to `db-custom-1-3840` (1 vCPU /
+     3.75 GB)**. See GO-LIVE-OWNER-CHECKLIST → "Post-go-live fast-follow".
 2. **Dedicated GCP project vs shared Gifsy project** (billing, blast radius, IAM separation).
 3. **Domain/branding** for the client (e.g. `posm.gifsy.in` vs a Kwality-facing domain) + whether to
    reuse the existing `*.gifsy.in` Cloudflare worker or stand up a separate edge.
