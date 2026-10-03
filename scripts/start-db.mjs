@@ -19,7 +19,7 @@
 
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, unlinkSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,6 +32,7 @@ const isWin = process.platform === 'win32';
 const pgCtl = join(repoRoot, '.localdb', 'pgsql', 'bin', isWin ? 'pg_ctl.exe' : 'pg_ctl');
 const dataDir = join(repoRoot, '.localdb', 'data');
 const logFile = join(repoRoot, '.localdb', 'logfile.txt');
+const lockFile = join(repoRoot, '.localdb', 'start.lock');
 
 /** Resolve true if a TCP connection to host:port succeeds within the timeout. */
 function portOpen(port, host, timeoutMs = 1000) {
@@ -82,6 +83,40 @@ if (await portOpen(PORT, HOST)) {
 if (!existsSync(dataDir)) {
   console.error(`[db] Bundled Postgres found but data dir is missing: ${dataDir}`);
   process.exit(1);
+}
+
+// ── Serialize concurrent starts (the real cause of the crash loop) ──────────────────────────────
+// Two starts racing past the port check — e.g. a manual `start-db` + the api's `prestart:dev`, or two
+// dev sessions sharing this repo — would BOTH spawn a postmaster against the same data dir and corrupt
+// it ("terminating any other active server processes" → not-cleanly-shut-down → recovery). An atomic
+// lock file lets only one process start; the others just wait for it to come up.
+let haveLock = false;
+try {
+  if (existsSync(lockFile) && Date.now() - statSync(lockFile).mtimeMs > 60_000) {
+    try { unlinkSync(lockFile); } catch { /* stale lock from a dead start */ }
+  }
+  writeFileSync(lockFile, String(process.pid), { flag: 'wx' }); // atomic create-or-fail
+  haveLock = true;
+} catch {
+  console.log('[db] Another start is already in progress — waiting for Postgres to come up…');
+  const up = await waitForPort(PORT, HOST);
+  console.log(up ? `[db] Postgres ready on ${HOST}:${PORT}.` : `[db] Postgres did not come up; see ${logFile}.`);
+  process.exit(up ? 0 : 1);
+}
+
+function releaseLock() {
+  if (haveLock) { try { unlinkSync(lockFile); } catch { /* ignore */ } haveLock = false; }
+}
+process.on('exit', releaseLock);
+
+// Authoritative recheck under the lock: is a postmaster already running for this data dir? (pg_ctl
+// status reads postmaster.pid AND verifies the process — catching a server that is mid-startup, before
+// its port is listening, which a bare port probe misses and would then double-start.)
+const status = spawnSync(pgCtl, ['-D', dataDir, 'status'], { stdio: 'ignore' });
+if (status.status === 0) {
+  console.log('[db] A Postgres server is already running for this data dir — waiting for its port…');
+  const up = await waitForPort(PORT, HOST);
+  process.exit(up ? 0 : 1);
 }
 
 console.log(`[db] Starting bundled Postgres on port ${PORT}…`);
