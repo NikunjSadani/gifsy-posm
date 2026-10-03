@@ -35,8 +35,11 @@ BEGIN
 END
 $$;
 
--- 2) Database scope: only the owner + this role may connect to posm_<env>; strip PUBLIC's CONNECT.
---    (This does NOT touch other databases on the instance — opshub's DBs are hardened on their side.)
+-- 2) Database scope: strip PUBLIC's CONNECT so ordinary roles can't connect to posm_<env>; grant it
+--    back to the runtime role. NOTE: this stops non-privileged roles only — cloudsqlsuperuser-member
+--    users (every Cloud SQL API-created user, incl. OpsHub's) inherit owner rights on this
+--    API-owned DB and can still connect regardless. That cross-reach is a shared-instance property,
+--    contained operationally, not by this REVOKE (see terraform/README.md "Two-user confinement").
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"db" TO :"app_user";
 

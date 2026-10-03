@@ -71,9 +71,23 @@ regardless of any `REVOKE`. So POSM uses two roles:
 
 The api SA can read only the confined `database-url`; the migrate SA can read only the elevated
 `migrate-database-url` — so a compromised api service never obtains the elevated credentials.
-⚠️ Reciprocal: OpsHub's own databases should likewise `REVOKE CONNECT ... FROM PUBLIC` and keep their
-app roles confined, so POSM's migrate (cloudsqlsuperuser) user — like any such user — cannot be the
-isolation boundary for *their* data.
+
+**What this does and does NOT isolate (be honest about the shared-instance limit):**
+* ✅ **Covered — the realistic threat.** The internet-facing path (the app's runtime role) genuinely
+  cannot reach OpsHub's data: `posm_app_<env>` is not a `cloudsqlsuperuser` member and has no CONNECT
+  on other databases. A compromised app server or SQL injection running as that role is contained.
+* ⚠️ **NOT closed by role grants — the elevated users.** Both POSM's `posm_migrate_<env>` and OpsHub's
+  own API-created users are `cloudsqlsuperuser` members, and API-created databases are *owned* by
+  `cloudsqlsuperuser`. Such users inherit owner rights, so they can reach API-created databases
+  **regardless of `REVOKE CONNECT ... FROM PUBLIC`** — `REVOKE` only stops ordinary (non-superuser)
+  roles. This is bidirectional (POSM's migrate user could reach OpsHub's DBs and vice-versa) and it is
+  a structural property of a shared Cloud SQL instance, not a bug to fix with SQL.
+* **How the elevated reach is actually contained:** operationally — the migrate credential is readable
+  only by the short-lived migrate job's SA, the job just runs `prisma migrate deploy` and exits, and no
+  internet-facing workload ever holds it. The residual is the shared blast radius the owner accepted
+  for cost (DEPLOYMENT-PLAN §5.1). The ONLY engine-level *guarantee* of production-data isolation
+  between products is **separate instances** — the traded-away option. If that guarantee is ever
+  required, that is the signal to split instances.
 
 Gotchas
 * DB **roles are instance-wide**, so names are DERIVED per env (`posm_app_<env>`,

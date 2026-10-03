@@ -85,8 +85,13 @@ UI / bulk upload afterwards.
 - [ ] **Run `terraform/sql/roles.sql` once per env** (as the migrate user, BEFORE the first migrate) to
       create the **confined runtime role** `posm_app_<env>` — a plain role that can touch `posm_<env>`
       only, NOT opshub's DBs. Exact command: DEPLOY-RUNBOOK §1 step 6b.
-- [ ] (Reciprocal, OpsHub side) ensure OpsHub's own databases `REVOKE CONNECT ... FROM PUBLIC` so
-      POSM's elevated migrate user can't read them either.
+- [ ] **Know the shared-instance limit (not a task — an accepted residual).** The confined runtime
+      role means a compromised *app* can't reach OpsHub's data. But POSM's elevated `posm_migrate_<env>`
+      user (and OpsHub's own admin users) are `cloudsqlsuperuser` members and so retain cross-database
+      reach that `REVOKE CONNECT` does NOT close — bidirectional, structural to a shared instance. It's
+      contained operationally (the migrate credential is readable only by the short-lived migrate job
+      SA; no app holds it), not by grants. Engine-level *guarantee* = separate instances (the option
+      traded away for cost, DEPLOYMENT-PLAN §5.1). Revisit only if that guarantee becomes required.
 - [ ] Bootstrap: `SQL_INSTANCE=opshub-db` (it already exists → the script just records it).
 
 ## Step 6 — DNS (after staging is up)
