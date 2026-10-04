@@ -25,15 +25,14 @@
 
 -- 1) Create (or re-sync the password of) the CONFINED runtime LOGIN role.
 --    Deliberately plain: no SUPERUSER, no CREATEDB, no CREATEROLE, and NOT granted cloudsqlsuperuser.
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_user') THEN
-    EXECUTE format('ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L', :'app_user', :'app_pw');
-  ELSE
-    EXECUTE format('CREATE ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L', :'app_user', :'app_pw');
-  END IF;
-END
-$$;
+--    NOTE: uses psql's client-side \if (NOT a DO/$$ block) — psql :'var' interpolation does NOT
+--    happen inside dollar-quoted blocks, so a DO block cannot see these -v variables.
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_user') AS role_absent \gset
+\if :role_absent
+  CREATE ROLE :"app_user" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD :'app_pw';
+\else
+  ALTER ROLE :"app_user" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD :'app_pw';
+\endif
 
 -- 2) Database scope: strip PUBLIC's CONNECT so ordinary roles can't connect to posm_<env>; grant it
 --    back to the runtime role. NOTE: this stops non-privileged roles only — cloudsqlsuperuser-member
