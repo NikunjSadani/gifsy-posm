@@ -34,21 +34,18 @@ Canonical detail: `DEPLOYMENT-PLAN.md` (§3 blockers, §5 decisions), `terraform
 - [ ] ⚠️ Confirm **GitHub Actions billing / spending limit** is healthy and set a limit — your other repos
       hit a spending-limit block that silently fails deploys. Fix before the first CI deploy.
 
-## Step 2 — GCP project (billing is the long pole)
+## Step 2 — GCP project — ✅ DONE 2026-10-04
 
-- [ ] Create / choose the GCP project (per D1) and **enable billing**.
-- [ ] Grant yourself Owner (or the admin roles listed in `terraform/README.md` Prerequisites).
-- [ ] `gcloud auth login` locally.
+- [x] Project **`gifsy-posm`** created, billing linked (`0119B4-025226-5E36F1`, the opshub account) + enabled.
+- [x] Owner (project creator) + ADC valid, quota project set to `gifsy-posm`. Cross-project prereqs met
+      (you are `roles/owner` on `opshub-506704`, which covers `cloudsql.admin` + `projectIamAdmin`).
 
-## Step 3 — Bootstrap (run my script — the only by-hand GCP prep)
+## Step 3 — Bootstrap — ✅ DONE 2026-10-04
 
-```bash
-PROJECT_ID=<your-project> STATE_BUCKET=<your-project>-tfstate ./scripts/bootstrap-gcp.sh
-# add SQL_INSTANCE=<name> if you chose a shared/pre-existing instance (D1)
-```
-
-This enables core APIs + creates the Terraform state bucket. (Cloud Run, Cloud SQL DB/user, GCS media
-buckets, Secret Manager, IAM, WIF, Artifact Registry are all created by Terraform next — my job.)
+- [x] `PROJECT_ID=gifsy-posm STATE_BUCKET=gifsy-posm-tfstate ./scripts/bootstrap-gcp.sh` — core APIs
+      enabled, state bucket `gs://gifsy-posm-tfstate` created + versioned. (SQL_INSTANCE omitted — opshub-db
+      is cross-project; Terraform's data source handles it.) Cloud Run, Cloud SQL DB/user, GCS, Secret
+      Manager, IAM, WIF, Artifact Registry are created by Terraform next — my job (needs explicit go).
 
 ## Step 4 — Secrets / inputs you must supply (I wire them; I never invent them)
 
