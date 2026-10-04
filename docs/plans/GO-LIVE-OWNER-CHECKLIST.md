@@ -1,5 +1,15 @@
 # POSM Go-Live — Owner Checklist
 
+## ✅✅ STATUS 2026-10-04: STAGING **and** PRODUCTION are DEPLOYED, SEEDED, and LOGIN-VERIFIED.
+- Repo `NikunjSadani/gifsy-posm` (private). GCP project `gifsy-posm`. DB = shared `opshub-db` (public IP added, connector-gated) with per-env confined runtime roles.
+- **Staging:** `https://posm-frontend-staging-vebsp775za-el.a.run.app` (auto-deploys on push to `develop`).
+- **Prod:** `https://posm-frontend-prod-vebsp775za-el.a.run.app` (manual `workflow_dispatch` on `main`; admins `nikunj.sadani@gifsy.in`, `admin@kwality.com`).
+- **Remaining (optional/owner):** custom domain/edge (D2) · on-device UAT per role · upgrade `opshub-db`→`db-g1-small` at true go-live · GitHub Actions spending limit + set default branch `main` · (optional) `production` env required-reviewer.
+
+The historical owner-task detail below is kept for reference; most is now done (marked inline).
+
+---
+
 The build is complete and runtime-proven locally. Everything below is **owner-gated** — I can't do it
 (it needs your accounts/decisions). I hand you exact commands; you run them. Once these clear, the deploy
 itself is ~3–5 working days of my work. Order matters top-to-bottom.
