@@ -1,7 +1,7 @@
 import { test, expect, request as pwRequest, type APIRequestContext, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ROLES, login, PASSWORD } from '../support/roles';
+import { ROLES, login, apiToken } from '../support/roles';
 
 /**
  * HO/Admin escalation stage, end-to-end (owner decision 2026-09-30).
@@ -20,7 +20,6 @@ import { ROLES, login, PASSWORD } from '../support/roles';
  * E2E_CLIENT_ID for staging).
  */
 const API_URL = process.env.E2E_API_URL || 'http://localhost:4000';
-const CLIENT_ID = process.env.E2E_CLIENT_ID || 'cmtcriffz0000fcihcsz6qzp8';
 const VENDOR_ID = process.env.E2E_VENDOR_ID || 'cmtcrifhh0002fcih7btytu5d'; // VENDA — fielda's vendor
 const ASM_ID = process.env.E2E_ASM_ID || 'cmtcrifhn0004fcihzjzv3z3w'; // asm@kwality.in
 const LAT = 19.07;
@@ -30,12 +29,6 @@ const RECCE_PNG = resolve(process.cwd(), 'public/kwality-walls-logo.png');
 const INSTALL_PNG = resolve(process.cwd(), 'public/icons/icon-192.png'); // DISTINCT from the recce photo
 
 const queueRegex = /\/admin\/ho-review(\?.*)?$/; // the queue, NOT a /admin/ho-review/<id> detail
-
-async function apiLogin(ctx: APIRequestContext, email: string): Promise<string> {
-  const res = await ctx.post('/v1/auth/login', { data: { clientId: CLIENT_ID, email, password: PASSWORD } });
-  expect(res.ok(), `login ${email}: ${await res.text()}`).toBeTruthy();
-  return (await res.json()).data.accessToken as string;
-}
 
 async function uploadPhoto(ctx: APIRequestContext, token: string, file: string, name: string, uniq: string): Promise<string> {
   // Byte-unique per upload (marker after IEND) so the exact-byte identical-photo guard never
@@ -109,10 +102,10 @@ test.describe.serial('HO escalation (auditor reject → HO approve / uphold)', (
 
   test.beforeAll(async () => {
     api = await pwRequest.newContext({ baseURL: API_URL });
-    adminTok = await apiLogin(api, ROLES.admin.email);
-    const field = await apiLogin(api, ROLES.field.email);
-    const asm = await apiLogin(api, ROLES.asm.email);
-    const auditor = await apiLogin(api, ROLES.auditor.email);
+    adminTok = await apiToken(api, ROLES.admin);
+    const field = await apiToken(api, ROLES.field);
+    const asm = await apiToken(api, ROLES.asm);
+    const auditor = await apiToken(api, ROLES.auditor);
     const tokens = { admin: adminTok, field, asm, auditor };
 
     const typesRes = await api.get('/v1/posm-types', { headers: { Authorization: `Bearer ${adminTok}` } });

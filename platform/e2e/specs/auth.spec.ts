@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { ROLES, login, PASSWORD, homeRegex } from '../support/roles';
+import { ROLES, loginViaForm, PASSWORD, homeRegex } from '../support/roles';
 
 test.describe('authentication', () => {
   for (const role of Object.values(ROLES)) {
     test(`${role.key} (${role.label}) logs in and lands on ${role.home}`, async ({ page }) => {
-      await login(page, role);
+      await loginViaForm(page, role); // test the REAL form (not the cached-cookie fast path)
       await expect(page).toHaveURL(homeRegex(role.home));
     });
   }

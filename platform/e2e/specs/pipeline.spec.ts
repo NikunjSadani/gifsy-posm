@@ -1,7 +1,7 @@
 import { test, expect, request as pwRequest, type APIRequestContext } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ROLES, login, PASSWORD } from '../support/roles';
+import { ROLES, login, apiToken } from '../support/roles';
 
 /**
  * Full capture pipeline, end-to-end: field RECCE → ASM APPROVE → field INSTALL → auditor AUDIT.
@@ -16,7 +16,6 @@ import { ROLES, login, PASSWORD } from '../support/roles';
  * (local ids defaulted below; override with E2E_VENDOR_ID / E2E_ASM_ID / E2E_CLIENT_ID for staging).
  */
 const API_URL = process.env.E2E_API_URL || 'http://localhost:4000';
-const CLIENT_ID = process.env.E2E_CLIENT_ID || 'cmtcriffz0000fcihcsz6qzp8';
 const VENDOR_ID = process.env.E2E_VENDOR_ID || 'cmtcrifhh0002fcih7btytu5d'; // VENDA — fielda's vendor
 const ASM_ID = process.env.E2E_ASM_ID || 'cmtcrifhn0004fcihzjzv3z3w'; // asm@kwality.in
 const LAT = 19.07;
@@ -25,14 +24,6 @@ const LNG = 72.87;
 // Resolved from the suite's cwd (platform/ — where `npm run e2e` runs).
 const RECCE_PNG = resolve(process.cwd(), 'public/kwality-walls-logo.png');
 const INSTALL_PNG = resolve(process.cwd(), 'public/icons/icon-192.png'); // DISTINCT from the recce photo
-
-async function apiLogin(ctx: APIRequestContext, email: string): Promise<string> {
-  const res = await ctx.post('/v1/auth/login', {
-    data: { clientId: CLIENT_ID, email, password: PASSWORD },
-  });
-  expect(res.ok(), `login ${email}: ${await res.text()}`).toBeTruthy();
-  return (await res.json()).data.accessToken as string;
-}
 
 async function uploadPhoto(ctx: APIRequestContext, token: string, file: string, name: string, uniq: string): Promise<string> {
   // Append a unique marker after the PNG's IEND so EVERY upload is byte-unique — the app's exact-byte
@@ -67,8 +58,8 @@ test.describe.serial('capture pipeline (recce → approve → install → audit)
 
   test.beforeAll(async () => {
     api = await pwRequest.newContext({ baseURL: API_URL });
-    adminTok = await apiLogin(api, ROLES.admin.email);
-    fieldTok = await apiLogin(api, ROLES.field.email);
+    adminTok = await apiToken(api, ROLES.admin);
+    fieldTok = await apiToken(api, ROLES.field);
 
     // An active POSM type to capture against.
     const typesRes = await api.get('/v1/posm-types', { headers: { Authorization: `Bearer ${adminTok}` } });
