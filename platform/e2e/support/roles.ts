@@ -1,4 +1,4 @@
-import { type Page, type BrowserContext, type APIRequestContext, expect } from '@playwright/test';
+import { type Page, type APIRequestContext, expect } from '@playwright/test';
 
 /** Shared seed login password. Local/staging only — never a real prod secret. */
 export const PASSWORD = process.env.E2E_PASSWORD || 'Password123';
@@ -35,8 +35,6 @@ export function homeRegex(home: string): RegExp {
 // more than that in bursts, so we: (a) log in each role ONCE and reuse its httpOnly auth cookies /
 // API token (workers:1 → one shared cache for the run), and (b) gate every *real* login so we never
 // exceed the limit. Net effect: a handful of logins, spread under the cap — green against staging/prod.
-type CookieList = Parameters<BrowserContext['addCookies']>[0];
-const cookieCache: Record<string, CookieList> = {};
 const apiTokenCache: Record<string, string> = {};
 const loginTimestamps: number[] = [];
 
@@ -65,20 +63,11 @@ export async function loginViaForm(page: Page, role: Role): Promise<void> {
   await expect(page).toHaveURL(homeRegex(role.home));
 }
 
-/** Log in as `role`, reusing the role's cached auth cookies when available (no extra login request,
- *  so the login throttle is not hit). First use per role does one real form login and caches it. */
-export async function login(page: Page, role: Role): Promise<void> {
-  const cached = cookieCache[role.key];
-  if (cached) {
-    await page.context().addCookies(cached);
-    await page.goto(role.home);
-    await expect(page).toHaveURL(homeRegex(role.home));
-    return;
-  }
-  await loginViaForm(page, role);
-  const { cookies } = await page.context().storageState();
-  cookieCache[role.key] = cookies.filter((c) => c.name === 'token' || c.name === 'refresh_token');
-}
+/** Log in as `role` via the real form (rate-gated on deployed envs). Alias of loginViaForm — a
+ *  cookie-reuse fast path was tried but was net-negative (flaky cross-context cookie injection),
+ *  so the robust path for a green DEPLOYED-env gate is a server-side login-throttle exemption on
+ *  the test env, not client-side juggling. */
+export const login = loginViaForm;
 
 /** Cached API access token for `role` (login once per role, reuse). Rate-gated on first use. */
 export async function apiToken(ctx: APIRequestContext, role: Role): Promise<string> {
