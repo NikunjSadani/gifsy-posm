@@ -260,6 +260,12 @@ variable "bucket_force_destroy" {
   default     = false
 }
 
+variable "media_bucket_name" {
+  description = "Override the media bucket name. GCS bucket names are GLOBALLY unique, so the derived `posm-<env>-files` can collide with another GCP user (it did for prod). null = derive `posm-<env>-files`. Set a unique name (e.g. `gifsy-posm-prod-files`) when the derived one is taken."
+  type        = string
+  default     = null
+}
+
 variable "bucket_noncurrent_retention_days" {
   description = "Delete NONCURRENT object versions after this many days (bucket versioning is enabled in prod only)."
   type        = number

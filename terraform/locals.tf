@@ -15,7 +15,7 @@ locals {
   api_service      = "posm-api-${local.env}"
   frontend_service = "posm-frontend-${local.env}"
   migrate_job      = "posm-migrate-${local.env}"
-  bucket_name      = "posm-${local.env}-files"
+  bucket_name      = coalesce(var.media_bucket_name, "posm-${local.env}-files")
   db_name          = "posm_${local.env}"
   api_sa_id        = "posm-api-${local.env}"
   frontend_sa_id   = "posm-frontend-${local.env}" # added: the frontend needs JWT_SECRET only (least privilege vs reusing the api SA)
