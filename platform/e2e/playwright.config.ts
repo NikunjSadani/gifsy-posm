@@ -13,20 +13,23 @@ import { defineConfig, devices } from '@playwright/test';
  * (create/deactivate a POSM type), so parallel runs would race. Each spec logs in fresh.
  */
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:3000';
+// A remote target (deployed staging/prod) has real network latency + Cloud Run cold starts, so the
+// localhost-tuned timeouts are too tight. Bump them and allow one retry to absorb a cold start.
+const REMOTE = !/localhost|127\.0\.0\.1/.test(BASE_URL);
 
 export default defineConfig({
   testDir: './specs',
-  timeout: 45_000,
-  expect: { timeout: 12_000 },
+  timeout: REMOTE ? 90_000 : 45_000,
+  expect: { timeout: REMOTE ? 20_000 : 12_000 },
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  retries: REMOTE || process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   use: {
     baseURL: BASE_URL,
-    actionTimeout: 15_000,
-    navigationTimeout: 20_000,
+    actionTimeout: REMOTE ? 30_000 : 15_000,
+    navigationTimeout: REMOTE ? 45_000 : 20_000,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     // The field capture flow reads geolocation; granting it here is harmless for the other specs.
