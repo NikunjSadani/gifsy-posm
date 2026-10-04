@@ -9,17 +9,22 @@ import { Public, Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 
+// Login rate-limit per IP — a coarse brute-force bound. Defaults to a STRICT 10/min. A test-only
+// environment (staging, no real users) may relax it via AUTH_LOGIN_THROTTLE_LIMIT so the burst-heavy
+// E2E smoke suite can run green; PROD leaves it unset → stays 10. ⚠️ NEVER set this on a real-user env.
+const LOGIN_THROTTLE_LIMIT = Math.max(1, Number(process.env.AUTH_LOGIN_THROTTLE_LIMIT) || 10);
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   /**
    * Email + password login → rolling-session tokens (replaced phone + OTP, 2026-10-01).
-   * Rate-limited per IP (10/min) as a coarse brute-force bound; the service also locks an account
-   * after repeated failures.
+   * Rate-limited per IP (default 10/min, env-overridable on a test env) as a coarse brute-force
+   * bound; the service also locks an account after repeated failures.
    */
   @Public()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({ default: { limit: LOGIN_THROTTLE_LIMIT, ttl: 60_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto) {
