@@ -25,12 +25,14 @@ Canonical detail: `DEPLOYMENT-PLAN.md` (§3 blockers, §5 decisions), `terraform
 - [ ] **D2 — Domain.** `posm.gifsy.in` vs a Kwality-facing domain. (Staging can be `uat-posm.gifsy.in`.)
 - [ ] **D3 — Warm prod?** Cloud Run min instances `0` (cheaper, ~cold-start delay) vs `1` (warm, costs more).
 
-## Step 1 — GitHub (the repo is currently LOCAL-ONLY — nothing is pushed anywhere)
+## Step 1 — GitHub — ✅ DONE 2026-10-04
 
-- [ ] Create a **private** GitHub repo (e.g. `NikunjSadani/gifsy-posm`).
-- [ ] Tell me the `owner/name`; I add the remote and push `develop` + `main`.
+- [x] Private repo created + pushed: **`NikunjSadani/gifsy-posm`** (`main` + `develop`, both at `06a5c28`;
+      full 87-commit history, verified no secrets/state/DB ever committed).
+- [ ] **Set default branch** → `main` (prod baseline); `develop` is the active/staging branch.
+- [ ] **Protect `main`** (Settings → Branches): require PR, no force-push, owner sole merger.
 - [ ] ⚠️ Confirm **GitHub Actions billing / spending limit** is healthy and set a limit — your other repos
-      hit a spending-limit block that silently fails deploys. Fix this now or the first CI deploy blocks.
+      hit a spending-limit block that silently fails deploys. Fix before the first CI deploy.
 
 ## Step 2 — GCP project (billing is the long pole)
 
