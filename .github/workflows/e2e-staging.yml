@@ -1,7 +1,9 @@
 # gifsy-posm — E2E smoke gate against DEPLOYED STAGING.
 #
 # Runs the full Playwright suite against the live staging services after each successful staging
-# deploy (and on demand). Flow: pre-clean -> seed fixtures into the `kwality` tenant -> run E2E ->
+# deploy (and on demand). It drives the dedicated posm-frontend-e2e frontend and seeds/cleans the
+# disposable `e2e` tenant ONLY — it never touches the real `kwality` client tenant.
+# Flow: pre-clean -> seed fixtures into the `e2e` tenant -> run E2E ->
 # post-clean (always). DB access is via the Cloud SQL Auth Proxy (opshub-db has a public IP; the
 # deployer SA has cloudsql.client + reads the staging db-password). Staging's login throttle is
 # relaxed (AUTH_LOGIN_THROTTLE_LIMIT) so the suite's many logins pass.
@@ -25,12 +27,12 @@ permissions:
 env:
   REGION: asia-south1
   API_SERVICE: posm-api-staging
-  FE_SERVICE: posm-frontend-staging
+  FE_SERVICE: posm-frontend-e2e
   SQL_CONNECTION: opshub-506704:asia-south1:opshub-db
   DB_NAME: posm_staging
   DB_USER: posm_app_staging
   DB_PW_SECRET: posm-staging-db-password
-  CLIENT_ID: kwality
+  CLIENT_ID: e2e
   PROXY_VERSION: v2.26.0
 
 jobs:
@@ -91,12 +93,12 @@ jobs:
 
       - name: Pre-clean any leftover fixtures
         working-directory: api
-        env: { SEED_CLIENT_ID: kwality }
+        env: { SEED_CLIENT_ID: e2e }
         run: node scripts/cleanup-e2e-fixtures.mjs
 
       - name: Seed E2E fixtures
         working-directory: api
-        env: { SEED_CLIENT_ID: kwality }
+        env: { SEED_CLIENT_ID: e2e }
         run: |
           node scripts/seed-verify.mjs 2>/dev/null > seed.json
           cat seed.json
@@ -113,15 +115,15 @@ jobs:
         working-directory: platform
         env:
           E2E_BUNDLED_CHROMIUM: "1"
-          E2E_CLIENT_ID: kwality
-          E2E_EMAIL_DOMAIN: kwality.in
+          E2E_CLIENT_ID: e2e
+          E2E_EMAIL_DOMAIN: e2e.in
           E2E_PASSWORD: Password123
         run: npm run e2e
 
       - name: Clean up fixtures
         if: always()
         working-directory: api
-        env: { SEED_CLIENT_ID: kwality }
+        env: { SEED_CLIENT_ID: e2e }
         run: node scripts/cleanup-e2e-fixtures.mjs || true
 
       - name: Upload Playwright report

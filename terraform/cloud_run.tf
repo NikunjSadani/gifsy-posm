@@ -232,6 +232,91 @@ resource "google_cloud_run_v2_service" "frontend" {
 }
 
 ############################################
+# FRONTEND (E2E) — staging-only, disposable
+############################################
+# A near-clone of the frontend service used ONLY by the E2E smoke gate so it can drive a frontend
+# built for the throwaway `e2e` tenant instead of the real `kwality` client tenant. Gated behind
+# enable_e2e_frontend (true in staging, false/default in prod). deletion_protection is always off —
+# it is disposable test infra. Reuses the SAME frontend SA, JWT secret, scaling, and image semantics.
+
+resource "google_cloud_run_v2_service" "frontend_e2e" {
+  count = var.enable_e2e_frontend ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = "posm-frontend-e2e"
+  ingress  = "INGRESS_TRAFFIC_ALL"
+
+  deletion_protection = false # disposable staging test infra — never prod
+
+  labels = {
+    app = "gifsy-posm"
+    env = local.env
+  }
+
+  template {
+    service_account = google_service_account.frontend.email
+
+    scaling {
+      min_instance_count = var.frontend_min_instances
+      max_instance_count = var.frontend_max_instances
+    }
+
+    containers {
+      image = var.frontend_e2e_image
+
+      ports {
+        container_port = local.container_port
+      }
+
+      resources {
+        limits = {
+          cpu    = var.frontend_cpu
+          memory = var.frontend_memory
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true
+      }
+
+      env {
+        name  = "NODE_ENV"
+        value = "production"
+      }
+
+      # NEXT_PUBLIC_API_URL / BUILD_ID / NEXT_PUBLIC_CLIENT_ID are BUILD args baked into the
+      # image by CI — they are not runtime env.
+
+      dynamic "env" {
+        for_each = local.frontend_secret_env
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.posm[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      client,
+      client_version,
+      template[0].containers[0].image, # CI owns the image
+    ]
+  }
+
+  depends_on = [
+    google_project_service.apis,
+    google_secret_manager_secret_version.managed,
+    google_secret_manager_secret_iam_member.readers,
+  ]
+}
+
+############################################
 # Public invoker (the app authenticates with its own JWT)
 ############################################
 
@@ -251,6 +336,16 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.frontend.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "frontend_e2e_public" {
+  count = var.enable_e2e_frontend && var.allow_public_invoker ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.frontend_e2e[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }

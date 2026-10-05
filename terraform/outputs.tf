@@ -30,6 +30,11 @@ output "frontend_url" {
   value       = google_cloud_run_v2_service.frontend.uri
 }
 
+output "frontend_e2e_url" {
+  description = "Default run.app URL of the staging-only posm-frontend-e2e service used by the E2E smoke gate; null when enable_e2e_frontend is false."
+  value       = try(google_cloud_run_v2_service.frontend_e2e[0].uri, null)
+}
+
 output "migrate_job_name" {
   description = "Cloud Run job that runs `prisma migrate deploy` (CI: gcloud run jobs update/execute --wait)."
   value       = google_cloud_run_v2_job.migrate.name

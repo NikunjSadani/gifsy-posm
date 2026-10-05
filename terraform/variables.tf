@@ -150,6 +150,18 @@ variable "frontend_image" {
   default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
 
+variable "enable_e2e_frontend" {
+  description = "Create the staging-only posm-frontend-e2e Cloud Run service so the E2E smoke gate can drive a frontend built for the disposable `e2e` tenant (not the real `kwality` client tenant). Keep false in prod."
+  type        = bool
+  default     = false
+}
+
+variable "frontend_e2e_image" {
+  description = "Initial image for posm-frontend-e2e; CI owns it after first create. Same bootstrap/ignore_changes semantics as frontend_image."
+  type        = string
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
 variable "enable_health_probes" {
   description = "Attach the api startup probe (GET /health/ready — checks the DB) and liveness probe (GET /health). Set false ONLY for the bootstrap apply that still uses the placeholder hello image (it has no /health route and would fail the revision)."
   type        = bool

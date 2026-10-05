@@ -39,6 +39,7 @@ env:
   AR_REPO: posm
   API_SERVICE: posm-api-staging
   FE_SERVICE: posm-frontend-staging
+  FE_E2E_SERVICE: posm-frontend-e2e
   MIGRATE_JOB: posm-migrate-staging
 
 jobs:
@@ -85,6 +86,7 @@ jobs:
           REG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
           echo "API_IMAGE=${REG}/posm-api:${GIT_SHA}" >> "$GITHUB_ENV"
           echo "FE_IMAGE=${REG}/posm-frontend:${GIT_SHA}" >> "$GITHUB_ENV"
+          echo "FE_E2E_IMAGE=${REG}/posm-frontend-e2e:${GIT_SHA}" >> "$GITHUB_ENV"
           if [ -n "$API_URL_OVERRIDE" ]; then
             API_URL="$API_URL_OVERRIDE"
           else
@@ -108,6 +110,15 @@ jobs:
             -t "$FE_IMAGE" platform
           docker push "$FE_IMAGE"
 
+      - name: Build + push E2E frontend image
+        run: |
+          docker build \
+            --build-arg "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" \
+            --build-arg "NEXT_PUBLIC_CLIENT_ID=e2e" \
+            --build-arg "BUILD_ID=${GIT_SHA}" \
+            -t "$FE_E2E_IMAGE" platform
+          docker push "$FE_E2E_IMAGE"
+
       # Migrations run BEFORE the new code takes traffic. The job uses the API image (it carries the
       # prisma CLI + migrations). `--wait` fails this step if the job fails -> deploy stops here.
       - name: Run migration job
@@ -125,6 +136,11 @@ jobs:
           gcloud run deploy "$FE_SERVICE" --region "$REGION" --image "$FE_IMAGE" \
             --update-labels "git-sha=${GIT_SHA::40}" --quiet
 
+      - name: Deploy E2E frontend
+        run: |
+          gcloud run deploy "$FE_E2E_SERVICE" --region "$REGION" --image "$FE_E2E_IMAGE" \
+            --update-labels "git-sha=${GIT_SHA::40}" --quiet
+
       # Self-heal traffic: `gcloud run deploy` routes to the new revision UNLESS traffic was
       # previously pinned (e.g. by a rollback `update-traffic --to-revisions`). Force 100% to the
       # latest ready revision so a deploy after a rollback actually serves.
@@ -132,6 +148,7 @@ jobs:
         run: |
           gcloud run services update-traffic "$API_SERVICE" --region "$REGION" --to-latest --quiet
           gcloud run services update-traffic "$FE_SERVICE" --region "$REGION" --to-latest --quiet
+          gcloud run services update-traffic "$FE_E2E_SERVICE" --region "$REGION" --to-latest --quiet
 
       - name: Verify serving revision + image SHA
         run: |
@@ -142,7 +159,7 @@ jobs:
             echo "| service | serving revision | image | traffic |"
             echo "|---|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
-          for pair in "${API_SERVICE}=${API_IMAGE}" "${FE_SERVICE}=${FE_IMAGE}"; do
+          for pair in "${API_SERVICE}=${API_IMAGE}" "${FE_SERVICE}=${FE_IMAGE}" "${FE_E2E_SERVICE}=${FE_E2E_IMAGE}"; do
             svc="${pair%%=*}"; want="${pair#*=}"
             rev="$(gcloud run services describe "$svc" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
             img="$(gcloud run services describe "$svc" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
