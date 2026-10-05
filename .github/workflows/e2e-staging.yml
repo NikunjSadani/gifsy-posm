@@ -1,0 +1,133 @@
+# gifsy-posm — E2E smoke gate against DEPLOYED STAGING.
+#
+# Runs the full Playwright suite against the live staging services after each successful staging
+# deploy (and on demand). Flow: pre-clean -> seed fixtures into the `kwality` tenant -> run E2E ->
+# post-clean (always). DB access is via the Cloud SQL Auth Proxy (opshub-db has a public IP; the
+# deployer SA has cloudsql.client + reads the staging db-password). Staging's login throttle is
+# relaxed (AUTH_LOGIN_THROTTLE_LIMIT) so the suite's many logins pass.
+#
+# Uses the same WIF secrets/vars as the deploy workflows (WIF_PROVIDER, DEPLOYER_SA, GCP_PROJECT_ID).
+name: E2E - Staging
+
+on:
+  workflow_run:
+    workflows: ["Deploy - Staging"]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGION: asia-south1
+  API_SERVICE: posm-api-staging
+  FE_SERVICE: posm-frontend-staging
+  SQL_CONNECTION: opshub-506704:asia-south1:opshub-db
+  DB_NAME: posm_staging
+  DB_USER: posm_app_staging
+  DB_PW_SECRET: posm-staging-db-password
+  CLIENT_ID: kwality
+  PROXY_VERSION: v2.26.0
+
+jobs:
+  e2e:
+    name: E2E smoke (staging)
+    # Only after a SUCCESSFUL staging deploy (or manual dispatch).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve staging URLs
+        run: |
+          API_URL="$(gcloud run services describe "$API_SERVICE" --region "$REGION" --format='value(status.url)')"
+          FE_URL="$(gcloud run services describe "$FE_SERVICE" --region "$REGION" --format='value(status.url)')"
+          [ -n "$API_URL" ] && [ -n "$FE_URL" ] || { echo "::error::could not resolve staging URLs"; exit 1; }
+          echo "E2E_API_URL=${API_URL}"  >> "$GITHUB_ENV"
+          echo "E2E_BASE_URL=${FE_URL}"  >> "$GITHUB_ENV"
+
+      - name: Start Cloud SQL Auth Proxy
+        run: |
+          curl -fsSL -o cloud-sql-proxy \
+            "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/${PROXY_VERSION}/cloud-sql-proxy.linux.amd64"
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy "$SQL_CONNECTION" --port 5432 --address 127.0.0.1 > proxy.log 2>&1 &
+          for i in $(seq 1 30); do grep -q "ready for new connections" proxy.log && break; sleep 1; done
+          grep -q "ready for new connections" proxy.log || { echo "::error::proxy not ready"; cat proxy.log; exit 1; }
+          APP_PW="$(gcloud secrets versions access latest --secret="$DB_PW_SECRET")"
+          echo "::add-mask::$APP_PW"
+          echo "DATABASE_URL=postgresql://${DB_USER}:${APP_PW}@127.0.0.1:5432/${DB_NAME}?sslmode=disable" >> "$GITHUB_ENV"
+
+      - name: Install api deps + generate client (for seed/clean)
+        working-directory: api
+        run: |
+          npm ci
+          npx prisma generate
+
+      - name: Pre-clean any leftover fixtures
+        working-directory: api
+        env: { SEED_CLIENT_ID: kwality }
+        run: node scripts/cleanup-e2e-fixtures.mjs
+
+      - name: Seed E2E fixtures
+        working-directory: api
+        env: { SEED_CLIENT_ID: kwality }
+        run: |
+          node scripts/seed-verify.mjs 2>/dev/null > seed.json
+          cat seed.json
+          echo "E2E_VENDOR_ID=$(python3 -c "import json;print(json.load(open('seed.json'))['vendorA'])")" >> "$GITHUB_ENV"
+          echo "E2E_ASM_ID=$(python3 -c "import json;print(json.load(open('seed.json'))['asmId'])")"       >> "$GITHUB_ENV"
+
+      - name: Install platform deps + Chromium
+        working-directory: platform
+        run: |
+          npm ci
+          npx playwright install chromium --with-deps
+
+      - name: Run E2E
+        working-directory: platform
+        env:
+          E2E_BUNDLED_CHROMIUM: "1"
+          E2E_CLIENT_ID: kwality
+          E2E_EMAIL_DOMAIN: kwality.in
+          E2E_PASSWORD: Password123
+        run: npm run e2e
+
+      - name: Clean up fixtures
+        if: always()
+        working-directory: api
+        env: { SEED_CLIENT_ID: kwality }
+        run: node scripts/cleanup-e2e-fixtures.mjs || true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-staging
+          path: platform/playwright-report
+          retention-days: 7

@@ -36,8 +36,13 @@ export default defineConfig({
     permissions: ['geolocation'],
     geolocation: { latitude: 19.07, longitude: 72.87 },
   },
-  // Use the system Chrome (`channel: 'chrome'`) rather than Playwright's bundled Chromium — no
-  // 195 MB browser download to depend on, and Playwright still launches it in an isolated profile.
-  // Swap to bundled Chromium by removing `channel` once `npx playwright install chromium` has run.
-  projects: [{ name: 'chrome', use: { ...devices['Desktop Chrome'], channel: 'chrome' } }],
+  // Locally: system Chrome (`channel: 'chrome'`) — no 195 MB download. In CI: set
+  // E2E_BUNDLED_CHROMIUM=1 to use Playwright's bundled Chromium (after `npx playwright install chromium`),
+  // since GitHub runners have no system Chrome channel.
+  projects: [
+    {
+      name: 'chrome',
+      use: { ...devices['Desktop Chrome'], channel: process.env.E2E_BUNDLED_CHROMIUM ? undefined : 'chrome' },
+    },
+  ],
 });

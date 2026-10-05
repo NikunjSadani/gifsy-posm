@@ -100,6 +100,25 @@ resource "google_service_account_iam_member" "deployer_acts_as_migrate" {
   member             = local.deployer_member
 }
 
+# --- CI E2E gate (STAGING only): the e2e-staging workflow authenticates as the deployer SA (WIF) and
+#     reaches the staging DB through the Cloud SQL proxy to seed/clean E2E fixtures. So the deployer
+#     needs cloudsql.client on the instance's project + read on the staging db-password secret.
+#     Only created in the state that manages shared resources (staging), never prod. ---
+resource "google_project_iam_member" "deployer_cloudsql_client" {
+  count   = var.manage_shared_resources ? 1 : 0
+  project = local.sql_project
+  role    = "roles/cloudsql.client"
+  member  = local.deployer_member
+}
+
+resource "google_secret_manager_secret_iam_member" "deployer_db_password" {
+  count     = var.manage_shared_resources ? 1 : 0
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.posm["db-password"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = local.deployer_member
+}
+
 # Note on frontend -> api: the api service is public (allow_public_invoker, JWT-authenticated at
 # the app layer) and the Next server proxies /api/* to it over the public URL, so NO
 # run.invoker binding between the two SAs is required. If you set allow_public_invoker=false,
