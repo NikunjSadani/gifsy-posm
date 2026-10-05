@@ -142,9 +142,16 @@ export class SitesService {
     if (q.code) where.code = { contains: q.code, mode: 'insensitive' };
     if (q.town) where.town = { contains: q.town, mode: 'insensitive' };
     if (q.rsCode) where.rsCode = { contains: q.rsCode, mode: 'insensitive' };
-    // Status filter is applied server-side and scoped within the caller's `where` (validated
-    // to a SiteStatus enum value by the DTO). Absent = all statuses reachable by the caller.
-    if (q.status) where.status = q.status;
+    // Visibility by status: a DEACTIVATED (INACTIVE) outlet is ADMIN-ONLY. Field / ASM / vendor-HO
+    // roles are hard-pinned to ACTIVE outlets — a `status` filter they pass is ignored, so a
+    // deactivated outlet can never surface in the field list, the nearby map, or the recce picker.
+    // Admins may filter by status (validated to a SiteStatus by the DTO) and see all by default.
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
+    if (isAdmin) {
+      if (q.status) where.status = q.status;
+    } else {
+      where.status = SiteStatus.ACTIVE;
+    }
     // Apply the vendorId filter only when the caller is NOT already vendor-pinned —
     // otherwise it could override the security pin and leak a sibling vendor's fleet.
     if (q.vendorId && !this.isVendorRole(user)) where.vendorId = q.vendorId;

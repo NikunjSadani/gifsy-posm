@@ -29,6 +29,36 @@ describe('SitesService.list — role scoping', () => {
     expect(count.mock.calls[0][0].where.vendorId).toBe('v9');
   });
 
+  it('VENDOR_FIELD: hard-pinned to ACTIVE outlets (deactivated are hidden)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }), {});
+    expect(findMany.mock.calls[0][0].where.status).toBe('ACTIVE');
+  });
+
+  it('VENDOR_FIELD cannot reveal INACTIVE via a status filter (ignored → still ACTIVE)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }), { status: 'INACTIVE' } as any);
+    expect(findMany.mock.calls[0][0].where.status).toBe('ACTIVE');
+  });
+
+  it('ASM: hard-pinned to ACTIVE outlets', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), {});
+    expect(findMany.mock.calls[0][0].where.status).toBe('ACTIVE');
+  });
+
+  it('CLIENT_ADMIN: sees ALL statuses by default, and can filter to INACTIVE (admin-only visibility)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
+    expect(findMany.mock.calls[0][0].where.status).toBeUndefined();
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { status: 'INACTIVE' } as any);
+    expect(findMany.mock.calls[1][0].where.status).toBe('INACTIVE');
+  });
+
   it('VENDOR_HO: same vendor confinement', async () => {
     const { prisma, findMany } = makePrisma();
     const svc = new SitesService(prisma);
