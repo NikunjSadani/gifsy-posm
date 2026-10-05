@@ -46,7 +46,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: '/admin/vendors', label: 'Vendors', icon: Building2 },
       { href: '/admin/users', label: 'Users', icon: Users },
-      { href: '/admin/posm-types', label: 'POSM Types', icon: Tags },
+      { href: '/admin/posm-types', label: 'Element Types', icon: Tags },
       { href: '/admin/sites', label: 'Sites', icon: MapPin },
     ],
   },

@@ -173,7 +173,7 @@ export default function AdminReportsPage() {
       <div>
         <h1 className="text-xl font-bold text-gray-900">Email reports</h1>
         <p className="text-sm text-gray-500 mt-0.5">
-          Configure the scheduled daily POSM digest — recipients, send time, stale-item thresholds — and
+          Configure the scheduled daily Elements digest — recipients, send time, stale-item thresholds — and
           per-ASM reminders for recces pending approval.
         </p>
       </div>

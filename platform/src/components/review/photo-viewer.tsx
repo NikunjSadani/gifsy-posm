@@ -41,7 +41,7 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
   if (posms.length === 0) {
     return (
       <div className="rounded-2xl border border-gray-100 bg-white p-6 text-center text-sm text-gray-500">
-        This recce has no POSM lines.
+        This recce has no Element lines.
       </div>
     );
   }
@@ -86,7 +86,7 @@ export function PhotoViewer({ posms }: { posms: ReccePosm[] }) {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={mediaSrc(zoom.key)}
-                alt="POSM photo (enlarged)"
+                alt="Element photo (enlarged)"
                 className="block max-h-[90vh] max-w-[92vw] rounded-lg"
                 onError={() => setZoomErrored(true)}
               />
@@ -153,7 +153,7 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string, mar
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={mediaSrc(photo.key)}
-              alt={`POSM slot ${posm.slotNo}${posm.posmType ? ` — ${posm.posmType.name}` : ''}`}
+              alt={`Element slot ${posm.slotNo}${posm.posmType ? ` — ${posm.posmType.name}` : ''}`}
               className="block w-full h-auto"
               loading="lazy"
               onError={() => setErrored(true)}
@@ -170,7 +170,7 @@ function PosmTile({ posm, onZoom }: { posm: ReccePosm; onZoom: (key: string, mar
 
       <div className="p-3">
         <p className="text-sm font-semibold text-gray-900">
-          {posm.posmType?.name ?? 'Unknown POSM'}
+          {posm.posmType?.name ?? 'Unknown Element'}
           {posm.posmType?.code && (
             <span className="ml-1 text-xs font-normal text-gray-400">({posm.posmType.code})</span>
           )}

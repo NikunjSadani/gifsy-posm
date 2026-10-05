@@ -137,14 +137,14 @@ export class PosmTypesService {
     const posmType = await this.prisma.posmType.findFirst({
       where: { id, ...(scope ? { clientId: scope } : {}), ...(isAdmin ? {} : { isActive: true }) },
     });
-    if (!posmType) throw new NotFoundException('POSM type not found');
+    if (!posmType) throw new NotFoundException('Element type not found');
     return posmType;
   }
 
   private rethrowDuplicate(e: unknown, code?: string): never {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
       throw new ConflictException(
-        `A POSM type with code "${code ?? ''}" already exists for this tenant.`,
+        `An Element type with code "${code ?? ''}" already exists for this tenant.`,
       );
     }
     throw e;

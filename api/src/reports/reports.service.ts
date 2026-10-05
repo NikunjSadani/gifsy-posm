@@ -498,7 +498,7 @@ export class ReportsService {
 
   /** The subject line: `POSM daily digest — <tenant> — <YYYY-MM-DD (IST)>`. */
   private subject(tenantName: string, now: Date): string {
-    return `POSM daily digest — ${tenantName} — ${istDateLabel(now)}`;
+    return `Elements daily digest — ${tenantName} — ${istDateLabel(now)}`;
   }
 
   /**
@@ -540,7 +540,7 @@ export class ReportsService {
     <div style="max-width:560px;margin:0 auto;padding:24px;">
       <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
         <div style="background:#111827;padding:20px 24px;">
-          <div style="color:#ffffff;font-size:18px;font-weight:700;">POSM daily digest</div>
+          <div style="color:#ffffff;font-size:18px;font-weight:700;">Elements daily digest</div>
           <div style="color:#9ca3af;font-size:13px;margin-top:2px;">${esc(tenantName)} &middot; ${esc(date)}</div>
         </div>
         <div style="padding:20px 24px;">
@@ -561,7 +561,7 @@ export class ReportsService {
           </table>
         </div>
         <div style="padding:16px 24px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:12px;">
-          Automated digest from the POSM platform. Manage recipients in Settings &rarr; Email reports.
+          Automated digest from the Element platform. Manage recipients in Settings &rarr; Email reports.
         </div>
       </div>
     </div>

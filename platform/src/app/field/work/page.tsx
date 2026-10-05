@@ -151,7 +151,7 @@ export default function MyWorkPage() {
 // ── One recce row with its status-specific action ─────────────────────────────
 function RecceCard({ recce }: { recce: RecceListRow }) {
   const meta = STATUS_META[recce.status];
-  const posmLabel = `${recce.posmCount} POSM${recce.posmCount === 1 ? '' : 's'}`;
+  const posmLabel = `${recce.posmCount} Element${recce.posmCount === 1 ? '' : 's'}`;
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">

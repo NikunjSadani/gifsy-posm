@@ -63,9 +63,9 @@ export const FIELD_NOTES: HelpNote = {
   title: 'Photo & location rules — good to know',
   points: [
     'You must be physically at the site, inside its geo-fence, for the capture to be accepted. If you are too far away the app will block the photo.',
-    'Take one distinct, real photo per POSM slot — do not reuse the same shot for two POSMs or upload from your gallery.',
+    'Take one distinct, real photo per Element slot — do not reuse the same shot for two Elements or upload from your gallery.',
     'An installation photo must be a fresh, post-install picture. Re-using the recce photo at the install stage is not allowed.',
-    'Keep good lighting and frame the whole POSM. Clear photos get approved faster and avoid re-capture.',
+    'Keep good lighting and frame the whole Element. Clear photos get approved faster and avoid re-capture.',
   ],
 };
 
@@ -77,7 +77,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/field/sites',
     showFieldNotes: true,
     intro:
-      'This is your field app for putting up POSM at your assigned sites. You capture a recce at each site, and once your ASM approves it you go back to install and photograph the finished POSM.',
+      'This is your field app for putting up Elements at your assigned sites. You capture a recce at each site, and once your ASM approves it you go back to install and photograph the finished Element.',
     topics: [
       {
         title: 'Find and open one of my sites',
@@ -93,7 +93,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
         steps: [
           'Open the site and tap “Start recce”.',
           'Travel to the site — you must be inside its geo-fence for the app to let you capture.',
-          'For each POSM slot, take one clear, distinct photo of where the POSM will go.',
+          'For each Element slot, take one clear, distinct photo of where the Element will go.',
           'Review your photos, then submit. The recce goes to your ASM for approval.',
           'You can track it under “My Work” — it will sit in “Awaiting approval” until the ASM acts.',
         ],
@@ -112,8 +112,8 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
         steps: [
           'In “My Work”, find the recce under “Ready to install” (approved by the ASM).',
           'Tap “Start installation” — this is the only way into the install screen.',
-          'Put up each POSM at the site, inside the geo-fence.',
-          'Photograph every installed POSM with a fresh post-install photo (not the recce photo).',
+          'Put up each Element at the site, inside the geo-fence.',
+          'Photograph every installed Element with a fresh post-install photo (not the recce photo).',
           'Submit. Your installation now goes to the Auditor for final review.',
         ],
       },
@@ -141,13 +141,13 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
         steps: [
           'Open “Approval Queue” to see the recces waiting for your approval.',
           'You only see sites in your own territory.',
-          'Tap a recce to open it and review every POSM photo.',
+          'Tap a recce to open it and review every Element photo.',
         ],
       },
       {
         title: 'Approve a recce',
         steps: [
-          'Open the recce and check each POSM photo against the site and the expected POSM slots.',
+          'Open the recce and check each Element photo against the site and the expected Element slots.',
           'Confirm the photos are clear, distinct, and taken at the site.',
           'Tap “Approve”. This unlocks the installation step for the vendor at that site.',
         ],
@@ -169,27 +169,27 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/audit',
     showFieldNotes: true,
     intro:
-      'You give installations their final check. For each POSM you compare the installed photo against the approved recce photo, then approve or reject. Your view spans the whole tenant.',
+      'You give installations their final check. For each Element you compare the installed photo against the approved recce photo, then approve or reject. Your view spans the whole tenant.',
     topics: [
       {
         title: 'Work the installation review queue',
         steps: [
           'Open “Review queue” to see the installations waiting for audit across all territories.',
-          'Tap one to open its per-POSM comparison view.',
+          'Tap one to open its per-Element comparison view.',
         ],
       },
       {
-        title: 'Compare install vs recce, per POSM',
+        title: 'Compare install vs recce, per Element',
         steps: [
-          'For each POSM, the install photo is shown next to its recce photo.',
-          'Check that the POSM was actually installed and matches the approved recce slot.',
+          'For each Element, the install photo is shown next to its recce photo.',
+          'Check that the Element was actually installed and matches the approved recce slot.',
           'Confirm the install photo is a fresh post-install shot, not a copy of the recce photo.',
         ],
       },
       {
         title: 'Approve or reject an installation',
         steps: [
-          'If every POSM checks out, tap “Approve” to close the installation.',
+          'If every Element checks out, tap “Approve” to close the installation.',
           'If something is wrong, tap “Reject” and give a reason.',
           'A rejection sends the work back so it can be corrected and re-submitted.',
         ],
@@ -203,7 +203,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/admin',
     showFieldNotes: false,
     intro:
-      'You run the program for your organisation: set up the masters (vendors, users, POSM types, sites), configure capture rules, assign ad-hoc tasks, and watch progress through analytics and reports. You can also open the review and audit consoles.',
+      'You run the program for your organisation: set up the masters (vendors, users, Element types, sites), configure capture rules, assign ad-hoc tasks, and watch progress through analytics and reports. You can also open the review and audit consoles.',
     topics: [
       {
         title: 'Add sites (bulk Excel upload)',
@@ -223,11 +223,11 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
         ],
       },
       {
-        title: 'Define POSM types',
+        title: 'Define Element types',
         steps: [
-          'Open “POSM Types”.',
-          'Add each kind of point-of-sale material your program uses.',
-          'These are the POSM slots vendors photograph during a recce and installation.',
+          'Open “Element Types”.',
+          'Add each kind of Element your program uses.',
+          'These are the Element slots vendors photograph during a recce and installation.',
         ],
       },
       {
@@ -262,7 +262,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/admin',
     showFieldNotes: false,
     intro:
-      'As Platform Admin you have the same admin screens as a Client Admin — vendors, users, POSM types, sites, manual tasks, analytics, reports and settings — but your view spans every tenant on the platform rather than a single organisation.',
+      'As Platform Admin you have the same admin screens as a Client Admin — vendors, users, Element types, sites, manual tasks, analytics, reports and settings — but your view spans every tenant on the platform rather than a single organisation.',
     topics: [
       {
         title: 'Work across tenants',
@@ -274,7 +274,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
       {
         title: 'Manage masters and configuration',
         steps: [
-          'Sites, vendors, users, POSM types, settings, manual tasks, analytics and reports all work as they do for a Client Admin.',
+          'Sites, vendors, users, Element types, settings, manual tasks, analytics and reports all work as they do for a Client Admin.',
           'Remember sites are always added by bulk Excel upload, never a single-record form.',
         ],
       },

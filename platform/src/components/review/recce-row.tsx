@@ -80,7 +80,7 @@ export function RecceRow({
           </p>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className="text-xs text-gray-600">
-              {photoCount(item)} / {item.posms.length} POSM photo{item.posms.length === 1 ? '' : 's'}
+              {photoCount(item)} / {item.posms.length} Element photo{item.posms.length === 1 ? '' : 's'}
             </span>
             {flags.length > 0 && (
               <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">

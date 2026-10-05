@@ -303,7 +303,7 @@ export default function RecceDetailPage() {
       {/* Photos */}
       <div>
         <h2 className="text-sm font-semibold text-gray-700 mb-2">
-          POSM photos ({item.posms.length})
+          Element photos ({item.posms.length})
         </h2>
         <PhotoViewer posms={item.posms} />
       </div>

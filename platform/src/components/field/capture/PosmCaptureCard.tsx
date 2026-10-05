@@ -54,7 +54,7 @@ const UNITS = ['cm', 'in', 'ft', 'mm'] as const;
 function qualityWarning(quality: MediaQuality | null): string | null {
   if (!quality) return null;
   const parts: string[] = [];
-  if (quality.blank) parts.push('This photo looks blank — no POSM is visible');
+  if (quality.blank) parts.push('This photo looks blank — no Element is visible');
   if (quality.blur) parts.push('This photo looks blurry');
   if (quality.lowLight) parts.push('This photo looks too dark');
   if (quality.overexposed) parts.push('This photo looks too bright');
@@ -193,7 +193,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   return (
     <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-bold text-gray-900">POSM {slot}</h3>
+        <h3 className="text-sm font-bold text-gray-900">Element {slot}</h3>
         {onRemove && (
           <button
             type="button"
@@ -207,13 +207,13 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
       </div>
 
       {/* POSM type */}
-      <label className="mb-1.5 block text-xs font-medium text-gray-600">POSM type</label>
+      <label className="mb-1.5 block text-xs font-medium text-gray-600">Element type</label>
       <select
         value={posmTypeId}
         onChange={(e) => setPosmTypeId(e.target.value)}
         className="mb-4 w-full rounded-xl border-2 border-gray-200 bg-white px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
       >
-        <option value="">Select a POSM type…</option>
+        <option value="">Select an Element type…</option>
         {posmTypes.map((t) => (
           <option key={t.id} value={t.id}>
             {t.name} ({t.code})
@@ -257,7 +257,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
 
       {/* Photo */}
       <label className="mb-1.5 block text-xs font-medium text-gray-600">Photo</label>
-      <CameraCapture value={file} onChange={onPhoto} disabled={uploading} label="Take POSM photo" />
+      <CameraCapture value={file} onChange={onPhoto} disabled={uploading} label="Take Element photo" />
 
       {/* Status line */}
       <div className="mt-3 min-h-[1.25rem] text-xs">
@@ -319,7 +319,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
             <div className="flex items-center gap-2 rounded-xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
               <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
               <span className="flex-1 font-medium">
-                POSM area marked ({markup.shapes.length})
+                Element area marked ({markup.shapes.length})
               </span>
               <button
                 type="button"
@@ -331,7 +331,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
               <button
                 type="button"
                 onClick={clearMarkup}
-                aria-label="Clear POSM area markup"
+                aria-label="Clear Element area markup"
                 className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
               >
                 <X className="h-3.5 w-3.5" />
@@ -345,7 +345,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
               className="inline-flex items-center gap-1.5 rounded-xl border-2 border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 active:scale-95 transition-transform"
             >
               <PenSquare className="h-4 w-4 text-[var(--brand-primary)]" />
-              Mark POSM area
+              Mark Element area
             </button>
           )}
         </div>

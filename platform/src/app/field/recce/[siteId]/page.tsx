@@ -103,8 +103,8 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       } else {
         setTypesError(
           res.status === 403
-            ? 'POSM types are not available for your account. Please ask your admin to grant access.'
-            : res.error || 'Could not load POSM types. Pull to retry.',
+            ? 'Element types are not available for your account. Please ask your admin to grant access.'
+            : res.error || 'Could not load Element types. Pull to retry.',
         );
       }
       setTypesLoading(false);
@@ -173,11 +173,11 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     if (inFlight.current || submitting) return; // synchronous double-tap guard
     if (mode === 'blocked') return;
     if (readyLines.length < 1) {
-      toast.error('Capture at least one POSM (type, dimensions, and a photo with location).');
+      toast.error('Capture at least one Element (type, dimensions, and a photo with location).');
       return;
     }
     if (hasIncompleteStarted) {
-      toast.error('Finish or remove the incomplete POSM line before submitting.');
+      toast.error('Finish or remove the incomplete Element line before submitting.');
       return;
     }
     inFlight.current = true;
@@ -226,7 +226,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       <p className="mt-1 text-sm text-gray-500">
         {mode === 'resubmit'
           ? 'Fix what the reviewer flagged, then re-submit this site’s recce.'
-          : 'Capture 1–2 POSM lines for this site.'}
+          : 'Capture 1–2 Element lines for this site.'}
       </p>
 
       {typesError && (
@@ -242,7 +242,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             <span className="font-semibold">Sent back:</span> {rejectionText}
-            <span className="mt-1 block text-xs text-red-600/80">Re-capture the POSM(s) and submit again.</span>
+            <span className="mt-1 block text-xs text-red-600/80">Re-capture the Element(s) and submit again.</span>
           </span>
         </div>
       )}
@@ -282,7 +282,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
               className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-gray-300 py-3.5 text-sm font-semibold text-gray-500 active:scale-[0.99] transition-transform"
             >
               <Plus className="h-4 w-4" />
-              Add second POSM
+              Add second Element
             </button>
           )}
         </div>
@@ -308,7 +308,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
           </button>
           {!canSubmit && !submitting && (
             <p className="mt-2 text-center text-xs text-gray-400">
-              Add a POSM type, dimensions, and a located photo to enable submit.
+              Add an Element type, dimensions, and a located photo to enable submit.
             </p>
           )}
         </div>

@@ -30,7 +30,7 @@ export function AuditHeader() {
           <div className="min-w-0">
             <p className="text-white font-black text-sm tracking-wide leading-tight truncate">Audit Console</p>
             <p className="text-[var(--brand-accent)] text-[10px] font-semibold tracking-widest uppercase">
-              POSM Installation QA
+              Element Installation QA
             </p>
           </div>
         </div>

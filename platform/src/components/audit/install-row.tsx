@@ -54,7 +54,7 @@ export function InstallRow({ item }: { item: QueueItem }) {
             </span>
             <span className="inline-flex items-center gap-1 text-[11px] text-gray-600">
               <Package className="h-3 w-3 text-gray-400" />
-              {item.compare.length} POSM{item.compare.length === 1 ? '' : 's'}
+              {item.compare.length} Element{item.compare.length === 1 ? '' : 's'}
             </span>
             <span className="inline-flex items-center gap-1 text-[11px] text-gray-500">
               <Clock className="h-3 w-3 text-gray-400" />

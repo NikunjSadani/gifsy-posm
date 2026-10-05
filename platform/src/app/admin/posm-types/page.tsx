@@ -47,7 +47,7 @@ export default function PosmTypesPage() {
       setItems(res.data);
       setLoadError(null);
     } else {
-      setLoadError(res.error || 'Could not load POSM types.');
+      setLoadError(res.error || 'Could not load Element types.');
     }
     setLoading(false);
   }, []);
@@ -122,10 +122,10 @@ export default function PosmTypesPage() {
     }
     setSaving(false);
     if (!res.success) {
-      setFormError(res.error || 'Could not save the POSM type.');
+      setFormError(res.error || 'Could not save the Element type.');
       return;
     }
-    toast.success(editing?.mode === 'edit' ? 'POSM type updated' : 'POSM type created');
+    toast.success(editing?.mode === 'edit' ? 'Element type updated' : 'Element type created');
     setEditing(null);
     void load();
   };
@@ -137,10 +137,10 @@ export default function PosmTypesPage() {
     const res = await posmTypesApi.deactivate(confirm.id);
     setConfirmBusy(false);
     if (!res.success) {
-      setConfirmError(res.error || 'Could not deactivate the POSM type.');
+      setConfirmError(res.error || 'Could not deactivate the Element type.');
       return;
     }
-    toast.success('POSM type deactivated');
+    toast.success('Element type deactivated');
     setConfirm(null);
     void load();
   };
@@ -148,10 +148,10 @@ export default function PosmTypesPage() {
   const reactivate = async (p: PosmType) => {
     const res = await posmTypesApi.reactivate(p.id);
     if (!res.success) {
-      toast.error(res.error || 'Could not reactivate the POSM type.');
+      toast.error(res.error || 'Could not reactivate the Element type.');
       return;
     }
-    toast.success('POSM type reactivated');
+    toast.success('Element type reactivated');
     void load();
   };
 
@@ -209,12 +209,12 @@ export default function PosmTypesPage() {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">POSM Types</h1>
-          <p className="text-sm text-gray-500 mt-0.5">The point-of-sale material catalogue reps capture against.</p>
+          <h1 className="text-xl font-bold text-gray-900">Element Types</h1>
+          <p className="text-sm text-gray-500 mt-0.5">The Element catalogue reps capture against.</p>
         </div>
         <Button variant="primary" onClick={openCreate}>
           <Plus className="h-4 w-4" />
-          New POSM type
+          New Element type
         </Button>
       </div>
 
@@ -236,16 +236,16 @@ export default function PosmTypesPage() {
         rowKey={(p) => p.id}
         loading={loading}
         error={loadError}
-        emptyTitle={search ? 'No matching POSM types' : 'No POSM types yet'}
-        emptyDescription={search ? 'Try a different search.' : 'Create your first POSM type to get started.'}
+        emptyTitle={search ? 'No matching Element types' : 'No Element types yet'}
+        emptyDescription={search ? 'Try a different search.' : 'Create your first Element type to get started.'}
         rowClassName={(p) => (p.isActive ? undefined : 'opacity-60')}
       />
 
       <FormDialog
         open={editing !== null}
         onOpenChange={(o) => !o && setEditing(null)}
-        title={editing?.mode === 'edit' ? 'Edit POSM type' : 'New POSM type'}
-        submitLabel={editing?.mode === 'edit' ? 'Save changes' : 'Create POSM type'}
+        title={editing?.mode === 'edit' ? 'Edit Element type' : 'New Element type'}
+        submitLabel={editing?.mode === 'edit' ? 'Save changes' : 'Create Element type'}
         loading={saving || uploadingImage}
         error={formError}
         onSubmit={submit}
@@ -261,7 +261,7 @@ export default function PosmTypesPage() {
         />
         <Input
           label="Name"
-          placeholder="POSM name"
+          placeholder="Element name"
           value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           error={fieldErrors.name}
@@ -308,7 +308,7 @@ export default function PosmTypesPage() {
               {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated media stream, not a static asset */}
               <img
                 src={mediaViewUrl(form.imageKey)}
-                alt="POSM reference"
+                alt="Element reference"
                 className="h-24 w-24 rounded-lg object-cover border border-gray-200 bg-gray-50"
               />
               <Button
@@ -342,14 +342,14 @@ export default function PosmTypesPage() {
               />
             </label>
           )}
-          <p className="text-xs text-gray-400 mt-1">Shown to field executives in the POSM catalogue (JPG/PNG, under 5 MB).</p>
+          <p className="text-xs text-gray-400 mt-1">Shown to field executives in the Element catalogue (JPG/PNG, under 5 MB).</p>
         </div>
       </FormDialog>
 
       <ConfirmDialog
         open={confirm !== null}
         onOpenChange={(o) => !o && setConfirm(null)}
-        title="Deactivate POSM type?"
+        title="Deactivate Element type?"
         description={confirm ? `"${confirm.name}" (${confirm.code}) will be hidden from new captures. You can reactivate it later.` : undefined}
         confirmLabel="Deactivate"
         loading={confirmBusy}

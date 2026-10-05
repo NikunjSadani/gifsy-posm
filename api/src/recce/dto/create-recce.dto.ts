@@ -141,8 +141,8 @@ export class CreateRecceDto {
   siteId: string;
 
   @IsArray()
-  @ArrayMinSize(1, { message: 'A recce needs at least 1 POSM line' })
-  @ArrayMaxSize(2, { message: 'A recce may have at most 2 POSM lines' })
+  @ArrayMinSize(1, { message: 'A recce needs at least 1 Element line' })
+  @ArrayMaxSize(2, { message: 'A recce may have at most 2 Element lines' })
   @ValidateNested({ each: true })
   @Type(() => ReccePosmLineDto)
   posms: ReccePosmLineDto[];

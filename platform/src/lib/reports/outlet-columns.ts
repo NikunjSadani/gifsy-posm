@@ -43,7 +43,7 @@ export interface OutletColumnGroup {
  * element-name column ("Element 1" → "POSM type"). All other columns keep their name verbatim.
  */
 export function subColumnLabel(key: string): string {
-  if (key === 'Element 1' || key === 'Element 2') return 'POSM type';
+  if (key === 'Element 1' || key === 'Element 2') return 'Element type';
   const m = /^Element [12] (.+)$/.exec(key);
   return m ? m[1] : key;
 }

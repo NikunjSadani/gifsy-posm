@@ -52,8 +52,8 @@ export default function CataloguePage() {
   return (
     <div className="px-4 py-5 fade-in">
       <div className="mb-4">
-        <h1 className="text-lg font-bold text-gray-900">POSM Catalogue</h1>
-        <p className="text-sm text-gray-500 mt-0.5">All active POSM types and what they look like.</p>
+        <h1 className="text-lg font-bold text-gray-900">Element Catalogue</h1>
+        <p className="text-sm text-gray-500 mt-0.5">All active Element types and what they look like.</p>
       </div>
 
       {loading ? (
@@ -76,8 +76,8 @@ export default function CataloguePage() {
           <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center">
             <Images className="h-6 w-6 text-gray-400" />
           </div>
-          <p className="text-sm font-medium text-gray-700">No POSM types yet</p>
-          <p className="text-xs text-gray-500 mt-1">Your admin hasn’t added any POSM types.</p>
+          <p className="text-sm font-medium text-gray-700">No Element types yet</p>
+          <p className="text-xs text-gray-500 mt-1">Your admin hasn’t added any Element types.</p>
         </div>
       ) : (
         <ul className="space-y-3">

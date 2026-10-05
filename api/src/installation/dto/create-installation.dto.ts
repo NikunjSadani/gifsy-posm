@@ -60,8 +60,8 @@ export class CreateInstallationDto {
   siteId: string;
 
   @IsArray()
-  @ArrayMinSize(1, { message: 'An installation needs at least 1 POSM photo' })
-  @ArrayMaxSize(2, { message: 'An installation may have at most 2 POSM photos' })
+  @ArrayMinSize(1, { message: 'An installation needs at least 1 Element photo' })
+  @ArrayMaxSize(2, { message: 'An installation may have at most 2 Element photos' })
   @ValidateNested({ each: true })
   @Type(() => InstallPosmLineDto)
   posms: InstallPosmLineDto[];

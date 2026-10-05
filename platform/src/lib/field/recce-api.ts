@@ -185,10 +185,10 @@ export function findSiteRecce(recces: RecceListRow[], siteId: string): RecceList
 const REJECT_LABELS: Record<RejectReasonCode, string> = {
   BLURRY: 'Photo was blurry',
   WRONG_SITE: 'Wrong site',
-  POSM_NOT_VISIBLE: 'POSM not visible in the photo',
+  POSM_NOT_VISIBLE: 'Element not visible in the photo',
   GEO_MISMATCH: 'Location did not match the site',
   DUPLICATE_PHOTO: 'Duplicate photo',
-  WRONG_POSM: 'Wrong POSM',
+  WRONG_POSM: 'Wrong Element',
   DIMENSIONS_MISMATCH: 'Dimensions did not match',
   OTHER: 'Other',
 };

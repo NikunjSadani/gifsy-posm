@@ -77,9 +77,9 @@ describe('groupOutletColumns', () => {
 });
 
 describe('subColumnLabel', () => {
-  it('relabels the bare element-name column to "POSM type"', () => {
-    expect(subColumnLabel('Element 1')).toBe('POSM type');
-    expect(subColumnLabel('Element 2')).toBe('POSM type');
+  it('relabels the bare element-name column to "Element type"', () => {
+    expect(subColumnLabel('Element 1')).toBe('Element type');
+    expect(subColumnLabel('Element 2')).toBe('Element type');
   });
 
   it('strips the "Element N" prefix from element sub-columns', () => {

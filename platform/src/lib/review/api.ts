@@ -140,10 +140,10 @@ export type RejectReasonCode = (typeof REJECT_REASON_CODES)[number];
 export const REJECT_REASON_LABELS: Record<RejectReasonCode, string> = {
   BLURRY: 'Blurry / unclear photo',
   WRONG_SITE: 'Wrong site',
-  POSM_NOT_VISIBLE: 'POSM not visible',
+  POSM_NOT_VISIBLE: 'Element not visible',
   GEO_MISMATCH: 'Location mismatch',
   DUPLICATE_PHOTO: 'Duplicate photo',
-  WRONG_POSM: 'Wrong POSM',
+  WRONG_POSM: 'Wrong Element',
   DIMENSIONS_MISMATCH: 'Dimensions mismatch',
   OTHER: 'Other',
 };

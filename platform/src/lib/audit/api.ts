@@ -142,10 +142,10 @@ export interface RejectBody {
 export const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
   { code: 'BLURRY', label: 'Blurry / poor-quality photo' },
   { code: 'WRONG_SITE', label: 'Wrong site' },
-  { code: 'POSM_NOT_VISIBLE', label: 'POSM not visible' },
+  { code: 'POSM_NOT_VISIBLE', label: 'Element not visible' },
   { code: 'GEO_MISMATCH', label: 'Geo-location mismatch' },
   { code: 'DUPLICATE_PHOTO', label: 'Duplicate photo' },
-  { code: 'WRONG_POSM', label: 'Wrong POSM' },
+  { code: 'WRONG_POSM', label: 'Wrong Element' },
   { code: 'DIMENSIONS_MISMATCH', label: 'Dimensions mismatch' },
   { code: 'OTHER', label: 'Other (add a note)' },
 ];

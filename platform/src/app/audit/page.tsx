@@ -47,7 +47,7 @@ export default function AuditDashboard() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Audit dashboard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Review installed POSM against the approved recce.</p>
+          <p className="text-sm text-gray-500 mt-0.5">Review installed Elements against the approved recce.</p>
         </div>
         <button
           onClick={() => setReloadKey((k) => k + 1)}

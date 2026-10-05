@@ -330,7 +330,7 @@ export class RecceService {
       }
       if (seenKeys.has(key)) {
         throw new BadRequestException(
-          'The same photo is used on more than one POSM line — capture a distinct photo per POSM.',
+          'The same photo is used on more than one Element line — capture a distinct photo per Element.',
         );
       }
       seenKeys.add(key);
@@ -445,7 +445,7 @@ export class RecceService {
 
   private assertMaxTwo(lines: unknown[]) {
     if (!Array.isArray(lines) || lines.length < 1 || lines.length > 2) {
-      throw new BadRequestException('A recce must have 1 or 2 POSM lines.');
+      throw new BadRequestException('A recce must have 1 or 2 Element lines.');
     }
   }
 
@@ -458,8 +458,8 @@ export class RecceService {
     const byId = new Map(found.map((p) => [p.id, p]));
     for (const id of unique) {
       const p = byId.get(id);
-      if (!p) throw new BadRequestException('A posmTypeId is not a POSM type in this tenant.');
-      if (!p.isActive) throw new BadRequestException('A referenced POSM type is inactive.');
+      if (!p) throw new BadRequestException('A posmTypeId is not an Element type in this tenant.');
+      if (!p.isActive) throw new BadRequestException('A referenced Element type is inactive.');
     }
   }
 

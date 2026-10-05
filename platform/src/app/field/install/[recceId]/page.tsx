@@ -116,7 +116,7 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
     if (inFlight.current || submitting) return; // synchronous double-tap guard
     if (!recce) return;
     if (!allCaptured) {
-      toast.error('Capture an installed photo for every POSM before submitting.');
+      toast.error('Capture an installed photo for every Element before submitting.');
       return;
     }
     inFlight.current = true;
@@ -216,7 +216,7 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
             </button>
             {!allCaptured && !submitting && (
               <p className="mt-2 text-center text-xs text-gray-400">
-                Capture an installed photo for every POSM to enable submit.
+                Capture an installed photo for every Element to enable submit.
               </p>
             )}
           </div>
@@ -281,7 +281,7 @@ function InstallPosmCapture({
     <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-900">
-          POSM {posm.slotNo}: {posm.posmType.name}
+          Element {posm.slotNo}: {posm.posmType.name}
         </h3>
         <span className="font-mono text-[11px] text-gray-400">{posm.posmType.code}</span>
       </div>
@@ -296,7 +296,7 @@ function InstallPosmCapture({
 
       <div className="mt-3 min-h-[1.25rem] text-xs">
         {!beforeUrl && (
-          <p className="text-gray-400">No recce photo to overlay — capture the installed POSM.</p>
+          <p className="text-gray-400">No recce photo to overlay — capture the installed Element.</p>
         )}
         {uploading && (
           <span className="inline-flex items-center gap-1.5 text-gray-500">

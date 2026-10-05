@@ -108,7 +108,7 @@ export default function ExecutionReportPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">Execution report</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            One row per outlet — recce, installation, approvals and audit across both POSM elements.
+            One row per outlet — recce, installation, approvals and audit across both Elements.
             {!loading && !error && <> {' · '}{total} outlet{total === 1 ? '' : 's'}</>}
           </p>
         </div>

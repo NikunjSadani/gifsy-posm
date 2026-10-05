@@ -22,7 +22,7 @@ export function FieldHeader() {
               Field Execution
             </p>
             <p className="text-[var(--brand-accent)] text-[10px] font-semibold tracking-widest uppercase">
-              POSM Vendor App
+              Elements Vendor App
             </p>
           </div>
         </div>

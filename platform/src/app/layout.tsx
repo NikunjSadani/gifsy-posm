@@ -28,7 +28,7 @@ export async function generateMetadata(): Promise<Metadata> {
       default: `${config.branding.displayName} — Field Execution`,
       template: `%s | ${config.branding.displayName}`,
     },
-    description: `${config.branding.displayName} — point-of-sale material recce, approval, installation and audit.`,
+    description: `${config.branding.displayName} — Element recce, approval, installation and audit.`,
     // PWA: installable web-app manifest + iOS home-screen behaviour (online-only, no SW).
     manifest: '/manifest.webmanifest',
     appleWebApp: {

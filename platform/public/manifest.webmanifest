@@ -1,7 +1,7 @@
 {
-  "name": "Kwality POSM Field Execution",
+  "name": "Kwality Elements Field Execution",
   "short_name": "Kwality Field",
-  "description": "Point-of-sale material recce and installation for the Kwality vendor field team.",
+  "description": "Element recce and installation for the Kwality vendor field team.",
   "start_url": "/field/sites",
   "scope": "/",
   "display": "standalone",

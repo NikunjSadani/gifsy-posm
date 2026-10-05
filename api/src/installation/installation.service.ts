@@ -395,14 +395,14 @@ export class InstallationService {
         throw new BadRequestException('A reccePosmId is not part of this site\'s approved recce.');
       }
       if (seen.has(l.reccePosmId)) {
-        throw new BadRequestException('Two install photos target the same recce POSM.');
+        throw new BadRequestException('Two install photos target the same recce Element.');
       }
       seen.add(l.reccePosmId);
       const { key } = readMediaValue(l.photo);
       if (key) {
         if (seenKeys.has(key)) {
           throw new BadRequestException(
-            'The same photo is used on more than one POSM line — capture a distinct photo per POSM.',
+            'The same photo is used on more than one Element line — capture a distinct photo per Element.',
           );
         }
         seenKeys.add(key);
@@ -411,7 +411,7 @@ export class InstallationService {
     // Missing-required-photo → HARD block: every recce POSM must be fulfilled.
     for (const r of reccePosms) {
       if (!seen.has(r.id)) {
-        throw new BadRequestException('An installation must include a photo for every recce POSM.');
+        throw new BadRequestException('An installation must include a photo for every recce Element.');
       }
     }
   }

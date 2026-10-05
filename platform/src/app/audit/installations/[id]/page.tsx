@@ -175,7 +175,7 @@ export default function AuditDetailPage({ params }: { params: Promise<{ id: stri
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
               <Meta icon={User} label="Submitted by" value={item.submittedBy?.name ?? 'Unknown'} />
-              <Meta icon={Camera} label="POSMs" value={String(item.compare.length)} />
+              <Meta icon={Camera} label="Elements" value={String(item.compare.length)} />
               <Meta
                 icon={Clock}
                 label="Captured"

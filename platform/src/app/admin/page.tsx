@@ -42,8 +42,8 @@ const CARDS: CardDef[] = [
   },
   {
     href: '/admin/posm-types',
-    label: 'POSM Types',
-    description: 'Point-of-sale material catalogue',
+    label: 'Element Types',
+    description: 'Element catalogue',
     icon: Tags,
     load: async () => {
       const r = await posmTypesApi.list();

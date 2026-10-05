@@ -181,7 +181,7 @@ export function PhotoMarkup({ imageUrl, initial, onSave, onCancel }: PhotoMarkup
       tabIndex={-1}
       role="dialog"
       aria-modal="true"
-      aria-label="Mark the POSM area on the photo"
+      aria-label="Mark the Element area on the photo"
       onKeyDown={onKeyDown}
       className="fixed inset-0 z-[85] flex flex-col bg-black outline-none"
     >
@@ -236,8 +236,8 @@ export function PhotoMarkup({ imageUrl, initial, onSave, onCancel }: PhotoMarkup
           : shapes.length > 0
             ? `${shapes.length} mark${shapes.length === 1 ? '' : 's'} · ${tool === 'rect' ? 'drag a box' : 'trace a line'}`
             : tool === 'rect'
-              ? 'Drag a box around where the POSM will go.'
-              : 'Drag to draw around where the POSM will go.'}
+              ? 'Drag a box around where the Element will go.'
+              : 'Drag to draw around where the Element will go.'}
       </div>
 
       {/* Controls */}

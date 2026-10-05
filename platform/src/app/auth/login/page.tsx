@@ -82,7 +82,7 @@ function LoginInner() {
             <div className="flex items-center justify-end gap-1 mt-0.5">
               <span className="w-4 h-px bg-[var(--brand-accent)]" />
               <p className="text-[var(--brand-accent)] text-[10px] font-semibold tracking-widest uppercase">
-                POSM Vendor App
+                Elements Vendor App
               </p>
               <span className="w-4 h-px bg-[var(--brand-accent)]" />
             </div>
@@ -149,7 +149,7 @@ function LoginInner() {
           </p>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">Kwality POSM Field Execution</p>
+        <p className="text-center text-xs text-gray-400 mt-6">Kwality Elements Field Execution</p>
       </main>
     </div>
   );
