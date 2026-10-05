@@ -13,7 +13,7 @@ const P = (last) => `+9190000000${last}`; // E.164 (optional contact; login is e
 // Dev login: every seeded user shares this password. Email is the login id.
 const DEV_PASSWORD = 'Password123';
 const PWHASH = bcrypt.hashSync(DEV_PASSWORD, 10);
-const E = (name) => `${name}@kwality.in`;
+const E = (name) => `${name}@${process.env.SEED_EMAIL_DOMAIN || 'kwality.in'}`;
 
 async function main() {
   // Seed into an EXISTING tenant when SEED_CLIENT_ID is set (e.g. loading E2E fixtures into a

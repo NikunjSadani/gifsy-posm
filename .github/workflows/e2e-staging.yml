@@ -41,7 +41,7 @@ jobs:
     # Only after a SUCCESSFUL staging deploy (or manual dispatch).
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: staging
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
 
       - name: Seed E2E fixtures
         working-directory: api
-        env: { SEED_CLIENT_ID: e2e }
+        env: { SEED_CLIENT_ID: e2e, SEED_EMAIL_DOMAIN: e2e.in }
         run: |
           node scripts/seed-verify.mjs 2>/dev/null > seed.json
           cat seed.json
