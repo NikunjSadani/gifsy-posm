@@ -5,6 +5,9 @@ import {
   photoLatLng,
   distanceLabel,
   hoApprovalLabel,
+  hoRecceApprovalLabel,
+  asmRejectionReasonLabel,
+  hoRejectionReasonLabel,
   auditStatusLabel,
   asmApprovalLabel,
   type RepSite,
@@ -33,6 +36,60 @@ describe('outlet-execution helpers', () => {
     expect(auditStatusLabel({ status: 'AUDIT_REJECTED' } as any)).toBe('Rejected');
     expect(auditStatusLabel({ status: 'SUBMITTED' } as any)).toBe('Pending audit');
   });
+
+  it('hoRecceApprovalLabel maps the recce-side HO stage (N/A for NONE, empty for no recce)', () => {
+    expect(hoRecceApprovalLabel(null)).toBe('');
+    expect(hoRecceApprovalLabel({ hoReviewStatus: 'NONE' } as any)).toBe('N/A');
+    expect(hoRecceApprovalLabel({ hoReviewStatus: 'PENDING' } as any)).toBe('Pending');
+    expect(hoRecceApprovalLabel({ hoReviewStatus: 'APPROVED' } as any)).toBe('Approved');
+    expect(hoRecceApprovalLabel({ hoReviewStatus: 'REJECTED' } as any)).toBe('Rejected');
+  });
+
+  it('asmRejectionReasonLabel: only when ASM-rejected (REJECTED and HO not rejected); code + note', () => {
+    expect(asmRejectionReasonLabel(null)).toBe('');
+    // ASM-rejected with a free-text note → "<label> — <note>"
+    expect(
+      asmRejectionReasonLabel({
+        status: 'REJECTED', hoReviewStatus: 'NONE',
+        rejectionReasonCode: 'BLURRY', rejectionReason: 'left corner cut off',
+      } as any),
+    ).toBe('Blurry / unclear photo — left corner cut off');
+    // code only, no note
+    expect(
+      asmRejectionReasonLabel({
+        status: 'REJECTED', hoReviewStatus: 'NONE',
+        rejectionReasonCode: 'WRONG_SITE', rejectionReason: null,
+      } as any),
+    ).toBe('Wrong site');
+    // an HO rejection (also status REJECTED) is NOT an ASM rejection → empty here
+    expect(
+      asmRejectionReasonLabel({
+        status: 'REJECTED', hoReviewStatus: 'REJECTED',
+        rejectionReasonCode: 'BLURRY', rejectionReason: null,
+      } as any),
+    ).toBe('');
+    // not rejected at all → empty
+    expect(
+      asmRejectionReasonLabel({ status: 'APPROVED', hoReviewStatus: 'APPROVED' } as any),
+    ).toBe('');
+  });
+
+  it('hoRejectionReasonLabel: only when HO-rejected; code + note', () => {
+    expect(hoRejectionReasonLabel(null)).toBe('');
+    expect(
+      hoRejectionReasonLabel({
+        hoReviewStatus: 'REJECTED',
+        hoRejectionReasonCode: 'GEO_MISMATCH', hoRejectionReason: 'too far from site',
+      } as any),
+    ).toBe('Location mismatch — too far from site');
+    expect(
+      hoRejectionReasonLabel({ hoReviewStatus: 'REJECTED', hoRejectionReasonCode: 'OTHER', hoRejectionReason: null } as any),
+    ).toBe('Other');
+    // not HO-rejected → empty even if an ASM reason exists
+    expect(
+      hoRejectionReasonLabel({ hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null } as any),
+    ).toBe('');
+  });
 });
 
 describe('buildOutletExecutionRow', () => {
@@ -44,6 +101,11 @@ describe('buildOutletExecutionRow', () => {
     recces: [
       {
         status: 'APPROVED',
+        rejectionReasonCode: null,
+        rejectionReason: null,
+        hoReviewStatus: 'APPROVED',
+        hoRejectionReasonCode: null,
+        hoRejectionReason: null,
         capturedAt: new Date('2026-09-28T06:00:00Z'),
         receivedAt: new Date('2026-09-28T06:01:00Z'),
         captureLat: 19.24, captureLng: 73.13,
@@ -114,6 +176,45 @@ describe('buildOutletExecutionRow', () => {
     expect(row['Audit Status']).toBe('Rejected');
     expect(row['HO Approval Status']).toBe('Approved');
     expect(row['Installation Status']).toBe('Submitted');
+    // Recce-side HO stage approved; neither rejection-reason column applies on an approved recce.
+    expect(row['HO Recce Approval']).toBe('Approved');
+    expect(row['ASM Rejection Reason']).toBe('');
+    expect(row['HO Rejection Reason']).toBe('');
+  });
+
+  it('surfaces the ASM rejection reason (and leaves the HO columns empty) on an ASM-rejected recce', () => {
+    const site = fullSite();
+    site.recces[0] = {
+      ...site.recces[0],
+      status: 'REJECTED',
+      hoReviewStatus: 'NONE',
+      rejectionReasonCode: 'POSM_NOT_VISIBLE',
+      rejectionReason: 'board hidden behind shutter',
+    };
+    site.installs = [];
+    const row = buildOutletExecutionRow(site);
+    expect(row['ASM Approval Status']).toBe('Rejected');
+    expect(row['HO Recce Approval']).toBe('N/A');
+    expect(row['ASM Rejection Reason']).toBe('Element not visible — board hidden behind shutter');
+    expect(row['HO Rejection Reason']).toBe('');
+  });
+
+  it('surfaces the HO rejection reason (and leaves the ASM column empty) on an HO-rejected recce', () => {
+    const site = fullSite();
+    site.recces[0] = {
+      ...site.recces[0],
+      status: 'REJECTED',
+      hoReviewStatus: 'REJECTED',
+      rejectionReasonCode: null,
+      rejectionReason: null,
+      hoRejectionReasonCode: 'WRONG_POSM',
+      hoRejectionReason: null,
+    };
+    site.installs = [];
+    const row = buildOutletExecutionRow(site);
+    expect(row['HO Recce Approval']).toBe('Rejected');
+    expect(row['ASM Rejection Reason']).toBe('');
+    expect(row['HO Rejection Reason']).toBe('Wrong Element');
   });
 
   it('a bare outlet with no recce → "Not started" and empty downstream stages', () => {

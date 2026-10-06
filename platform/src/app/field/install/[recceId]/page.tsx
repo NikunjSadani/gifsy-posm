@@ -50,6 +50,8 @@ interface RecceGetPosm {
 interface RecceGet {
   id: string;
   status: string;
+  // The Head-Office review decision — installation needs BOTH status APPROVED and this APPROVED.
+  hoReviewStatus?: string;
   site: { id: string; code: string; name: string };
   posms: RecceGetPosm[];
 }
@@ -108,7 +110,9 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
   }, []);
 
   const posms = recce?.posms ?? [];
-  const isApproved = recce?.status === 'APPROVED';
+  // Installation unlocks ONLY when the recce is approved by BOTH the ASM (status) and Head Office
+  // (hoReviewStatus); an ASM-approved recce still awaiting HO is not yet installable.
+  const isApproved = recce?.status === 'APPROVED' && recce?.hoReviewStatus === 'APPROVED';
   const allCaptured = posms.length > 0 && posms.every((p) => captured[p.id]);
   const canSubmit = isApproved && allCaptured && !submitting;
 
@@ -176,10 +180,18 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
       {!loading && recce && !isApproved && (
         <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            This recce is <span className="font-semibold">{recce.status}</span>. Installation opens
-            once the recce is approved.
-          </span>
+          {recce.status === 'APPROVED' && recce.hoReviewStatus !== 'APPROVED' ? (
+            <span>
+              This recce is <span className="font-semibold">approved by the ASM</span> but still
+              awaiting <span className="font-semibold">Head-Office approval</span>. Installation opens
+              once Head Office approves it.
+            </span>
+          ) : (
+            <span>
+              This recce is <span className="font-semibold">{recce.status}</span>. Installation opens
+              once the recce is approved by the ASM and Head Office.
+            </span>
+          )}
         </div>
       )}
 

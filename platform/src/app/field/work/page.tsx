@@ -25,6 +25,7 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
+  ShieldCheck,
   Camera,
   Hammer,
   RefreshCw,
@@ -35,20 +36,22 @@ import { Spinner } from '@/components/ui/spinner';
 import {
   fetchMyRecces,
   groupRecces,
+  classifyRecce,
   rejectionLabel,
   type RecceListRow,
   type RecceGroup,
-  type RecceStatus,
+  type RecceGroupKey,
 } from '@/lib/field/recce-api';
 import { getOutletFilter, type OutletFilter } from '@/lib/field/outlet-filter';
 
 const STATUS_META: Record<
-  RecceStatus,
+  RecceGroupKey,
   { label: string; icon: typeof Clock; tint: string; dot: string }
 > = {
-  REJECTED: { label: 'Needs re-capture', icon: XCircle, tint: 'text-[var(--brand-primary)]', dot: '#dc2626' },
-  APPROVED: { label: 'Ready to install', icon: CheckCircle2, tint: 'text-emerald-600', dot: '#16a34a' },
-  SUBMITTED: { label: 'Awaiting approval', icon: Clock, tint: 'text-amber-600', dot: '#d97706' },
+  NEEDS_RECAPTURE: { label: 'Needs re-capture', icon: XCircle, tint: 'text-[var(--brand-primary)]', dot: '#dc2626' },
+  READY_TO_INSTALL: { label: 'Ready to install', icon: CheckCircle2, tint: 'text-emerald-600', dot: '#16a34a' },
+  AWAITING_HO: { label: 'Awaiting HO approval', icon: ShieldCheck, tint: 'text-sky-600', dot: '#0284c7' },
+  AWAITING_ASM: { label: 'Awaiting ASM approval', icon: Clock, tint: 'text-amber-600', dot: '#d97706' },
 };
 
 export default function MyWorkPage() {
@@ -201,10 +204,10 @@ export default function MyWorkPage() {
       {!loading && !error && groups.length > 0 && (
         <div className="space-y-6 pb-4">
           {groups.map((group) => {
-            const meta = STATUS_META[group.status];
+            const meta = STATUS_META[group.key];
             const Icon = meta.icon;
             return (
-              <section key={group.status}>
+              <section key={group.key}>
                 <div className="mb-2 flex items-center gap-2">
                   <Icon className={`h-4 w-4 ${meta.tint}`} />
                   <h2 className="text-sm font-bold text-gray-700">{meta.label}</h2>
@@ -214,7 +217,7 @@ export default function MyWorkPage() {
                 </div>
                 <div className="space-y-3">
                   {group.recces.map((recce) => (
-                    <RecceCard key={recce.id} recce={recce} />
+                    <RecceCard key={recce.id} recce={recce} groupKey={group.key} />
                   ))}
                 </div>
               </section>
@@ -226,9 +229,12 @@ export default function MyWorkPage() {
   );
 }
 
-// ── One recce row with its status-specific action ─────────────────────────────
-function RecceCard({ recce }: { recce: RecceListRow }) {
-  const meta = STATUS_META[recce.status];
+// ── One recce row with its group-specific action ──────────────────────────────
+function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: RecceGroupKey }) {
+  // Defensive: trust the group the parent placed this card in, but fall back to classifying the
+  // row itself so the action/copy can never drift from the recce's real ASM+HO state.
+  const key = groupKey ?? classifyRecce(recce);
+  const meta = STATUS_META[key];
   const posmLabel = `${recce.posmCount} Element${recce.posmCount === 1 ? '' : 's'}`;
 
   return (
@@ -248,20 +254,32 @@ function RecceCard({ recce }: { recce: RecceListRow }) {
         </span>
       </div>
 
-      {recce.status === 'SUBMITTED' && (
+      {key === 'AWAITING_ASM' && (
         <p className="mt-3 flex items-center gap-1.5 text-xs text-gray-500">
           <Clock className="h-3.5 w-3.5" />
           Awaiting ASM approval.
         </p>
       )}
 
-      {recce.status === 'REJECTED' && (
+      {/* ASM-approved, awaiting Head-Office sign-off — read-only, no install action yet. */}
+      {key === 'AWAITING_HO' && (
+        <p className="mt-3 flex items-center gap-1.5 text-xs text-sky-700">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+          Approved by ASM — awaiting Head-Office approval before installation.
+        </p>
+      )}
+
+      {key === 'NEEDS_RECAPTURE' && (
         <div className="mt-3">
           <div className="flex items-start gap-1.5 rounded-xl bg-red-50 p-2.5 text-xs text-red-700">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               <span className="font-semibold">Sent back:</span>{' '}
-              {rejectionLabel(recce.rejectionReasonCode) ?? 'Please re-capture and submit again.'}
+              {/* HO reject clears the ASM `rejectionReasonCode`, so read the HO reason instead when
+                  Head-Office sent it back; otherwise it's the ASM's reason. */}
+              {(recce.hoReviewStatus === 'REJECTED'
+                ? rejectionLabel(recce.hoRejectionReasonCode)
+                : rejectionLabel(recce.rejectionReasonCode)) ?? 'Please re-capture and submit again.'}
             </span>
           </div>
           <Link
@@ -274,7 +292,8 @@ function RecceCard({ recce }: { recce: RecceListRow }) {
         </div>
       )}
 
-      {recce.status === 'APPROVED' && (
+      {/* Install is offered ONLY once the recce is fully approved (ASM + HO). */}
+      {key === 'READY_TO_INSTALL' && (
         <Link
           href={`/field/install/${encodeURIComponent(recce.id)}`}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand-primary)] py-3 text-sm font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95"

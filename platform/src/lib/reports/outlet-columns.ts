@@ -14,11 +14,15 @@
 /** Columns pinned to the left edge, in display order (left → right). */
 export const PINNED_KEYS = ['Outlet Code', 'Outlet Name'] as const;
 
-/** The outlet-level rollup statuses, grouped at the far right. */
+/** The outlet-level rollup statuses, grouped at the far right (this array's order IS the display
+ *  order of the status block, so keep it in step with the backend OUTLET_REPORT_COLUMNS order). */
 const STATUS_KEYS = [
   'Outlet Recce Status',
   'ASM Approval Status',
   'HO Approval Status',
+  'HO Recce Approval',
+  'ASM Rejection Reason',
+  'HO Rejection Reason',
   'Installation Status',
   'Audit Status',
 ];

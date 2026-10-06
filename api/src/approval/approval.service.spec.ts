@@ -94,6 +94,8 @@ describe('ApprovalService.approve — transition + scope re-check on the mutatio
     expect(data.status).toBe('APPROVED');
     expect(data.approvedById).toBe('asm-7');
     expect(data.reviewedAt).toBeInstanceOf(Date);
+    // ASM approve hands the recce to the HO review stage (no longer unlocks install directly).
+    expect(data.hoReviewStatus).toBe('PENDING');
     const audit = fns.auditLog.create.mock.calls[0][0].data;
     expect(audit).toMatchObject({ action: 'APPROVE', entityType: 'RECCE', entityId: 'r1', actorId: 'asm-7' });
   });
@@ -244,6 +246,8 @@ describe('ApprovalService.bulkApprove — scoped, approve-only, skips out-of-sco
     expect(reasons).toEqual({ foreign: 'FORBIDDEN', done: 'INVALID_STATUS_APPROVED', missing: 'NOT_FOUND' });
     // Only the approvable id is written, guarded on status SUBMITTED.
     expect(fns.recce.updateMany.mock.calls[0][0].where).toMatchObject({ id: { in: ['ok'] }, status: 'SUBMITTED' });
+    // Bulk approve also hands each approved recce to the HO review stage (hoReviewStatus PENDING).
+    expect(fns.recce.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'APPROVED', hoReviewStatus: 'PENDING' });
     // Audit rows reflect the transitioned set, not the pre-read candidate list.
     expect(fns.auditLog.createMany.mock.calls[0][0].data).toEqual([
       expect.objectContaining({ entityId: 'ok', action: 'APPROVE', entityType: 'RECCE' }),

@@ -58,8 +58,9 @@ export interface ReccePosmQualityFlags {
 /**
  * ApprovalService — the ASM approval stage of the pipeline (Wave 2 REVIEW lane).
  *
- * Owns the Recce SUBMITTED → APPROVED / REJECTED transition. Approving a recce is the GATE
- * that unlocks installation for a site.
+ * Owns the Recce SUBMITTED → APPROVED / REJECTED transition. ASM approval no longer unlocks
+ * installation directly — it stamps `hoReviewStatus = PENDING`, handing the recce to the HO
+ * review stage (RecceHoReviewService); only HO approval unlocks installation for a site.
  *
  * SCOPING (the security concern) is centralised so it holds on EVERY read AND every
  * state-transition:
@@ -204,7 +205,7 @@ export class ApprovalService {
 
   // ── State transitions ────────────────────────────────────────────────────────
 
-  /** Recce SUBMITTED → APPROVED. Stamps approvedById + reviewedAt. Unlocks installation. */
+  /** Recce SUBMITTED → APPROVED. Stamps approvedById + reviewedAt + hoReviewStatus PENDING (→ HO review). */
   async approve(user: JwtPayload, id: string) {
     const recce = await this.loadForMutation(user, id);
     this.assertSubmitted(recce.status);
@@ -225,6 +226,9 @@ export class ApprovalService {
             status: 'APPROVED',
             approvedById: user.sub,
             reviewedAt: new Date(),
+            // ASM approve no longer unlocks installation — it hands the recce to the HO review
+            // stage (RecceHoReviewService). The recce enters HO review as PENDING.
+            hoReviewStatus: 'PENDING',
             // A prior rejection's reason is cleared on a subsequent approval.
             rejectionReasonCode: null,
             rejectionReason: null,
@@ -232,7 +236,14 @@ export class ApprovalService {
         })
         .catch((e) => this.conflictOnLostRace(e));
 
-      await this.audit(tx, user, 'APPROVE', id, { status: recce.status }, { status: 'APPROVED' });
+      await this.audit(
+        tx,
+        user,
+        'APPROVE',
+        id,
+        { status: recce.status },
+        { status: 'APPROVED', hoReviewStatus: 'PENDING' },
+      );
       return updated;
     });
   }
@@ -318,7 +329,9 @@ export class ApprovalService {
       approvedIds = await this.prisma.$transaction(async (tx) => {
         await tx.recce.updateMany({
           where: { id: { in: candidateIds }, status: 'SUBMITTED' },
-          data: { status: 'APPROVED', approvedById: user.sub, reviewedAt: now },
+          // Bulk approve mirrors the single-item approve: APPROVED + stamp AND hand to the HO
+          // review stage (hoReviewStatus PENDING). ASM approve no longer unlocks installation.
+          data: { status: 'APPROVED', approvedById: user.sub, reviewedAt: now, hoReviewStatus: 'PENDING' },
         });
         const transitioned = await tx.recce.findMany({
           where: {

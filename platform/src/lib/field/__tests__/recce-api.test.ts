@@ -12,14 +12,15 @@ vi.mock('@/lib/api-client', () => ({ api: { post, get } }));
 
 import {
   groupRecces,
+  classifyRecce,
   findSiteRecce,
   rejectionLabel,
   submitRecce,
   resubmitRecce,
   fetchMyRecces,
-  RECCE_STATUS_ORDER,
+  RECCE_GROUP_ORDER,
+  type RecceGroupKey,
   type RecceListRow,
-  type RecceStatus,
 } from '@/lib/field/recce-api';
 import type { CapturedReccePosm } from '@/components/field/capture/PosmCaptureCard';
 import type { RecceMarkup } from '@/lib/markup';
@@ -27,6 +28,7 @@ import type { RecceMarkup } from '@/lib/markup';
 /** Minimal recce-row factory for the grouping/lookup fixtures. */
 function row(partial: Partial<RecceListRow> & Pick<RecceListRow, 'id' | 'status'>): RecceListRow {
   return {
+    hoReviewStatus: 'NONE',
     version: 1,
     site: { id: `site-${partial.id}`, code: `C${partial.id}`, name: `Site ${partial.id}`, town: null },
     posmCount: 1,
@@ -35,28 +37,65 @@ function row(partial: Partial<RecceListRow> & Pick<RecceListRow, 'id' | 'status'
     capturedAt: null,
     receivedAt: '2026-01-01T00:00:00.000Z',
     rejectionReasonCode: null,
+    hoRejectionReasonCode: null,
     ...partial,
   };
 }
+
+describe('classifyRecce', () => {
+  it('REJECTED → NEEDS_RECAPTURE (ASM or HO sent it back)', () => {
+    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'NONE' })).toBe('NEEDS_RECAPTURE');
+    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'REJECTED' })).toBe('NEEDS_RECAPTURE');
+  });
+
+  it('SUBMITTED → AWAITING_ASM', () => {
+    expect(classifyRecce({ status: 'SUBMITTED', hoReviewStatus: 'NONE' })).toBe('AWAITING_ASM');
+  });
+
+  it('APPROVED is READY_TO_INSTALL only when HO has also approved', () => {
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED' })).toBe('READY_TO_INSTALL');
+  });
+
+  it('APPROVED but HO not yet approved → AWAITING_HO (PENDING or NONE)', () => {
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'PENDING' })).toBe('AWAITING_HO');
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'NONE' })).toBe('AWAITING_HO');
+  });
+});
 
 describe('groupRecces', () => {
   it('returns no groups for an empty list', () => {
     expect(groupRecces([])).toEqual([]);
   });
 
-  it('orders groups by action priority (REJECTED → APPROVED → SUBMITTED) and drops empties', () => {
+  it('orders groups by action priority and drops empties', () => {
     const recces = [
       row({ id: '1', status: 'SUBMITTED' }),
-      row({ id: '2', status: 'APPROVED' }),
-      row({ id: '3', status: 'REJECTED' }),
+      row({ id: '2', status: 'APPROVED', hoReviewStatus: 'PENDING' }),
+      row({ id: '3', status: 'APPROVED', hoReviewStatus: 'APPROVED' }),
+      row({ id: '4', status: 'REJECTED' }),
     ];
     const groups = groupRecces(recces);
-    expect(groups.map((g) => g.status)).toEqual(['REJECTED', 'APPROVED', 'SUBMITTED']);
+    expect(groups.map((g) => g.key)).toEqual([
+      'NEEDS_RECAPTURE',
+      'READY_TO_INSTALL',
+      'AWAITING_HO',
+      'AWAITING_ASM',
+    ]);
   });
 
-  it('only includes statuses that are present', () => {
+  it('splits APPROVED into READY_TO_INSTALL (HO approved) vs AWAITING_HO (HO pending)', () => {
+    const groups = groupRecces([
+      row({ id: '1', status: 'APPROVED', hoReviewStatus: 'APPROVED' }),
+      row({ id: '2', status: 'APPROVED', hoReviewStatus: 'PENDING' }),
+    ]);
+    expect(groups.map((g) => g.key)).toEqual(['READY_TO_INSTALL', 'AWAITING_HO']);
+    expect(groups.find((g) => g.key === 'READY_TO_INSTALL')?.recces.map((r) => r.id)).toEqual(['1']);
+    expect(groups.find((g) => g.key === 'AWAITING_HO')?.recces.map((r) => r.id)).toEqual(['2']);
+  });
+
+  it('only includes groups that are present', () => {
     const groups = groupRecces([row({ id: '1', status: 'SUBMITTED' }), row({ id: '2', status: 'SUBMITTED' })]);
-    expect(groups.map((g) => g.status)).toEqual(['SUBMITTED']);
+    expect(groups.map((g) => g.key)).toEqual(['AWAITING_ASM']);
     expect(groups[0].recces).toHaveLength(2);
   });
 
@@ -69,9 +108,9 @@ describe('groupRecces', () => {
     expect(groupRecces(recces)[0].recces.map((r) => r.id)).toEqual(['a', 'b', 'c']);
   });
 
-  it('covers every RecceStatus in the order constant', () => {
-    const all: RecceStatus[] = ['SUBMITTED', 'APPROVED', 'REJECTED'];
-    expect([...RECCE_STATUS_ORDER].sort()).toEqual([...all].sort());
+  it('covers every RecceGroupKey in the order constant', () => {
+    const all: RecceGroupKey[] = ['NEEDS_RECAPTURE', 'READY_TO_INSTALL', 'AWAITING_HO', 'AWAITING_ASM'];
+    expect([...RECCE_GROUP_ORDER].sort()).toEqual([...all].sort());
   });
 });
 

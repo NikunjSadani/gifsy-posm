@@ -33,6 +33,7 @@ import { CaptureIntegrityModule } from './capture-integrity/capture-integrity.mo
 import { RecceModule }        from './recce/recce.module';
 import { InstallationModule } from './installation/installation.module';
 import { ApprovalModule }     from './approval/approval.module';
+import { RecceHoReviewModule } from './recce-ho-review/recce-ho-review.module';
 import { AuditReviewModule }  from './audit-review/audit-review.module';
 import { HoReviewModule }     from './ho-review/ho-review.module';
 import { MediaModule }        from './media/media.module';
@@ -89,6 +90,7 @@ import { SettingsModule }     from './settings/settings.module';
     RecceModule,
     InstallationModule,
     ApprovalModule,
+    RecceHoReviewModule,
     AuditReviewModule,
     HoReviewModule,
     MediaModule,

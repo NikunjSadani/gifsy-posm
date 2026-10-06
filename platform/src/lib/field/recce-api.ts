@@ -20,6 +20,14 @@ import type { RecceMarkup } from '@/lib/markup';
 /** The recce lifecycle status (mirrors the backend `RecceStatus` enum). */
 export type RecceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
+/**
+ * The Head-Office review decision on an ASM-approved recce (mirrors the backend enum). A recce is
+ * only installable once the ASM has approved it (`status==='APPROVED'`) AND HO has too
+ * (`hoReviewStatus==='APPROVED'`). 'NONE' = not yet at the HO stage; 'PENDING' = ASM-approved,
+ * awaiting HO; 'REJECTED' pairs with `status==='REJECTED'` to mean HO sent it back.
+ */
+export type HoReviewStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
+
 /** The controlled ASM reject-reason vocabulary (mirrors the backend `RejectReasonCode`). */
 export type RejectReasonCode =
   | 'BLURRY'
@@ -43,6 +51,8 @@ export interface RecceSiteLite {
 export interface RecceListRow {
   id: string;
   status: RecceStatus;
+  /** The HO review decision — distinguishes 'ready to install' (APPROVED) from 'awaiting HO' (PENDING). */
+  hoReviewStatus: HoReviewStatus;
   version: number;
   site: RecceSiteLite;
   posmCount: number;
@@ -51,6 +61,8 @@ export interface RecceListRow {
   capturedAt: string | null;
   receivedAt: string;
   rejectionReasonCode: RejectReasonCode | null;
+  /** HO's rejection reason — set only when HO sent the recce back (hoReviewStatus === 'REJECTED'). */
+  hoRejectionReasonCode: RejectReasonCode | null;
 }
 
 /** The `GET /v1/recce` envelope payload (already unwrapped by the api-client). */
@@ -82,6 +94,8 @@ export interface RecceDetailPosm {
 export interface RecceDetail {
   id: string;
   status: RecceStatus;
+  /** The HO review decision on this recce (NONE | PENDING | APPROVED | REJECTED). */
+  hoReviewStatus: HoReviewStatus;
   version: number;
   site: { id: string; code: string; name: string; town: string | null; lat: number | null; lng: number | null };
   submittedBy: { id: string; name: string };
@@ -89,6 +103,9 @@ export interface RecceDetail {
   receivedAt: string;
   rejectionReasonCode: RejectReasonCode | null;
   rejectionReason: string | null;
+  /** HO's rejection reason when HO sent the recce back (status REJECTED && hoReviewStatus REJECTED). */
+  hoRejectionReasonCode: RejectReasonCode | null;
+  hoRejectionReason: string | null;
   posms: RecceDetailPosm[];
 }
 
@@ -165,25 +182,64 @@ export function resubmitRecce(recceId: string, posms: CapturedReccePosm[]) {
 // ── Pure workflow helpers (unit-tested) ───────────────────────────────────────
 
 /**
- * Group order for the My Work list — action-priority first: REJECTED needs the rep to
- * re-capture, APPROVED is ready to install, SUBMITTED is just awaiting review.
+ * The My Work group keys. A recce's lifecycle now has a Head-Office stage between ASM approval
+ * and installation, so APPROVED splits in two: only an HO-approved recce is 'Ready to install';
+ * an ASM-approved one still awaiting HO is read-only 'Awaiting HO approval'.
+ *
+ *   NEEDS_RECAPTURE   ← status REJECTED (ASM or HO sent it back)       — rep re-captures
+ *   READY_TO_INSTALL  ← status APPROVED && hoReviewStatus APPROVED     — rep can start install
+ *   AWAITING_HO       ← status APPROVED && hoReviewStatus !== APPROVED — read-only
+ *   AWAITING_ASM      ← status SUBMITTED                               — read-only
  */
-export const RECCE_STATUS_ORDER: RecceStatus[] = ['REJECTED', 'APPROVED', 'SUBMITTED'];
+export type RecceGroupKey = 'NEEDS_RECAPTURE' | 'READY_TO_INSTALL' | 'AWAITING_HO' | 'AWAITING_ASM';
 
-/** A non-empty group of recces sharing one status. */
+/**
+ * Group order for the My Work list — action-priority first: re-capture needs the rep, then
+ * ready-to-install is actionable, then the two read-only waiting states (HO before ASM, since an
+ * awaiting-HO recce is further along).
+ */
+export const RECCE_GROUP_ORDER: RecceGroupKey[] = [
+  'NEEDS_RECAPTURE',
+  'READY_TO_INSTALL',
+  'AWAITING_HO',
+  'AWAITING_ASM',
+];
+
+/** Short labels for each group (the My Work section headings). */
+export const RECCE_GROUP_LABELS: Record<RecceGroupKey, string> = {
+  NEEDS_RECAPTURE: 'Needs re-capture',
+  READY_TO_INSTALL: 'Ready to install',
+  AWAITING_HO: 'Awaiting HO approval',
+  AWAITING_ASM: 'Awaiting ASM approval',
+};
+
+/** A non-empty group of recces sharing one work-group key. */
 export interface RecceGroup {
-  status: RecceStatus;
+  key: RecceGroupKey;
   recces: RecceListRow[];
 }
 
 /**
- * Group recces by status into the action-priority order (REJECTED → APPROVED → SUBMITTED),
- * dropping empty groups and preserving each group's incoming order (the list is already
- * newest-first). Pure — unit-tested.
+ * Classify a single recce into its My Work group. A recce is 'Ready to install' ONLY when BOTH
+ * the ASM (status APPROVED) and HO (hoReviewStatus APPROVED) have signed off; an ASM-approved
+ * recce whose HO decision is anything else (PENDING / NONE) is still 'Awaiting HO approval' and
+ * must NOT offer the install action. Pure — unit-tested.
+ */
+export function classifyRecce(r: Pick<RecceListRow, 'status' | 'hoReviewStatus'>): RecceGroupKey {
+  if (r.status === 'REJECTED') return 'NEEDS_RECAPTURE';
+  if (r.status === 'APPROVED') {
+    return r.hoReviewStatus === 'APPROVED' ? 'READY_TO_INSTALL' : 'AWAITING_HO';
+  }
+  return 'AWAITING_ASM'; // SUBMITTED
+}
+
+/**
+ * Group recces into the action-priority order, dropping empty groups and preserving each group's
+ * incoming order (the list is already newest-first). Pure — unit-tested.
  */
 export function groupRecces(recces: RecceListRow[]): RecceGroup[] {
-  return RECCE_STATUS_ORDER
-    .map((status) => ({ status, recces: recces.filter((r) => r.status === status) }))
+  return RECCE_GROUP_ORDER
+    .map((key) => ({ key, recces: recces.filter((r) => classifyRecce(r) === key) }))
     .filter((g) => g.recces.length > 0);
 }
 

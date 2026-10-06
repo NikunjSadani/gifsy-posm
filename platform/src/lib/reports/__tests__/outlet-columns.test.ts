@@ -17,7 +17,9 @@ const SPEC_COLUMNS = [
   'Element 2', 'Element 2 Recce Status', 'Element 2 Recce Time and Date', 'Element 2 Recce Location',
   'Element 2 Installation Status', 'Element 2 Installation Time and Date', 'Element 2 Installation Location',
   'Element 2 Recce and Installation distance',
-  'Outlet Recce Status', 'ASM Approval Status', 'HO Approval Status', 'Installation Status', 'Audit Status',
+  'Outlet Recce Status', 'ASM Approval Status', 'HO Approval Status',
+  'HO Recce Approval', 'ASM Rejection Reason', 'HO Rejection Reason',
+  'Installation Status', 'Audit Status',
 ];
 
 describe('groupOutletColumns', () => {
@@ -46,10 +48,12 @@ describe('groupOutletColumns', () => {
     expect(e2.columns.every((c) => c.key.startsWith('Element 2'))).toBe(true);
   });
 
-  it('groups the 5 rollup statuses last', () => {
+  it('groups the 8 rollup statuses last', () => {
     const status = groups.find((g) => g.label === 'Overall status')!;
     expect(status.columns.map((c) => c.key)).toEqual([
-      'Outlet Recce Status', 'ASM Approval Status', 'HO Approval Status', 'Installation Status', 'Audit Status',
+      'Outlet Recce Status', 'ASM Approval Status', 'HO Approval Status',
+      'HO Recce Approval', 'ASM Rejection Reason', 'HO Rejection Reason',
+      'Installation Status', 'Audit Status',
     ]);
   });
 

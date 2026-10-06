@@ -27,6 +27,13 @@ export interface RepInstallPosm {
 export interface RepUser { name: string | null; promoterCode: string | null }
 export interface RepRecce {
   status: string;
+  // Rejection reasons carried for the report: `rejectionReason*` is the ASM's verdict, the
+  // `ho*` fields are the recce-side HO-approval stage (ASM approve → PENDING → HO approve/reject).
+  rejectionReasonCode: string | null;
+  rejectionReason: string | null;
+  hoReviewStatus: string;
+  hoRejectionReasonCode: string | null;
+  hoRejectionReason: string | null;
   capturedAt: Date | string | null;
   receivedAt: Date | string | null;
   captureLat: unknown;
@@ -96,6 +103,9 @@ export const OUTLET_REPORT_COLUMNS = [
   'Outlet Recce Status',
   'ASM Approval Status',
   'HO Approval Status',
+  'HO Recce Approval',
+  'ASM Rejection Reason',
+  'HO Rejection Reason',
   'Installation Status',
   'Audit Status',
 ] as const;
@@ -174,6 +184,55 @@ export function hoApprovalLabel(install: RepInstallation | null): string {
     default: return 'N/A'; // NONE — never escalated (auditor approved or not yet audited)
   }
 }
+/** HO verdict on the RECCE (the recce-side HO-approval stage), "" when the outlet has no recce. */
+export function hoRecceApprovalLabel(recce: RepRecce | null): string {
+  if (!recce) return '';
+  switch (recce.hoReviewStatus) {
+    case 'PENDING': return 'Pending';
+    case 'APPROVED': return 'Approved';
+    case 'REJECTED': return 'Rejected';
+    default: return 'N/A'; // NONE — ASM has not approved into HO review yet
+  }
+}
+
+/**
+ * Human labels for the RejectReasonCode vocabulary. Mirrors the FE REJECT_REASON_LABELS
+ * (platform/src/lib/review/api.ts) — kept as a local copy so the backend helper stays FE-free
+ * (no cross-layer import); keep the two in step if the vocabulary changes.
+ */
+const REJECT_REASON_LABELS: Record<string, string> = {
+  BLURRY: 'Blurry / unclear photo',
+  WRONG_SITE: 'Wrong site',
+  POSM_NOT_VISIBLE: 'Element not visible',
+  GEO_MISMATCH: 'Location mismatch',
+  DUPLICATE_PHOTO: 'Duplicate photo',
+  WRONG_POSM: 'Wrong Element',
+  DIMENSIONS_MISMATCH: 'Dimensions mismatch',
+  OTHER: 'Other',
+};
+
+/** "<reason label> — <free text>" from a reject code + optional note; "" when neither is present. */
+function rejectReasonText(code: string | null, note: string | null): string {
+  const label = code ? (REJECT_REASON_LABELS[code] ?? code) : '';
+  const text = note?.trim() ?? '';
+  if (label && text) return `${label} — ${text}`;
+  return label || text;
+}
+/**
+ * The ASM's rejection reason on the recce — only when the recce is ASM-rejected, i.e. status
+ * REJECTED while HO has NOT rejected it (an HO rejection also sets status REJECTED). "" otherwise.
+ */
+export function asmRejectionReasonLabel(recce: RepRecce | null): string {
+  if (!recce) return '';
+  if (recce.status !== 'REJECTED' || recce.hoReviewStatus === 'REJECTED') return '';
+  return rejectReasonText(recce.rejectionReasonCode, recce.rejectionReason);
+}
+/** The HO's rejection reason on the recce — only when HO-rejected (hoReviewStatus REJECTED); "" otherwise. */
+export function hoRejectionReasonLabel(recce: RepRecce | null): string {
+  if (!recce) return '';
+  if (recce.hoReviewStatus !== 'REJECTED') return '';
+  return rejectReasonText(recce.hoRejectionReasonCode, recce.hoRejectionReason);
+}
 /** Auditor verdict on the installation, "" when not installed. */
 export function auditStatusLabel(install: RepInstallation | null): string {
   if (!install) return '';
@@ -238,6 +297,9 @@ export function buildOutletExecutionRow(site: RepSite): Record<string, string> {
   row['Outlet Recce Status'] = recceStatusLabel(recce);
   row['ASM Approval Status'] = asmApprovalLabel(recce);
   row['HO Approval Status'] = hoApprovalLabel(install);
+  row['HO Recce Approval'] = hoRecceApprovalLabel(recce);
+  row['ASM Rejection Reason'] = asmRejectionReasonLabel(recce);
+  row['HO Rejection Reason'] = hoRejectionReasonLabel(recce);
   row['Installation Status'] = install ? 'Submitted' : recce ? 'Not installed' : '';
   row['Audit Status'] = auditStatusLabel(install);
 

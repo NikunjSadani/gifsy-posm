@@ -1,0 +1,295 @@
+'use client';
+
+/**
+ * HO recce-review detail — the Head-Office decision desk for one ASM-approved recce. Shows the
+ * captured recce photos (reusing the ASM review console's `PhotoViewer` + integrity signals) and
+ * the two decisions: Approve (recce clears HO, installation unlocks) and Reject (uphold back to
+ * the field for re-capture — status returns to REJECTED).
+ *
+ * Data source: GET /api/recce-ho-review/recces/:id (CLIENT_ADMIN / GIFSY_ADMIN-scoped). Only a
+ * recce still awaiting HO review (hoReviewStatus PENDING) is actionable; anything already decided
+ * (or out of scope) shows the honest "no longer awaiting HO review" state with no dead action bar.
+ */
+
+import { use, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import toast from 'react-hot-toast';
+import {
+  ArrowLeft, CheckCircle2, XCircle, MapPin, User, Clock, ShieldCheck, ShieldAlert,
+  ShieldQuestion, AlertTriangle,
+} from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
+import { PhotoViewer } from '@/components/review/photo-viewer';
+import { ConfirmDialog } from '@/components/review/confirm-dialog';
+import { RejectDialog } from '@/components/review/reject-dialog';
+import { recceFlags, type RejectBody } from '@/lib/review/api';
+import {
+  approveHoRecce,
+  fetchHoRecce,
+  rejectHoRecce,
+  type HoRecceItem,
+} from '@/lib/recce-ho-review/api';
+import { formatDateTime } from '@/lib/utils';
+
+export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const router = useRouter();
+
+  const [item, setItem] = useState<HoRecceItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false); // no longer PENDING HO review
+
+  const [confirmApprove, setConfirmApprove] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setGone(false);
+    fetchHoRecce(id).then((res) => {
+      if (cancelled) return;
+      if (res.success) {
+        if (res.data.hoReviewStatus === 'PENDING') setItem(res.data);
+        else setGone(true);
+      } else if (res.status === 404) {
+        setGone(true);
+      } else {
+        setError(res.error || 'Could not load this recce.');
+      }
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const siteLabel = item ? `${item.site.name} (${item.site.code})` : 'this recce';
+
+  const doApprove = async () => {
+    setSubmitting(true);
+    const res = await approveHoRecce(id);
+    setSubmitting(false);
+    if (res.success) {
+      setConfirmApprove(false);
+      toast.success('Approved — installation is unlocked for this site.');
+      router.push('/admin/recce-ho-review');
+    } else {
+      toast.error(res.error || 'Could not approve. Please try again.');
+      if (res.status === 409) { setConfirmApprove(false); setGone(true); }
+    }
+  };
+
+  const doReject = async (body: RejectBody) => {
+    setSubmitting(true);
+    const res = await rejectHoRecce(id, body);
+    setSubmitting(false);
+    if (res.success) {
+      setRejectOpen(false);
+      toast.success('Rejected — the recce is sent back for re-capture.');
+      router.push('/admin/recce-ho-review');
+    } else {
+      toast.error(res.error || 'Could not submit. Please try again.');
+      if (res.status === 409) { setRejectOpen(false); setGone(true); }
+    }
+  };
+
+  const flags = item ? recceFlags(item) : [];
+
+  return (
+    <div className="fade-in pb-24" data-testid="recce-ho-review-detail">
+      <Link
+        href="/admin/recce-ho-review"
+        className="inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 mb-4 active:scale-95 transition-transform"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to HO recce review
+      </Link>
+
+      {loading ? (
+        <div className="flex justify-center py-20"><Spinner size="lg" /></div>
+      ) : error ? (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm text-center py-16 px-6">
+          <div className="text-4xl mb-3">⚠️</div>
+          <p className="text-sm text-gray-600">{error}</p>
+          <Link href="/admin/recce-ho-review" className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-[var(--brand-primary)] hover:bg-[var(--brand-primary-dark)] text-white text-sm font-semibold px-4 py-2 active:scale-95 transition-all">
+            Back to HO recce review
+          </Link>
+        </div>
+      ) : gone || !item ? (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm text-center py-16 px-6" data-testid="recce-ho-review-already-reviewed">
+          <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center">
+            <CheckCircle2 className="h-6 w-6 text-gray-400" />
+          </div>
+          <p className="text-sm font-medium text-gray-700">No longer awaiting HO review</p>
+          <p className="text-xs text-gray-500 mt-1">This recce has already been decided or is outside your scope.</p>
+          <Link href="/admin/recce-ho-review" className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-[var(--brand-primary)] hover:bg-[var(--brand-primary-dark)] text-white text-sm font-semibold px-4 py-2 active:scale-95 transition-all">
+            Back to HO recce review
+          </Link>
+        </div>
+      ) : (
+        <>
+          {/* Site header + submission context */}
+          <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm mb-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-xl font-bold text-gray-900">{item.site.name}</h1>
+                  <span className="text-sm font-medium text-gray-400">{item.site.code}</span>
+                  {item.version > 1 && (
+                    <span className="text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-full px-2 py-0.5">
+                      Recapture v{item.version}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1 mt-2 text-sm text-gray-600">
+                  {item.site.town && (
+                    <span className="flex items-center gap-1.5"><MapPin className="h-4 w-4 text-gray-400" /> {item.site.town}</span>
+                  )}
+                  {item.submittedBy && (
+                    <span className="flex items-center gap-1.5"><User className="h-4 w-4 text-gray-400" /> {item.submittedBy.name}</span>
+                  )}
+                  {item.capturedAt && (
+                    <span className="flex items-center gap-1.5"><Clock className="h-4 w-4 text-gray-400" /> Captured {formatDateTime(item.capturedAt)}</span>
+                  )}
+                  {item.receivedAt && (
+                    <span className="flex items-center gap-1.5"><Clock className="h-4 w-4 text-gray-400" /> Received {formatDateTime(item.receivedAt)}</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Geo-fence badge */}
+              <div className="shrink-0">
+                {item.integrity.geoFenceOk === true ? (
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1.5">
+                    <ShieldCheck className="h-4 w-4" /> Inside geo-fence
+                  </span>
+                ) : item.integrity.geoFenceOk === false ? (
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-3 py-1.5">
+                    <ShieldAlert className="h-4 w-4" /> Outside geo-fence
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-3 py-1.5">
+                    <ShieldQuestion className="h-4 w-4" /> Location not verified
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Integrity detail */}
+            {(item.integrity.distanceMeters != null ||
+              item.integrity.captureAccuracy != null ||
+              (item.integrity.captureLat != null && item.integrity.captureLng != null)) && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-gray-100">
+                {item.integrity.distanceMeters != null && (
+                  <Stat label="Distance from site" value={`${Math.round(item.integrity.distanceMeters)} m`} />
+                )}
+                {item.integrity.captureAccuracy != null && (
+                  <Stat label="GPS accuracy" value={`±${Math.round(item.integrity.captureAccuracy)} m`} />
+                )}
+                {item.integrity.captureLat != null && item.integrity.captureLng != null && (
+                  <Stat
+                    label="Capture location"
+                    value={`${item.integrity.captureLat.toFixed(5)}, ${item.integrity.captureLng.toFixed(5)}`}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* HO context banner */}
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-4">
+            <p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-800">
+              <ShieldCheck className="h-4 w-4" />
+              ASM approved · awaiting HO
+            </p>
+            <p className="mt-1 text-sm text-emerald-900">
+              Approve to clear Head-Office review (installation unlocks for this site), or reject to
+              send it back to the field for re-capture.
+            </p>
+          </div>
+
+          {/* Integrity flags */}
+          {flags.length > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 mb-4">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-800">
+                <AlertTriangle className="h-4 w-4" /> Review carefully — {flags.length} flag{flags.length === 1 ? '' : 's'}
+              </p>
+              <ul className="mt-2 space-y-1">
+                {flags.map((f) => (
+                  <li key={f} className="text-sm text-amber-700 flex items-center gap-1.5">
+                    <span className="h-1 w-1 rounded-full bg-amber-500 shrink-0" /> {f}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Photos */}
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 mb-2">
+              Element photos ({item.posms.length})
+            </h2>
+            <PhotoViewer posms={item.posms} />
+          </div>
+
+          {/* Sticky action bar */}
+          <div className="fixed inset-x-0 bottom-0 z-40 bg-white/95 backdrop-blur border-t border-gray-200">
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setRejectOpen(true)}
+                disabled={submitting}
+                data-testid="recce-ho-review-reject"
+                className="flex items-center gap-1.5 text-sm font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl px-4 py-2.5 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <XCircle className="h-4 w-4" /> Reject (uphold back to recce)
+              </button>
+              <button
+                onClick={() => setConfirmApprove(true)}
+                disabled={submitting}
+                data-testid="recce-ho-review-approve"
+                className="flex items-center gap-1.5 text-sm font-semibold text-white bg-[var(--brand-confirm)] hover:brightness-95 rounded-xl px-5 py-2.5 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <CheckCircle2 className="h-4 w-4" /> Approve
+              </button>
+            </div>
+          </div>
+
+          <ConfirmDialog
+            open={confirmApprove}
+            title="Approve this recce?"
+            message={
+              <>
+                Approving <span className="font-semibold">{item.site.name}</span> ({item.site.code}) clears
+                Head-Office review and unlocks installation for this site. This can&apos;t be undone from here.
+              </>
+            }
+            confirmLabel="Approve"
+            confirmVariant="primary"
+            loading={submitting}
+            onConfirm={() => void doApprove()}
+            onCancel={() => !submitting && setConfirmApprove(false)}
+          />
+
+          <RejectDialog
+            open={rejectOpen}
+            siteLabel={siteLabel}
+            loading={submitting}
+            onConfirm={(body) => void doReject(body)}
+            onCancel={() => !submitting && setRejectOpen(false)}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-gray-400">{label}</p>
+      <p className="text-sm font-semibold text-gray-900 mt-0.5">{value}</p>
+    </div>
+  );
+}

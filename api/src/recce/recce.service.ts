@@ -1,7 +1,7 @@
 import {
   BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
-import { Prisma, RecceStatus } from '@prisma/client';
+import { Prisma, RecceStatus, HoReviewStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope } from '../common/tenant-scope';
@@ -186,6 +186,14 @@ export class RecceService {
             reviewedAt: null,
             rejectionReasonCode: null,
             rejectionReason: null,
+            // A re-captured recce re-enters the pipeline from scratch: clear the HO review stage
+            // (set by a prior ASM approve) so a previously HO-rejected/pending recce returns to NONE
+            // and must be re-approved by the ASM (→ PENDING) then HO before installation.
+            hoReviewStatus: HoReviewStatus.NONE,
+            hoReviewedById: null,
+            hoReviewedAt: null,
+            hoRejectionReasonCode: null,
+            hoRejectionReason: null,
             ...prepared.geo,
             posms: { create: prepared.posmCreate },
           },
@@ -270,6 +278,8 @@ export class RecceService {
     const recces = rows.map((r) => ({
       id: r.id,
       status: r.status,
+      // The HO review verdict the field app needs to gate installation + render the re-recce banner.
+      hoReviewStatus: r.hoReviewStatus,
       version: r.version,
       site: r.site,
       posmCount: r.posms.length,
@@ -278,6 +288,9 @@ export class RecceService {
       capturedAt: r.capturedAt,
       receivedAt: r.receivedAt,
       rejectionReasonCode: r.rejectionReasonCode,
+      // The HO rejection reason (null unless HO sent it back) — the My Work re-capture card reads
+      // this when hoReviewStatus === 'REJECTED', since the ASM `rejectionReasonCode` is null then.
+      hoRejectionReasonCode: r.hoRejectionReasonCode,
     }));
     return { recces, total, page, limit };
   }
@@ -496,6 +509,7 @@ export class RecceService {
       distanceMeters: Prisma.Decimal | null; geoFenceOk: boolean | null;
       capturedAt: Date | null; receivedAt: Date;
       rejectionReasonCode: unknown; rejectionReason: string | null;
+      hoReviewStatus: HoReviewStatus; hoRejectionReasonCode: unknown; hoRejectionReason: string | null;
       site: { id: string; code: string; name: string; town: string | null; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null };
       submittedBy: { id: string; name: string };
       posms: { id: string; slotNo: number; posmTypeId: string; dimensions: unknown; photo: unknown; markup: unknown; qualityFlags: unknown; posmType: { id: string; code: string; name: string } }[];
@@ -534,6 +548,10 @@ export class RecceService {
       receivedAt: r.receivedAt,
       rejectionReasonCode: r.rejectionReasonCode ?? null,
       rejectionReason: r.rejectionReason ?? null,
+      // HO review stage surfaced for the field app's re-recce banner + install gating.
+      hoReviewStatus: r.hoReviewStatus,
+      hoRejectionReasonCode: r.hoRejectionReasonCode ?? null,
+      hoRejectionReason: r.hoRejectionReason ?? null,
       posms: r.posms.map((p) => ({
         id: p.id,
         slotNo: p.slotNo,

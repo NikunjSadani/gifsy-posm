@@ -218,6 +218,7 @@ describe('ReportsService.computeCounts', () => {
     const { service, fns } = makeService();
     fns.recce.count
       .mockResolvedValueOnce(3) // pendingRecceReview
+      .mockResolvedValueOnce(9) // pendingHoReview (ASM-approved, awaiting HO)
       .mockResolvedValueOnce(1) // staleRecces
       .mockResolvedValueOnce(5) // approvedRecceLast24h
       .mockResolvedValueOnce(2); // rejectedRecceLast24h
@@ -230,6 +231,7 @@ describe('ReportsService.computeCounts', () => {
     const counts = await service.computeCounts('c1', fullConfig() as never, new Date());
     expect(counts).toEqual({
       pendingRecceReview: 3,
+      pendingHoReview: 9,
       pendingInstallAudit: 4,
       openManualTasks: 6,
       manualPendingReview: 7,
@@ -238,6 +240,26 @@ describe('ReportsService.computeCounts', () => {
       approvedRecceLast24h: 5,
       rejectedRecceLast24h: 2,
     });
+  });
+
+  it('counts pendingHoReview as APPROVED recces awaiting HO, and renders the digest line', async () => {
+    const { service, fns } = makeService();
+    await service.computeCounts('c1', fullConfig() as never, new Date());
+    // The new count pins the tenant + status APPROVED + hoReviewStatus PENDING.
+    const hoCall = fns.recce.count.mock.calls.find(
+      (c: any[]) => c[0].where.status === 'APPROVED' && c[0].where.hoReviewStatus === 'PENDING',
+    );
+    expect(hoCall).toBeDefined();
+    expect(hoCall[0].where.clientId).toBe('c1');
+
+    // And it surfaces as a dedicated line in the rendered digest (mirrors the pending-recce line).
+    const html = service.buildDigestHtml('Acme', {
+      pendingRecceReview: 0, pendingHoReview: 4, pendingInstallAudit: 0, openManualTasks: 0,
+      manualPendingReview: 0, staleRecces: 0, staleInstalls: 0, approvedRecceLast24h: 0,
+      rejectedRecceLast24h: 0,
+    }, new Date());
+    expect(html).toContain('Recces awaiting HO approval');
+    expect(html).toContain('>4<');
   });
 });
 

@@ -70,6 +70,11 @@ async function buildEscalatedInstall(
   const approveRes = await api.post(`/v1/approval/recces/${recceId}/approve`, auth(tokens.asm));
   expect(approveRes.ok(), `ASM approve recce: ${await approveRes.text()}`).toBeTruthy();
 
+  // HO-review gate: an HO/Admin must approve the recce after the ASM approval, else the
+  // installation POST below returns 409.
+  const hoApproveRes = await api.post(`/v1/recce-ho-review/recces/${recceId}/approve`, auth(tokens.admin));
+  expect(hoApproveRes.ok(), `HO approve recce: ${await hoApproveRes.text()}`).toBeTruthy();
+
   const recceGet = await api.get(`/v1/approval/recces/${recceId}`, auth(tokens.admin));
   expect(recceGet.ok()).toBeTruthy();
   const reccePosmId = (await recceGet.json()).data.posms[0].id as string;

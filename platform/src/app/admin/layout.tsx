@@ -18,7 +18,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3,
-  Mail, Settings, HelpCircle, ShieldCheck, FileSpreadsheet, Menu, X, type LucideIcon,
+  Mail, Settings, HelpCircle, ShieldCheck, ClipboardCheck, FileSpreadsheet, Menu, X, type LucideIcon,
 } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { logout } from '@/lib/auth-client';
@@ -54,6 +54,7 @@ const SECTIONS: NavSection[] = [
     title: 'Operations',
     items: [
       { href: '/admin/manual', label: 'Manual tasks', icon: ClipboardList },
+      { href: '/admin/recce-ho-review', label: 'HO recce review', icon: ClipboardCheck },
       { href: '/admin/ho-review', label: 'HO review', icon: ShieldCheck },
     ],
   },

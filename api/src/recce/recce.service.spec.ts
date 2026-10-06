@@ -197,6 +197,55 @@ describe('RecceService', () => {
     expect(mockPrisma.recce.findFirst).not.toHaveBeenCalled();
   });
 
+  // ── Resubmit clears the HO review stage back to NONE ────────────────────────────
+  it('resubmit: a REJECTED recce → SUBMITTED and CLEARS the HO review fields back to NONE', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
+    mockIntegrity.hash.mockReturnValue('hash-1');
+    // The scoped findFirst returns a REJECTED recce whose HO stage was previously stamped.
+    mockPrisma.recce.findFirst.mockResolvedValue({
+      id: 'r1', status: 'REJECTED', version: 2,
+      hoReviewStatus: 'REJECTED', hoReviewedById: 'ho-9', hoReviewedAt: new Date(),
+      hoRejectionReasonCode: 'BLURRY', hoRejectionReason: 'HO said redo',
+      site: { ...activeSite },
+    });
+
+    const updatedRow = {
+      id: 'r1', status: 'SUBMITTED', version: 3,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      hoReviewStatus: 'NONE', hoRejectionReasonCode: null, hoRejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { update: jest.fn().mockResolvedValue(updatedRow) },
+      reccePosm: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    await service.resubmit(vendorField, 'r1', { posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+
+    const data = tx.recce.update.mock.calls[0][0].data;
+    expect(data.status).toBe('SUBMITTED');
+    // ASM-review fields cleared (pre-existing contract)...
+    expect(data.approvedById).toBeNull();
+    expect(data.reviewedAt).toBeNull();
+    expect(data.rejectionReasonCode).toBeNull();
+    expect(data.rejectionReason).toBeNull();
+    // ...AND the HO review stage is reset to NONE so the recce re-enters the pipeline from scratch.
+    expect(data.hoReviewStatus).toBe('NONE');
+    expect(data.hoReviewedById).toBeNull();
+    expect(data.hoReviewedAt).toBeNull();
+    expect(data.hoRejectionReasonCode).toBeNull();
+    expect(data.hoRejectionReason).toBeNull();
+  });
+
   // ── A4 clean 409 on a create race ──────────────────────────────────────────────
   it('A4: a P2002 unique-violation race on create surfaces a 409, not a raw 500', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
@@ -368,6 +417,26 @@ describe('RecceService', () => {
       vendorId: 'vA',
       code: { contains: 'ST', mode: 'insensitive' },
       rsCode: { equals: 'RS1', mode: 'insensitive' },
+    });
+  });
+
+  it('list: each row carries hoReviewStatus + hoRejectionReasonCode (so the re-capture card can show the HO reason)', async () => {
+    mockPrisma.recce.findMany.mockResolvedValue([
+      {
+        id: 'r1', status: 'REJECTED', hoReviewStatus: 'REJECTED', version: 2,
+        geoFenceOk: true, distanceMeters: 0, capturedAt: null, receivedAt: new Date(),
+        rejectionReasonCode: null, hoRejectionReasonCode: 'GEO_MISMATCH',
+        site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai' },
+        posms: [{ id: 'rp1', slotNo: 1 }],
+      },
+    ]);
+    mockPrisma.recce.count.mockResolvedValue(1);
+    const res = await service.list(vendorField, {} as any);
+    expect(res.recces[0]).toMatchObject({
+      id: 'r1',
+      hoReviewStatus: 'REJECTED',
+      rejectionReasonCode: null,
+      hoRejectionReasonCode: 'GEO_MISMATCH',
     });
   });
 });

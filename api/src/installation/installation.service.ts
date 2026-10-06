@@ -1,7 +1,7 @@
 import {
   BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
-import { Prisma, InstallationStatus, RecceStatus } from '@prisma/client';
+import { Prisma, InstallationStatus, RecceStatus, HoReviewStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope } from '../common/tenant-scope';
@@ -56,7 +56,7 @@ interface PreparedInstallation {
  *     may submit — fail-closed via `vendorScope`; a foreign/other-vendor/other-tenant site is
  *     INVISIBLE (404).
  *   - The site must be ACTIVE.
- *   - Installation is allowed ONLY when the site's recce is APPROVED (else 409).
+ *   - Installation is allowed ONLY when the site's recce is ASM-APPROVED AND HO-APPROVED (else 409).
  *   - Exactly one photo per recce POSM (1:1, complete): a missing photo is a HARD block; an
  *     unknown/duplicate reccePosmId is rejected.
  *   - One installation per recce (`Installation.recceId @unique`): a second submit → 409.
@@ -75,14 +75,21 @@ export class InstallationService {
     const clientId = user.clientId;
     const site = await this.loadOwnedActiveSite(user, dto.siteId);
 
-    // The site's recce must exist AND be APPROVED (the ASM gate) — else 409.
+    // The site's recce must exist, be ASM-APPROVED, AND be HO-APPROVED (the two-stage gate) —
+    // else 409. ASM approval alone no longer unlocks installation; the recce must clear the HO
+    // review stage (hoReviewStatus APPROVED). `include` auto-selects every Recce scalar, so
+    // `hoReviewStatus` rides along here.
     const recce = await this.prisma.recce.findUnique({
       where: { clientId_siteId: { clientId, siteId: site.id } },
       include: { posms: true, installation: { select: { id: true } } },
     });
-    if (!recce || recce.status !== RecceStatus.APPROVED) {
+    if (
+      !recce ||
+      recce.status !== RecceStatus.APPROVED ||
+      recce.hoReviewStatus !== HoReviewStatus.APPROVED
+    ) {
       throw new ConflictException(
-        "Installation requires the site's recce to be APPROVED first.",
+        "Installation requires the site's recce to be HO-approved first.",
       );
     }
     if (recce.installation) {

@@ -112,6 +112,13 @@ test.describe.serial('capture pipeline (recce → approve → install → audit)
     expect(reccePosmId).toBeTruthy();
   });
 
+  test('3b · HO approves the recce (API) — now required before installation', async () => {
+    // The recce HO-review gate: after the ASM approval, an HO (CLIENT_ADMIN/GIFSY_ADMIN) must
+    // approve the recce before installation is allowed, else POST /v1/installation returns 409.
+    const res = await api.post(`/v1/recce-ho-review/recces/${recceId}/approve`, { headers: { Authorization: `Bearer ${adminTok}` } });
+    expect(res.ok(), `HO approve recce: ${await res.text()}`).toBeTruthy();
+  });
+
   test('4 · field submits the installation (API capture, distinct photo)', async () => {
     const key = await uploadPhoto(api, fieldTok, INSTALL_PNG, 'install.png', `${code}-install`);
     const res = await api.post('/v1/installation', {

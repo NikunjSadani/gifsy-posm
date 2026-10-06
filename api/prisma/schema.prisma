@@ -34,79 +34,80 @@ datasource db {
 /// A tenant. One deploy serves many (Kwality + future POSM clients).
 model Client {
   id        String   @id @default(cuid())
-  slug      String   @unique                 // e.g. "kwality"
+  slug      String   @unique // e.g. "kwality"
   name      String
-  features  Json     @default("{}")          // per-tenant flags (posmEnabled, nearbyOutletsEnabled, …)
-  branding  Json     @default("{}")          // primaryColor etc. → CSS vars (chassis pattern)
-  settings  Json     @default("{}")          // PosmConfig lives here (settings-backed, like VisibilityConfig)
+  features  Json     @default("{}") // per-tenant flags (posmEnabled, nearbyOutletsEnabled, …)
+  branding  Json     @default("{}") // primaryColor etc. → CSS vars (chassis pattern)
+  settings  Json     @default("{}") // PosmConfig lives here (settings-backed, like VisibilityConfig)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users    User[]
-  vendors  Vendor[]
-  sites    Site[]
+  users     User[]
+  vendors   Vendor[]
+  sites     Site[]
   posmTypes PosmType[]
   // Opposite relation fields required by Prisma for Recce.client / Installation.client
   // (the relations already exist on those models; these are the mandatory back-references).
-  recces   Recce[]
-  installs Installation[]
+  recces    Recce[]
+  installs  Installation[]
 
   @@map("clients")
 }
 
 enum UserRole {
-  GIFSY_ADMIN   // platform operator (cross-tenant)
-  CLIENT_ADMIN  // the brand's admin (Kwality HO)
-  ASM           // approves recces
-  AUDITOR       // audits installations
-  VENDOR_HO     // vendor head-office (read-only over its fleet)
-  VENDOR_FIELD  // the 7–10 on-ground login IDs
+  GIFSY_ADMIN // platform operator (cross-tenant)
+  CLIENT_ADMIN // the brand's admin (Kwality HO)
+  ASM // approves recces
+  AUDITOR // audits installations
+  VENDOR_HO // vendor head-office (read-only over its fleet)
+  VENDOR_FIELD // the 7–10 on-ground login IDs
 }
 
 /// Every human login. Vendor field IDs are User rows with role VENDOR_FIELD +
 /// vendorId set — the chassis JwtPayload already carries an optional vendorId,
 /// so vendor-fleet scoping rides the existing RBAC (blueprint: express in chassis).
 model User {
-  id        String   @id @default(cuid())
-  clientId  String
+  id                    String    @id @default(cuid())
+  clientId              String
   // Login identity is EMAIL + password (owner decision 2026-10-01; replaced phone+OTP). `email` is
   // unique per tenant and REQUIRED to log in; `passwordHash` null ⇒ login disabled until an admin
   // sets a password. `phone` is now an OPTIONAL contact field (notifications), no longer the login id.
-  email     String?
-  passwordHash String?
+  email                 String?
+  passwordHash          String?
   // Brute-force lockout: N consecutive failures locks the account until `lockedUntil`.
-  failedLoginAttempts Int      @default(0)
-  lockedUntil         DateTime?
-  phone     String?
-  name      String
-  role      UserRole
-  vendorId  String?                          // set for VENDOR_FIELD / VENDOR_HO
-  promoterCode String?                        // field-user promoter/employee code (report ID column); owner-supplied
-  isActive  Boolean  @default(true)
+  failedLoginAttempts   Int       @default(0)
+  lockedUntil           DateTime?
+  phone                 String?
+  name                  String
+  role                  UserRole
+  vendorId              String? // set for VENDOR_FIELD / VENDOR_HO
+  promoterCode          String? // field-user promoter/employee code (report ID column); owner-supplied
+  isActive              Boolean   @default(true)
   // Session kill-switch authority (chassis auth pattern, ported from loyalty). When a
   // "log out everywhere" / deactivation / refresh-reuse stamps this to `now`, every session
   // whose createdAt predates it is treated as dead by refreshToken + jwt.strategy — so a
   // racing refresh cannot outlive logout-all. Nullable: no stamp ⇒ no invalidation.
   sessionsInvalidBefore DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  client   Client   @relation(fields: [clientId], references: [id])
-  vendor   Vendor?  @relation(fields: [vendorId], references: [id])
+  client   Client        @relation(fields: [clientId], references: [id])
+  vendor   Vendor?       @relation(fields: [vendorId], references: [id])
   sessions UserSession[]
 
   // reverse relations for actor stamps
-  asmSites          Site[]         @relation("SiteAsm")
-  approvedRecces    Recce[]        @relation("RecceApprover")
-  submittedRecces   Recce[]        @relation("RecceSubmitter")
-  auditedInstalls   Installation[] @relation("InstallAuditor")
-  submittedInstalls Installation[] @relation("InstallSubmitter")
+  asmSites           Site[]         @relation("SiteAsm")
+  approvedRecces     Recce[]        @relation("RecceApprover")
+  submittedRecces    Recce[]        @relation("RecceSubmitter")
+  auditedInstalls    Installation[] @relation("InstallAuditor")
+  submittedInstalls  Installation[] @relation("InstallSubmitter")
   hoReviewedInstalls Installation[] @relation("InstallHoReviewer")
+  hoReviewedRecces   Recce[]        @relation("RecceHoReviewer")
 
   // Email is the login id — unique per tenant when set (Postgres NULLs are distinct, so pre-email
   // rows don't collide; a user can't log in until an admin assigns an email + password).
   @@unique([clientId, email])
-  @@unique([clientId, phone])                 // phone kept unique per tenant (now optional contact)
+  @@unique([clientId, phone]) // phone kept unique per tenant (now optional contact)
   // Promoter code is unique per tenant when set. Postgres treats NULLs as distinct, so the many
   // existing users with a null code do not collide — only a duplicate non-null code is rejected.
   @@unique([clientId, promoterCode])
@@ -117,14 +118,14 @@ model User {
 
 /// Rolling 7-day session with single-use refresh rotation (chassis auth pattern).
 model UserSession {
-  id                  String   @id @default(cuid())
-  userId              String
-  refreshTokenHash    String   @unique
-  rotatedFromId       String?
-  expiresAt           DateTime
-  revokedAt           DateTime?
-  createdAt           DateTime @default(now())
-  lastSeenAt          DateTime @default(now())
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String    @unique
+  rotatedFromId    String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
@@ -203,20 +204,20 @@ model Site {
   code      String
   name      String
   phone     String?
-  lat       Decimal?   @db.Decimal(10, 8)    // authoritative reference for the geo-fence
+  lat       Decimal?   @db.Decimal(10, 8) // authoritative reference for the geo-fence
   lng       Decimal?   @db.Decimal(11, 8)
   town      String?
-  rsCode    String?                          // "RS" filter dimension from the brief
+  rsCode    String? // "RS" filter dimension from the brief
   // Outlet-master geography/classification (added for the Outlet Execution Report). All
   // nullable + populated from the outlet upload / create-edit form; report columns.
   region    String?
   state     String?
   cluster   String?
   beatName  String?
-  channel   String?                          // trade channel (e.g. GT / MT / …)
+  channel   String? // trade channel (e.g. GT / MT / …)
   address   String?
-  vendorId  String?                          // the vendor whose fleet services this site
-  asmUserId String?                          // approving ASM
+  vendorId  String? // the vendor whose fleet services this site
+  asmUserId String? // approving ASM
   status    SiteStatus @default(ACTIVE)
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
@@ -235,15 +236,15 @@ model Site {
 }
 
 model PosmType {
-  id                String   @id @default(cuid())
+  id                String  @id @default(cuid())
   clientId          String
   code              String
   name              String
-  defaultDimensions Json?                    // {width,height,unit} template
-  imageKey          String?                  // reference photo (posm-media/<clientId>/… key) for the field catalogue
-  isActive          Boolean  @default(true)
+  defaultDimensions Json? // {width,height,unit} template
+  imageKey          String? // reference photo (posm-media/<clientId>/… key) for the field catalogue
+  isActive          Boolean @default(true)
 
-  client     Client       @relation(fields: [clientId], references: [id])
+  client     Client      @relation(fields: [clientId], references: [id])
   reccePosms ReccePosm[]
 
   @@unique([clientId, code])
@@ -258,7 +259,7 @@ model PosmType {
 
 enum RecceStatus {
   SUBMITTED
-  APPROVED     // ASM approved → unlocks installation
+  APPROVED // ASM approved → unlocks installation
   REJECTED
 }
 
@@ -298,60 +299,71 @@ enum RejectReasonCode {
 
 /// One live recce per site (recapture on reject bumps `version`).
 model Recce {
-  id                 String      @id @default(cuid())
-  clientId           String
-  siteId             String
-  submittedById      String                    // VENDOR_FIELD user
-  status             RecceStatus @default(SUBMITTED)
-  version            Int         @default(1)
+  id            String      @id @default(cuid())
+  clientId      String
+  siteId        String
+  submittedById String // VENDOR_FIELD user
+  status        RecceStatus @default(SUBMITTED)
+  version       Int         @default(1)
 
   // geo (worst/representative fixed photo — same math as loyalty geo-fence)
-  captureLat         Decimal?    @db.Decimal(10, 8)
-  captureLng         Decimal?    @db.Decimal(11, 8)
-  captureAccuracy    Int?
-  distanceMeters     Decimal?    @db.Decimal(10, 2)
-  geoFenceOk         Boolean?                    // null = unverifiable (flag, not block)
+  captureLat      Decimal? @db.Decimal(10, 8)
+  captureLng      Decimal? @db.Decimal(11, 8)
+  captureAccuracy Int?
+  distanceMeters  Decimal? @db.Decimal(10, 2)
+  geoFenceOk      Boolean? // null = unverifiable (flag, not block)
 
-  capturedAt         DateTime?                   // client shutter time
-  receivedAt         DateTime    @default(now()) // server time (clock-skew guard)
+  capturedAt DateTime? // client shutter time
+  receivedAt DateTime  @default(now()) // server time (clock-skew guard)
 
-  approvedById       String?                     // ASM
-  reviewedAt         DateTime?
+  approvedById        String? // ASM
+  reviewedAt          DateTime?
   rejectionReasonCode RejectReasonCode?
-  rejectionReason    String?
+  rejectionReason     String?
+
+  // HO (CLIENT_ADMIN / GIFSY_ADMIN) approval gate — a NEW stage AFTER ASM approve, BEFORE install.
+  // ASM approve sets hoReviewStatus=PENDING; HO approve → APPROVED (unlocks install); HO reject →
+  // status=REJECTED (back to recce). Mirrors the Installation HO fields; uses the SAME reason codes.
+  hoReviewStatus        HoReviewStatus    @default(NONE)
+  hoReviewedById        String? // CLIENT_ADMIN / GIFSY_ADMIN
+  hoReviewedAt          DateTime?
+  hoRejectionReasonCode RejectReasonCode?
+  hoRejectionReason     String?
 
   // Last time a "pending ASM approval" reminder email that INCLUDED this recce was sent — the
   // per-recce ledger that throttles the threshold-triggered ASM reminder (reports feature).
-  lastRemindedAt     DateTime?
+  lastRemindedAt DateTime?
 
-  createdAt          DateTime    @default(now())
-  updatedAt          DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  client       Client         @relation(fields: [clientId], references: [id])
-  site         Site           @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  submittedBy  User           @relation("RecceSubmitter", fields: [submittedById], references: [id])
-  approvedBy   User?          @relation("RecceApprover", fields: [approvedById], references: [id])
+  client       Client        @relation(fields: [clientId], references: [id])
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  submittedBy  User          @relation("RecceSubmitter", fields: [submittedById], references: [id])
+  approvedBy   User?         @relation("RecceApprover", fields: [approvedById], references: [id])
+  hoReviewedBy User?         @relation("RecceHoReviewer", fields: [hoReviewedById], references: [id])
   posms        ReccePosm[]
   installation Installation?
 
-  @@unique([clientId, siteId])                   // one live recce per site
+  @@unique([clientId, siteId]) // one live recce per site
   @@index([clientId, status])
+  @@index([clientId, hoReviewStatus])
   @@map("recces")
 }
 
 /// A single POSM planned at a site during recce (max 2 per recce).
 model ReccePosm {
-  id         String   @id @default(cuid())
-  recceId    String
-  slotNo     Int                                // 1 or 2
-  posmTypeId String
-  dimensions Json                               // {width,height,unit} entered by the rep (numeric)
-  photo      Json                               // MediaValue {key, geo?} — the marked recce photo
-  markup     Json?                              // the on-image marked install-area annotation
-  qualityFlags Json?                            // {blur,lowLight,overexposed,lowAccuracy} — soft, computed at submit (duplicate stays a recce-level flag)
+  id           String @id @default(cuid())
+  recceId      String
+  slotNo       Int // 1 or 2
+  posmTypeId   String
+  dimensions   Json // {width,height,unit} entered by the rep (numeric)
+  photo        Json // MediaValue {key, geo?} — the marked recce photo
+  markup       Json? // the on-image marked install-area annotation
+  qualityFlags Json? // {blur,lowLight,overexposed,lowAccuracy} — soft, computed at submit (duplicate stays a recce-level flag)
 
-  recce      Recce      @relation(fields: [recceId], references: [id], onDelete: Cascade)
-  posmType   PosmType   @relation(fields: [posmTypeId], references: [id])
+  recce       Recce        @relation(fields: [recceId], references: [id], onDelete: Cascade)
+  posmType    PosmType     @relation(fields: [posmTypeId], references: [id])
   installPosm InstallPosm?
 
   @@unique([recceId, slotNo])
@@ -360,43 +372,43 @@ model ReccePosm {
 
 /// One installation submission per site (after its recce is APPROVED).
 model Installation {
-  id                 String             @id @default(cuid())
-  clientId           String
-  siteId             String
-  recceId            String             @unique
-  submittedById      String                             // VENDOR_FIELD user
-  status             InstallationStatus @default(SUBMITTED)
-  version            Int                @default(1)
+  id            String             @id @default(cuid())
+  clientId      String
+  siteId        String
+  recceId       String             @unique
+  submittedById String // VENDOR_FIELD user
+  status        InstallationStatus @default(SUBMITTED)
+  version       Int                @default(1)
 
-  capturedAt         DateTime?
-  receivedAt         DateTime           @default(now())
+  capturedAt DateTime?
+  receivedAt DateTime  @default(now())
 
-  auditedById        String?                             // AUDITOR
-  auditedAt          DateTime?
+  auditedById         String? // AUDITOR
+  auditedAt           DateTime?
   rejectionReasonCode RejectReasonCode?
-  rejectionReason    String?
+  rejectionReason     String?
 
   // HO/Admin escalation (owner decision 2026-09-30): on an audit REJECT the row escalates to HO;
   // HO approve → APPROVED (overrides the audit reject), HO reject → REJECTED (terminal).
-  hoReviewStatus     HoReviewStatus     @default(NONE)
-  hoReviewedById     String?                             // CLIENT_ADMIN / GIFSY_ADMIN
-  hoReviewedAt       DateTime?
-  hoRejectionReason  String?
+  hoReviewStatus    HoReviewStatus @default(NONE)
+  hoReviewedById    String? // CLIENT_ADMIN / GIFSY_ADMIN
+  hoReviewedAt      DateTime?
+  hoRejectionReason String?
 
   // Direct installation flag — set by the future manual direct-install workflow. Default false so
   // the report's "Direct Installation" column reads "No" for the normal recce→install path today.
-  isDirect           Boolean            @default(false)
+  isDirect Boolean @default(false)
 
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  client      Client   @relation(fields: [clientId], references: [id])
-  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  recce       Recce    @relation(fields: [recceId], references: [id])
-  submittedBy User     @relation("InstallSubmitter", fields: [submittedById], references: [id])
-  auditedBy   User?    @relation("InstallAuditor", fields: [auditedById], references: [id])
-  hoReviewedBy User?   @relation("InstallHoReviewer", fields: [hoReviewedById], references: [id])
-  posms       InstallPosm[]
+  client       Client        @relation(fields: [clientId], references: [id])
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  recce        Recce         @relation(fields: [recceId], references: [id])
+  submittedBy  User          @relation("InstallSubmitter", fields: [submittedById], references: [id])
+  auditedBy    User?         @relation("InstallAuditor", fields: [auditedById], references: [id])
+  hoReviewedBy User?         @relation("InstallHoReviewer", fields: [hoReviewedById], references: [id])
+  posms        InstallPosm[]
 
   @@index([clientId, status])
   @@index([clientId, hoReviewStatus])
@@ -405,16 +417,16 @@ model Installation {
 
 /// The actual installed-POSM photo, linked 1:1 to the recce POSM it fulfils.
 model InstallPosm {
-  id                     String   @id @default(cuid())
-  installationId         String
-  reccePosmId            String   @unique
-  photo                  Json                        // MediaValue {key, geo?}
-  captureLat             Decimal? @db.Decimal(10, 8)
-  captureLng             Decimal? @db.Decimal(11, 8)
-  geoFenceOk             Boolean?
-  distanceFromRecce      Decimal? @db.Decimal(10, 2) // recce↔install distance (auditor input)
-  beforeAfterDiffOk      Boolean?                    // perceptual-diff: install ≠ recce
-  qualityFlags           Json?                       // {blur, lowLight, overexposed, glare, blank, lowAccuracy}
+  id                String   @id @default(cuid())
+  installationId    String
+  reccePosmId       String   @unique
+  photo             Json // MediaValue {key, geo?}
+  captureLat        Decimal? @db.Decimal(10, 8)
+  captureLng        Decimal? @db.Decimal(11, 8)
+  geoFenceOk        Boolean?
+  distanceFromRecce Decimal? @db.Decimal(10, 2) // recce↔install distance (auditor input)
+  beforeAfterDiffOk Boolean? // perceptual-diff: install ≠ recce
+  qualityFlags      Json? // {blur, lowLight, overexposed, glare, blank, lowAccuracy}
 
   installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
   reccePosm    ReccePosm    @relation(fields: [reccePosmId], references: [id])
@@ -426,9 +438,9 @@ model InstallPosm {
 model ImageHash {
   id        String   @id @default(cuid())
   clientId  String
-  ownerKind String                              // "RECCE" | "INSTALL" | "MANUAL"
-  ownerId   String                              // the submission id owning the photo
-  hash      String                              // SHA-256 of raw bytes
+  ownerKind String // "RECCE" | "INSTALL" | "MANUAL"
+  ownerId   String // the submission id owning the photo
+  hash      String // SHA-256 of raw bytes
   createdAt DateTime @default(now())
 
   // Anti-fraud (money path): exact-byte reuse of a photo within a tenant is a duplicate. A true
@@ -469,17 +481,17 @@ enum ManualSubmissionStatus {
  * tenant; a value scopes it to one fleet. Direct admin approval — no ASM/auditor.
  */
 model ManualTask {
-  id           String          @id @default(cuid())
-  clientId     String
-  title        String
-  description  String?
-  formSchema   Json                              // reuse the trimmed capture form engine
-  vendorId     String?                           // null = all fleets in the tenant
-  dueDate      DateTime?                          // optional deadline (drives reminder emails)
-  status       ManualTaskState @default(OPEN)
-  createdById  String                             // admin who defined the task
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id          String          @id @default(cuid())
+  clientId    String
+  title       String
+  description String?
+  formSchema  Json // reuse the trimmed capture form engine
+  vendorId    String? // null = all fleets in the tenant
+  dueDate     DateTime? // optional deadline (drives reminder emails)
+  status      ManualTaskState @default(OPEN)
+  createdById String // admin who defined the task
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   submissions ManualTaskSubmission[]
 
@@ -496,16 +508,16 @@ model ManualTask {
  */
 model ManualTaskSubmission {
   id              String                 @id @default(cuid())
-  clientId        String                                    // denormalized for tenant scoping
+  clientId        String // denormalized for tenant scoping
   taskId          String
-  submittedById   String                                    // VENDOR_FIELD user
-  vendorId        String?                                   // submitter's fleet at submit time
+  submittedById   String // VENDOR_FIELD user
+  vendorId        String? // submitter's fleet at submit time
   formValues      Json
   status          ManualSubmissionStatus @default(SUBMITTED)
   version         Int                    @default(1)
-  reviewedById    String?                                   // admin (direct approval)
+  reviewedById    String? // admin (direct approval)
   reviewedAt      DateTime?
-  rejectionReason String?                                   // free-text (arbitrary tasks)
+  rejectionReason String? // free-text (arbitrary tasks)
   createdAt       DateTime               @default(now())
   updatedAt       DateTime               @updatedAt
 
@@ -527,10 +539,10 @@ model ManualTaskSubmission {
 model EmailDigestLog {
   id         String   @id @default(cuid())
   clientId   String
-  digestType String                                 // e.g. 'DAILY_DIGEST'
-  forDate    DateTime @db.Date                       // the calendar day covered (idempotency key)
+  digestType String // e.g. 'DAILY_DIGEST'
+  forDate    DateTime @db.Date // the calendar day covered (idempotency key)
   sentAt     DateTime @default(now())
-  meta       Json?                                   // { recipients, counts } snapshot
+  meta       Json? // { recipients, counts } snapshot
 
   @@unique([clientId, digestType, forDate])
   @@index([clientId])
@@ -543,12 +555,12 @@ model EmailDigestLog {
 // the multi-instance duplicate-email race (the per-recce `Recce.lastRemindedAt` is the separate
 // across-tick interval throttle). Mirrors EmailDigestLog.
 model AsmReminderLog {
-  id         String   @id @default(cuid())
-  clientId   String
-  asmUserId  String
-  periodKey  String                                 // IST hour bucket "YYYY-MM-DDTHH" (idempotency key)
-  sentAt     DateTime @default(now())
-  itemCount  Int                                    // recces included in the reminder (snapshot)
+  id        String   @id @default(cuid())
+  clientId  String
+  asmUserId String
+  periodKey String // IST hour bucket "YYYY-MM-DDTHH" (idempotency key)
+  sentAt    DateTime @default(now())
+  itemCount Int // recces included in the reminder (snapshot)
 
   @@unique([clientId, asmUserId, periodKey])
   @@index([clientId])

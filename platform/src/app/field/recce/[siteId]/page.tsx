@@ -212,10 +212,15 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     setExpandedIndex(0);
   };
 
-  const rejectionText =
-    mode === 'resubmit' && existing
-      ? existing.rejectionReason?.trim() || rejectionLabel(existing.rejectionReasonCode)
-      : null;
+  // A REJECTED recce can be sent back by either the ASM or Head Office. When HO rejected it
+  // (hoReviewStatus REJECTED), surface the HO remark; otherwise fall back to the ASM remark.
+  const rejectionText = (() => {
+    if (mode !== 'resubmit' || !existing) return null;
+    if (existing.hoReviewStatus === 'REJECTED') {
+      return existing.hoRejectionReason?.trim() || rejectionLabel(existing.hoRejectionReasonCode);
+    }
+    return existing.rejectionReason?.trim() || rejectionLabel(existing.rejectionReasonCode);
+  })();
 
   return (
     <div className="px-4 pt-4">

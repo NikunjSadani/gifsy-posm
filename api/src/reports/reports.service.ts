@@ -28,6 +28,9 @@ const OUTLET_EXPORT_BATCH = 1_000;
 const OUTLET_REPORT_INCLUDE = {
   vendor: { select: { name: true } },
   recces: {
+    // `include` (not `select`) returns ALL Recce scalars, so the report's RepRecce fields —
+    // status, the ASM rejectionReason*, and the recce-side HO-approval fields (hoReviewStatus,
+    // hoRejectionReason*) — all flow through to buildOutletExecutionRow without an explicit select.
     include: {
       submittedBy: { select: { name: true, promoterCode: true } },
       posms: { include: { posmType: { select: { name: true } } } },
@@ -44,6 +47,7 @@ const OUTLET_REPORT_INCLUDE = {
 /** The raw digest counts for one tenant (all tenant-scoped, never cross-tenant). */
 export interface DigestCounts {
   pendingRecceReview: number;
+  pendingHoReview: number;
   pendingInstallAudit: number;
   openManualTasks: number;
   manualPendingReview: number;
@@ -456,6 +460,7 @@ export class ReportsService {
 
     const [
       pendingRecceReview,
+      pendingHoReview,
       pendingInstallAudit,
       openManualTasks,
       manualPendingReview,
@@ -465,6 +470,9 @@ export class ReportsService {
       rejectedRecceLast24h,
     ] = await Promise.all([
       this.prisma.recce.count({ where: { clientId, status: 'SUBMITTED' } }),
+      // ASM-approved recces still awaiting HO sign-off (the new stage between ASM approval and
+      // install). Invisible to the SUBMITTED-only counts above, so counted explicitly here.
+      this.prisma.recce.count({ where: { clientId, status: 'APPROVED', hoReviewStatus: 'PENDING' } }),
       this.prisma.installation.count({ where: { clientId, status: 'SUBMITTED' } }),
       this.prisma.manualTask.count({ where: { clientId, status: 'OPEN' } }),
       this.prisma.manualTaskSubmission.count({ where: { clientId, status: 'SUBMITTED' } }),
@@ -484,6 +492,7 @@ export class ReportsService {
 
     return {
       pendingRecceReview,
+      pendingHoReview,
       pendingInstallAudit,
       openManualTasks,
       manualPendingReview,
@@ -548,6 +557,7 @@ export class ReportsService {
           <div style="color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Pending work</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:20px;">
             ${row('Recces awaiting review', counts.pendingRecceReview)}
+            ${row('Recces awaiting HO approval', counts.pendingHoReview)}
             ${row('Installations awaiting audit', counts.pendingInstallAudit)}
             ${row('Open manual tasks', counts.openManualTasks)}
             ${row('Manual submissions awaiting review', counts.manualPendingReview)}

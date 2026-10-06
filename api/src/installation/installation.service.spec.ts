@@ -54,6 +54,25 @@ describe('InstallationService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it('409s when the recce is ASM-APPROVED but NOT yet HO-approved (hoReviewStatus PENDING)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    // The ASM approved it (status APPROVED) but it still awaits HO review → install is gated.
+    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'PENDING', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('409s when the recce was HO-REJECTED (hoReviewStatus REJECTED)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'REJECTED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('409s when no recce exists for the site', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
     mockPrisma.recce.findUnique.mockResolvedValue(null);
@@ -64,7 +83,7 @@ describe('InstallationService', () => {
 
   it('409s when the recce already has an installation', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: { id: 'i0' } });
+    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: { id: 'i0' } });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -81,7 +100,7 @@ describe('InstallationService', () => {
   it('HARD-BLOCKS a missing photo — every recce POSM must be fulfilled (400)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
     mockPrisma.recce.findUnique.mockResolvedValue({
-      id: 'r1', status: 'APPROVED',
+      id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
       posms: [{ id: 'rp1', photo: { key: 'k1' } }, { id: 'rp2', photo: { key: 'k2' } }],
       installation: null,
     });
@@ -94,7 +113,7 @@ describe('InstallationService', () => {
   it('happy path: submits → SUBMITTED, persists integrity signals, writes a CREATE audit', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
     mockPrisma.recce.findUnique.mockResolvedValue({
-      id: 'r1', status: 'APPROVED',
+      id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
       posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce.jpg', geo } }],
       installation: null,
     });
@@ -139,7 +158,7 @@ describe('InstallationService', () => {
   });
 
   const approvedRecce = () => ({
-    id: 'r1', status: 'APPROVED',
+    id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
     posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce.jpg', geo } }],
     installation: null,
   });
@@ -203,7 +222,7 @@ describe('InstallationService', () => {
   it('Fix 1: the SAME photo key on two POSM lines → 400, no write ("install one, get paid for two")', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
     mockPrisma.recce.findUnique.mockResolvedValue({
-      id: 'r1', status: 'APPROVED',
+      id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
       posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce1.jpg' } }, { id: 'rp2', photo: { key: 'posm-media/kwality/recce2.jpg' } }],
       installation: null,
     });
