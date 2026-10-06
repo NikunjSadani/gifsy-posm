@@ -83,7 +83,8 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
   const [mode, setMode] = useState<Mode>('create');
   const [existing, setExisting] = useState<RecceDetail | null>(null);
 
-  const [count, setCount] = useState(1); // number of POSM cards (1 or 2)
+  const [count, setCount] = useState(1); // number of Element cards (1 or 2)
+  const [expandedIndex, setExpandedIndex] = useState(0); // accordion: only one card expanded at a time
   const [states, setStates] = useState<PosmCaptureState[]>([EMPTY_STATE, EMPTY_STATE]);
   const [submitting, setSubmitting] = useState(false);
   // Synchronous in-flight guard: a fast double-tap re-enters submit() before `submitting`
@@ -201,10 +202,14 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     }
   };
 
-  const addSecond = () => setCount(2);
+  const addSecond = () => {
+    setCount(2);
+    setExpandedIndex(1); // collapse Element 1, expand the newly added Element 2
+  };
   const removeSecond = () => {
     setStateAt(1, EMPTY_STATE);
     setCount(1);
+    setExpandedIndex(0);
   };
 
   const rejectionText =
@@ -272,6 +277,8 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
               posmTypes={posmTypes}
               onChange={(s) => setStateAt(i, s)}
               onRemove={i === 1 ? removeSecond : undefined}
+              collapsed={count === 2 && i !== expandedIndex}
+              onExpand={() => setExpandedIndex(i)}
             />
           ))}
 

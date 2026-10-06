@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw, PenSquare, X } from 'lucide-react';
+import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw, PenSquare, X, ChevronRight } from 'lucide-react';
 import { CameraCapture } from './CameraCapture';
 import { PhotoMarkup } from './PhotoMarkup';
 import { useGeo, formatFix, type GeoFix } from '@/lib/field/geo';
@@ -68,9 +68,13 @@ interface PosmCaptureCardProps {
   posmTypes: PosmTypeOption[];
   onChange: (state: PosmCaptureState) => void;
   onRemove?: () => void;
+  /** Accordion: render a compact one-line summary instead of the full form (state is kept). */
+  collapsed?: boolean;
+  /** Tapping a collapsed card asks the parent to expand it. */
+  onExpand?: () => void;
 }
 
-export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCaptureCardProps) {
+export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed, onExpand }: PosmCaptureCardProps) {
   const geo = useGeo();
 
   const [posmTypeId, setPosmTypeId] = useState('');
@@ -190,6 +194,43 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   }, [markupUrl]);
 
   const warning = qualityWarning(quality);
+
+  // Collapsed summary (accordion): the card keeps all its captured state (the hooks above still
+  // run); only its RENDER is compact. Tapping it asks the parent to expand this card.
+  if (collapsed) {
+    const typeName = posmTypes.find((t) => t.id === posmTypeId)?.name ?? null;
+    const bits = [
+      typeName ?? 'No Element type',
+      dimsValid ? `${w}×${h} ${unit}` : null,
+      uploaded ? 'Photo ✓' : null,
+      markup && markup.shapes.length > 0 ? 'Marked' : null,
+    ].filter(Boolean) as string[];
+    const status = line
+      ? { label: 'Ready', cls: 'bg-emerald-50 text-emerald-700' }
+      : started
+        ? { label: 'Incomplete', cls: 'bg-amber-50 text-amber-700' }
+        : { label: 'Not started', cls: 'bg-gray-100 text-gray-500' };
+    return (
+      <button
+        type="button"
+        onClick={onExpand}
+        className="w-full rounded-2xl border border-gray-100 bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-gray-900">Element {slot}</h3>
+            <p className="mt-0.5 truncate text-xs text-gray-500">{bits.join(' · ')}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${status.cls}`}>
+              {status.label}
+            </span>
+            <ChevronRight className="h-4 w-4 text-gray-400" />
+          </div>
+        </div>
+      </button>
+    );
+  }
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
