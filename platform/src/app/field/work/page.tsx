@@ -29,6 +29,7 @@ import {
   Hammer,
   RefreshCw,
   SlidersHorizontal,
+  Search,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import {
@@ -58,6 +59,7 @@ export default function MyWorkPage() {
   const [recces, setRecces] = useState<RecceListRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   // Gate: a device with no outlet filter is sent to the filter screen before any work loads.
   useEffect(() => {
@@ -91,7 +93,14 @@ export default function MyWorkPage() {
     if (outlet) void load(outlet);
   }, [outlet, load]);
 
-  const groups: RecceGroup[] = recces ? groupRecces(recces) : [];
+  // Client-side name/code search over the already-loaded (bounded) list — mirrors the recce
+  // screen's search box. Filtering happens before grouping so empty status groups drop out.
+  const q = query.trim().toLowerCase();
+  const filtered = recces
+    ? recces.filter((r) => !q || r.site.name.toLowerCase().includes(q) || r.site.code.toLowerCase().includes(q))
+    : null;
+  const groups: RecceGroup[] = filtered ? groupRecces(filtered) : [];
+  const hasAnyWork = !!recces && recces.length > 0;
 
   // Until the device filter has been read (and while redirecting when none is set), show a
   // spinner rather than flashing empty work.
@@ -124,6 +133,19 @@ export default function MyWorkPage() {
         <span className="shrink-0 text-xs font-bold text-[var(--brand-primary)]">Change</span>
       </button>
 
+      {/* Outlet search — client-side over this rep's loaded work (mirrors the recce screen). */}
+      {!loading && !error && hasAnyWork && (
+        <div className="mb-4 flex items-center gap-2 bg-white rounded-2xl border border-gray-200 px-3 py-2.5 focus-within:border-[var(--brand-primary)] transition-colors">
+          <Search className="h-4 w-4 text-gray-400 shrink-0" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name…"
+            className="flex-1 text-sm text-gray-900 focus:outline-none bg-transparent"
+          />
+        </div>
+      )}
+
       {loading && (
         <div className="mt-6 flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -147,7 +169,17 @@ export default function MyWorkPage() {
         </div>
       )}
 
-      {!loading && !error && groups.length === 0 && (
+      {!loading && !error && groups.length === 0 && hasAnyWork && (
+        <div className="text-center py-16 px-6">
+          <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center">
+            <MapPin className="h-6 w-6 text-gray-400" />
+          </div>
+          <p className="text-sm font-medium text-gray-700">No matching outlets</p>
+          <p className="text-xs text-gray-500 mt-1">Try a different search.</p>
+        </div>
+      )}
+
+      {!loading && !error && groups.length === 0 && !hasAnyWork && (
         <div className="rounded-2xl border border-gray-100 bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--brand-primary-light)]">
             <ClipboardList className="h-7 w-7 text-[var(--brand-primary)]" />
