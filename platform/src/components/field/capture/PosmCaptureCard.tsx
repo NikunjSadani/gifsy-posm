@@ -31,8 +31,8 @@ export interface CapturedReccePosm {
   posmTypeId: string;
   dimensions: { width: number; height: number; unit: string };
   photo: { key: string; geo: GeoFix };
-  /** Optional on-photo annotation marking WHERE the POSM goes — a line is valid without it. */
-  markup?: RecceMarkup;
+  /** On-photo annotation marking WHERE the Element goes — REQUIRED (marking is compulsory). */
+  markup: RecceMarkup;
 }
 
 /** The card's reported state — the parent uses this to gate the submit button. */
@@ -100,13 +100,14 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
   const dimsValid = width !== '' && height !== '' && Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0;
   const started = posmTypeId !== '' || width !== '' || height !== '' || file !== null || uploaded !== null;
 
+  // Marking the photo is compulsory: a line is ready only once it also carries a markup (≥1 shape).
   const line: CapturedReccePosm | null =
-    posmTypeId && dimsValid && uploaded
+    posmTypeId && dimsValid && uploaded && markup && markup.shapes.length > 0
       ? {
           posmTypeId,
           dimensions: { width: w, height: h, unit },
           photo: { key: uploaded.key, geo: uploaded.geo },
-          ...(markup ? { markup } : {}),
+          markup,
         }
       : null;
 
@@ -312,7 +313,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
         </div>
       )}
 
-      {/* POSM-area markup — available once a photo is captured. Optional (never gates submit). */}
+      {/* Element-area markup — available once a photo is captured. REQUIRED (gates submit). */}
       {file && !uploading && (
         <div className="mt-3">
           {markup ? (
@@ -339,14 +340,19 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove }: PosmCap
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={openMarkup}
-              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 active:scale-95 transition-transform"
-            >
-              <PenSquare className="h-4 w-4 text-[var(--brand-primary)]" />
-              Mark Element area
-            </button>
+            <div>
+              <button
+                type="button"
+                onClick={openMarkup}
+                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[var(--brand-primary)] px-3 py-2 text-xs font-semibold text-[var(--brand-primary)] active:scale-95 transition-transform"
+              >
+                <PenSquare className="h-4 w-4" />
+                Mark Element area
+              </button>
+              <p className="mt-1.5 text-xs text-[var(--brand-primary)]">
+                Required — mark where the Element will go on the photo.
+              </p>
+            </div>
           )}
         </div>
       )}

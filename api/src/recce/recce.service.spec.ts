@@ -54,6 +54,8 @@ const line = (geo: { lat: number; lng: number }) => ({
   posmTypeId: 'pt1',
   dimensions: { width: 2, height: 3, unit: 'ft' },
   photo: { key: KEY, geo },
+  // Marking is compulsory — every recce line carries a markup (>= 1 shape).
+  markup: { version: 1 as const, shapes: [{ type: 'rect' as const, x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] },
 });
 
 const activeSite = {

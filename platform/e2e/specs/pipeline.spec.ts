@@ -88,7 +88,7 @@ test.describe.serial('capture pipeline (recce → approve → install → audit)
     const key = await uploadPhoto(api, fieldTok, RECCE_PNG, 'recce.png', `${code}-recce`);
     const res = await api.post('/v1/recce', {
       headers: { Authorization: `Bearer ${fieldTok}` },
-      data: { siteId, posms: [{ posmTypeId, dimensions: { width: 30, height: 40, unit: 'cm' }, photo: { key, geo: { lat: LAT, lng: LNG, accuracy: 8 } } }] },
+      data: { siteId, posms: [{ posmTypeId, dimensions: { width: 30, height: 40, unit: 'cm' }, photo: { key, geo: { lat: LAT, lng: LNG, accuracy: 8 } }, markup: { version: 1, shapes: [{ type: 'rect', x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] } }] },
     });
     expect(res.ok(), `submit recce: ${await res.text()}`).toBeTruthy();
     const body = (await res.json()).data;

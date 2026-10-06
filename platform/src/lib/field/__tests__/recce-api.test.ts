@@ -138,6 +138,7 @@ describe('submit body carries markup', () => {
       posmTypeId: 't1',
       dimensions: { width: 10, height: 20, unit: 'cm' },
       photo: { key: 'k1', geo: { lat: 18.5, lng: 73.8, accuracy: 8, capturedAt: '2026-01-01T00:00:00.000Z' } },
+      markup, // marking is compulsory — every captured line carries a markup
       ...overrides,
     };
   }
@@ -147,22 +148,18 @@ describe('submit body carries markup', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bodyOf = (): any => post.mock.calls[0][1];
 
-  it('includes markup on a posm when set (create)', () => {
-    void submitRecce('site-1', [line({ markup })]);
+  it('includes markup on every posm (create)', () => {
+    void submitRecce('site-1', [line()]);
     const body = bodyOf();
     expect(body.siteId).toBe('site-1');
     expect(body.posms[0].markup).toEqual(markup);
   });
 
-  it('omits the markup key entirely when a line has none (create)', () => {
-    void submitRecce('site-1', [line()]);
-    expect('markup' in bodyOf().posms[0]).toBe(false);
-  });
-
-  it('passes markup through on resubmit', () => {
-    void resubmitRecce('recce-9', [line({ markup }), line()]);
+  it("carries each line's own markup (resubmit)", () => {
+    const other: RecceMarkup = { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.1, w: 0.2, h: 0.2 }] };
+    void resubmitRecce('recce-9', [line({ markup }), line({ markup: other })]);
     const body = bodyOf();
     expect(body.posms[0].markup).toEqual(markup);
-    expect('markup' in body.posms[1]).toBe(false);
+    expect(body.posms[1].markup).toEqual(other);
   });
 });

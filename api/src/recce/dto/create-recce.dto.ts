@@ -1,5 +1,5 @@
 import {
-  IsArray, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min,
+  IsArray, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Max, MaxLength, Min,
   ArrayMinSize, ArrayMaxSize, ValidateNested, IsISO8601, Equals, IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -123,11 +123,12 @@ export class ReccePosmLineDto {
   @Type(() => PhotoDto)
   photo: PhotoDto;
 
-  /** Optional on-image annotation marking where the POSM install is proposed. */
-  @IsOptional()
+  /** REQUIRED on-image annotation marking WHERE the Element install is proposed (≥1 shape).
+   *  Marking the recce photo is compulsory — a line without a markup is rejected. */
+  @IsObject({ message: 'Each Element must be marked on the photo before submitting' })
   @ValidateNested()
   @Type(() => MarkupDto)
-  markup?: MarkupDto;
+  markup: MarkupDto;
 }
 
 /**

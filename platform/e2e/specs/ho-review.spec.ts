@@ -62,7 +62,7 @@ async function buildEscalatedInstall(
   const recceKey = await uploadPhoto(api, tokens.field, RECCE_PNG, 'recce.png', `${code}-recce`);
   const recceRes = await api.post('/v1/recce', {
     ...auth(tokens.field),
-    data: { siteId, posms: [{ posmTypeId, dimensions: { width: 30, height: 40, unit: 'cm' }, photo: { key: recceKey, geo: { lat: LAT, lng: LNG, accuracy: 8 } } }] },
+    data: { siteId, posms: [{ posmTypeId, dimensions: { width: 30, height: 40, unit: 'cm' }, photo: { key: recceKey, geo: { lat: LAT, lng: LNG, accuracy: 8 } }, markup: { version: 1, shapes: [{ type: 'rect', x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] } }] },
   });
   expect(recceRes.ok(), `submit recce: ${await recceRes.text()}`).toBeTruthy();
   const recceId = (await recceRes.json()).data.id as string;

@@ -308,7 +308,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
           </button>
           {!canSubmit && !submitting && (
             <p className="mt-2 text-center text-xs text-gray-400">
-              Add an Element type, dimensions, and a located photo to enable submit.
+              Add an Element type, dimensions, a located photo, and mark where it goes to enable submit.
             </p>
           )}
         </div>

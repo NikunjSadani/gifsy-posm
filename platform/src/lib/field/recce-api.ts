@@ -123,26 +123,23 @@ export function fetchRecce(id: string) {
 
 /**
  * One `posms[]` entry of the recce POST body (create + resubmit). Mirrors the backend
- * `CreateRecceDto`/`ResubmitRecceDto` POSM shape: the required capture fields plus the OPTIONAL
- * `markup` blob (present only when the field user annotated the photo).
+ * `CreateRecceDto`/`ResubmitRecceDto` POSM shape: the required capture fields plus the REQUIRED
+ * `markup` blob (marking the recce photo is compulsory — every line carries ≥1 shape).
  */
 export interface ReccePosmBody {
   posmTypeId: string;
   dimensions: { width: number; height: number; unit: string };
   photo: { key: string; geo: CapturedReccePosm['photo']['geo'] };
-  markup?: RecceMarkup;
+  markup: RecceMarkup;
 }
 
-/**
- * Map a captured line to its POST-body entry, passing `markup` through only when set (an
- * un-annotated line omits the key entirely rather than sending `undefined`/null).
- */
+/** Map a captured line to its POST-body entry. Marking is compulsory, so every line carries markup. */
 function toPosmBody(p: CapturedReccePosm): ReccePosmBody {
   return {
     posmTypeId: p.posmTypeId,
     dimensions: p.dimensions,
     photo: p.photo,
-    ...(p.markup ? { markup: p.markup } : {}),
+    markup: p.markup,
   };
 }
 
