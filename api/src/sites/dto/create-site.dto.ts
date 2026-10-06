@@ -62,15 +62,18 @@ export class CreateSiteDto {
   @MaxLength(120)
   town?: string;
 
-  @IsOptional()
+  // RS code + Beat are MANDATORY for a new outlet (the field RS/Beat filter relies on every
+  // outlet carrying both). Required + non-empty here; the bulk upload enforces the same on
+  // new-site rows.
   @IsString()
+  @IsNotEmpty()
   @MaxLength(60)
-  rsCode?: string;
+  rsCode: string;
 
-  @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(120)
-  beatName?: string;
+  beatName: string;
 
   @IsOptional()
   @IsString()

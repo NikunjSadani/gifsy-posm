@@ -37,8 +37,8 @@ async function main() {
   // VENDOR_HO (vendor head office) scoped to vendor A's fleet — the E2E's `vendorho` role.
   const vendorHo = await prisma.user.create({ data: { clientId: cid, phone: P('11'), email: E('vendorho'), passwordHash: PWHASH, name: 'Vendor HO', role: 'VENDOR_HO', vendorId: vendorA.id } });
 
-  const siteA = await prisma.site.create({ data: { clientId: cid, code: 'A1', name: 'Site A1', vendorId: vendorA.id, asmUserId: asm.id, lat: 19.07, lng: 72.87, town: 'Mumbai', status: 'ACTIVE' } });
-  const siteB = await prisma.site.create({ data: { clientId: cid, code: 'B1', name: 'Site B1', vendorId: vendorB.id, asmUserId: asm.id, lat: 28.61, lng: 77.20, town: 'Delhi', status: 'ACTIVE' } });
+  const siteA = await prisma.site.create({ data: { clientId: cid, code: 'A1', name: 'Site A1', vendorId: vendorA.id, asmUserId: asm.id, lat: 19.07, lng: 72.87, town: 'Mumbai', rsCode: 'RS001', beatName: 'Beat 1', status: 'ACTIVE' } });
+  const siteB = await prisma.site.create({ data: { clientId: cid, code: 'B1', name: 'Site B1', vendorId: vendorB.id, asmUserId: asm.id, lat: 28.61, lng: 77.20, town: 'Delhi', rsCode: 'RS002', beatName: 'Beat 2', status: 'ACTIVE' } });
 
   console.log(JSON.stringify({
     clientId: cid,
@@ -49,7 +49,7 @@ async function main() {
     posmTypeId: posm.id,
     vendorA: vendorA.id, vendorB: vendorB.id,
     fieldA_phone: fieldA.phone, fieldB_phone: fieldB.phone,
-    siteA: { id: siteA.id, code: siteA.code }, siteB: { id: siteB.id, code: siteB.code },
+    siteA: { id: siteA.id, code: siteA.code, rsCode: siteA.rsCode, beatName: siteA.beatName }, siteB: { id: siteB.id, code: siteB.code, rsCode: siteB.rsCode, beatName: siteB.beatName },
   }, null, 2));
 }
 main().then(() => prisma.$disconnect()).catch(async (e) => { console.error('SEED_ERROR', e); await prisma.$disconnect(); process.exit(1); });

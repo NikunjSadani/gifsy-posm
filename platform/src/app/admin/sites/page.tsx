@@ -483,6 +483,7 @@ export default function SitesPage() {
             placeholder="Retailer/route code"
             value={form.rsCode}
             onChange={(e) => setForm((f) => ({ ...f, rsCode: e.target.value }))}
+            error={fieldErrors.rsCode}
             maxLength={60}
           />
           <Input
@@ -511,6 +512,7 @@ export default function SitesPage() {
             placeholder="Beat name"
             value={form.beatName}
             onChange={(e) => setForm((f) => ({ ...f, beatName: e.target.value }))}
+            error={fieldErrors.beatName}
             maxLength={120}
           />
           <Input

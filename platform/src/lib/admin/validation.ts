@@ -115,6 +115,7 @@ export interface SiteInput {
   lng?: string;
   town?: string;
   rsCode?: string;
+  beatName?: string;
 }
 
 export function validateSite(input: SiteInput): FieldErrors {
@@ -123,6 +124,13 @@ export function validateSite(input: SiteInput): FieldErrors {
   else if (input.code.trim().length > 100) errors.code = 'Code must be at most 100 characters';
   if (isBlank(input.name)) errors.name = 'Name is required';
   else if (input.name.trim().length > 200) errors.name = 'Name must be at most 200 characters';
+
+  // RS code + Beat are REQUIRED — the field app filters outlets by (RS code, Beat), so every
+  // site must carry both. Mirrors the backend, which now rejects a site missing either.
+  if (isBlank(input.rsCode)) errors.rsCode = 'RS code is required';
+  else if ((input.rsCode as string).trim().length > 60) errors.rsCode = 'RS code must be at most 60 characters';
+  if (isBlank(input.beatName)) errors.beatName = 'Beat name is required';
+  else if ((input.beatName as string).trim().length > 120) errors.beatName = 'Beat name must be at most 120 characters';
 
   const hasLat = !isBlank(input.lat);
   const hasLng = !isBlank(input.lng);

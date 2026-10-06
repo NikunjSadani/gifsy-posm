@@ -58,13 +58,17 @@ export class UpdateSiteDto {
   @MaxLength(120)
   town?: string;
 
+  // RS code + Beat stay OPTIONAL on edit (omit = unchanged) but, if provided, cannot be
+  // cleared to empty — an existing outlet must never lose its mandatory RS/Beat.
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(60)
   rsCode?: string;
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(120)
   beatName?: string;
 

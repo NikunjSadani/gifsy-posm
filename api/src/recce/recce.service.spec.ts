@@ -342,4 +342,30 @@ describe('RecceService', () => {
     // The recce-level integrity block is unchanged/additive.
     expect(res.integrity.qualityFlags).toMatchObject({ duplicate: false });
   });
+
+  // ── RS code + Beat list filters merge into where.site, preserving the vendor pin ──
+  it('list: rsCode + beatName are EXACT filters merged into where.site, keeping the vendor pin', async () => {
+    mockPrisma.recce.findMany.mockResolvedValue([]);
+    mockPrisma.recce.count.mockResolvedValue(0);
+    await service.list(vendorField, { rsCode: 'RS1', beatName: 'Beat 1' } as any);
+    const where = mockPrisma.recce.findMany.mock.calls[0][0].where;
+    expect(where.site).toEqual({
+      vendorId: 'vA', // set by scopeWhere — must survive the merge
+      rsCode: { equals: 'RS1', mode: 'insensitive' },
+      beatName: { equals: 'Beat 1', mode: 'insensitive' },
+    });
+    expect(where.submittedById).toBe('u1'); // own-recces pin intact
+  });
+
+  it('list: rsCode merges ALONGSIDE siteCode without dropping the vendor pin', async () => {
+    mockPrisma.recce.findMany.mockResolvedValue([]);
+    mockPrisma.recce.count.mockResolvedValue(0);
+    await service.list(vendorField, { siteCode: 'ST', rsCode: 'RS1' } as any);
+    const where = mockPrisma.recce.findMany.mock.calls[0][0].where;
+    expect(where.site).toEqual({
+      vendorId: 'vA',
+      code: { contains: 'ST', mode: 'insensitive' },
+      rsCode: { equals: 'RS1', mode: 'insensitive' },
+    });
+  });
 });

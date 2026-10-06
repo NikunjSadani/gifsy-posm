@@ -95,20 +95,30 @@ describe('validateUser (email login + role ↔ vendor invariant)', () => {
   });
 });
 
-describe('validateSite (lat/lng pairing + range)', () => {
-  it('passes with no coords', () => {
-    expect(isValid(validateSite({ code: 'S1', name: 'Store' }))).toBe(true);
+describe('validateSite (lat/lng pairing + range; required RS code + Beat)', () => {
+  it('passes with no coords (RS code + Beat present)', () => {
+    expect(isValid(validateSite({ code: 'S1', name: 'Store', rsCode: 'RS1', beatName: 'Beat A' }))).toBe(true);
   });
   it('passes with a valid coord pair', () => {
-    expect(isValid(validateSite({ code: 'S1', name: 'Store', lat: '22.5', lng: '88.3' }))).toBe(true);
+    expect(
+      isValid(validateSite({ code: 'S1', name: 'Store', rsCode: 'RS1', beatName: 'Beat A', lat: '22.5', lng: '88.3' })),
+    ).toBe(true);
   });
   it('rejects only-one-of lat/lng', () => {
-    const e = validateSite({ code: 'S1', name: 'Store', lat: '22.5' });
+    const e = validateSite({ code: 'S1', name: 'Store', rsCode: 'RS1', beatName: 'Beat A', lat: '22.5' });
     expect(e.lat).toBeDefined();
   });
   it('rejects out-of-range coords', () => {
-    const e = validateSite({ code: 'S1', name: 'Store', lat: '99', lng: '200' });
+    const e = validateSite({ code: 'S1', name: 'Store', rsCode: 'RS1', beatName: 'Beat A', lat: '99', lng: '200' });
     expect(e.lat).toBeDefined();
     expect(e.lng).toBeDefined();
+  });
+  it('requires RS code and Beat name', () => {
+    const e = validateSite({ code: 'S1', name: 'Store' });
+    expect(e.rsCode).toBeDefined();
+    expect(e.beatName).toBeDefined();
+    const e2 = validateSite({ code: 'S1', name: 'Store', rsCode: '  ', beatName: '' });
+    expect(e2.rsCode).toBeDefined();
+    expect(e2.beatName).toBeDefined();
   });
 });

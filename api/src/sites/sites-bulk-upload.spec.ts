@@ -30,10 +30,23 @@ const admin: JwtPayload = {
   sub: 'admin1', role: 'CLIENT_ADMIN', clientId: 'c1', phone: '9800000000', name: 'Admin',
 };
 
-function makePrisma() {
+/**
+ * `existingCodes` controls the create-vs-update classification (the new mandatory-RS/Beat rule
+ * only applies to rows whose code does NOT already exist). Default 'all' makes every uploaded
+ * code an EXISTING outlet (an UPDATE), so the pre-existing tests exercise the blank-preserve
+ * update path unchanged; pass `[]` (or a subset) to treat rows as NEW.
+ */
+function makePrisma(opts: { existingCodes?: string[] | 'all' } = {}) {
+  const existingCodes = opts.existingCodes ?? 'all';
   const upsert = jest.fn().mockImplementation((args) => ({ __upsert: args }));
   const auditCreate = jest.fn().mockResolvedValue({});
   const $transaction = jest.fn().mockResolvedValue([]);
+  // Reflects which of the queried codes already exist in the tenant (the create-vs-update probe).
+  const siteFindMany = jest.fn().mockImplementation(({ where }) => {
+    const queried: string[] = where?.code?.in ?? [];
+    const exist = existingCodes === 'all' ? queried : existingCodes;
+    return Promise.resolve(queried.filter((c) => exist.includes(c)).map((code) => ({ code })));
+  });
   const vendorFindUnique = jest.fn().mockImplementation(({ where }) =>
     where.clientId_code.code === 'VC1' ? Promise.resolve({ id: 'v1' }) : Promise.resolve(null),
   );
@@ -45,13 +58,13 @@ function makePrisma() {
       : Promise.resolve(null),
   );
   const prisma = {
-    site: { upsert },
+    site: { upsert, findMany: siteFindMany },
     vendor: { findUnique: vendorFindUnique },
     user: { findUnique: userFindUnique },
     auditLog: { create: auditCreate },
     $transaction,
   } as unknown as PrismaService;
-  return { prisma, upsert, auditCreate, $transaction };
+  return { prisma, upsert, auditCreate, $transaction, siteFindMany };
 }
 
 describe('SitesService.bulkUpload', () => {
@@ -204,5 +217,54 @@ describe('SitesService.bulkUpload', () => {
       svc.bulkUpload(gifsy, { originalname: 'x.xlsx', buffer } as Express.Multer.File),
     ).rejects.toThrow(/Assume a tenant/i);
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  // ── Mandatory RS/Beat on NEW outlets (create rows) ──────────────────────────────
+  it('rejects a NEW-site row missing rs_code or beat_name (no outlet created)', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: [] }); // nothing exists → both NEW
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      // NEW1: has rs_code but blank beat_name (column absent from HEADERS → blank) → rejected
+      ['NEW1', 'New Outlet', '', '', '', '', 'RS1', '', '', ''],
+      // NEW2: blank rs_code → rejected
+      ['NEW2', 'New Outlet 2', '', '', '', '', '', '', '', ''],
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(0);
+    expect(res.errorCount).toBe(2);
+    expect(upsert).not.toHaveBeenCalled();
+    const remarks = readErrorFile(res.errorFileBase64 as string).slice(1).map((r) => r[r.length - 1]);
+    expect(remarks[0]).toMatch(/beat name is required for a new outlet/i);
+    expect(remarks[1]).toMatch(/rs code is required for a new outlet/i);
+  });
+
+  it('allows a NEW-site row that carries BOTH rs_code and beat_name', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    // Custom sheet with a beat_name column so a new outlet can satisfy the rule.
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['code', 'name', 'rs_code', 'beat_name'],
+      ['NEW3', 'New Outlet 3', 'RS1', 'Beat 1'],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sites');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(1);
+    expect(res.errorCount).toBe(0);
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ code: 'NEW3', rsCode: 'RS1', beatName: 'Beat 1' });
+  });
+
+  it('allows an UPDATE row (existing code) with BLANK rs/beat (blank-preserve unchanged)', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: ['UPD1'] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      ['UPD1', 'Updated Name', '', '', '', '', '', '', '', ''],
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(1);
+    expect(res.errorCount).toBe(0);
+    // Blank rs/beat on an existing outlet are preserved — only name is written on UPDATE.
+    expect(upsert.mock.calls[0][0].update).toEqual({ name: 'Updated Name' });
   });
 });

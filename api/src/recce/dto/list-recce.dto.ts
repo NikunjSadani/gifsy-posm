@@ -18,6 +18,16 @@ export class ListRecceDto {
   @IsString()
   siteCode?: string;
 
+  /** Filter by the site's RS code (EXACT, case-insensitive) — the field RS/Beat filter. */
+  @IsOptional()
+  @IsString()
+  rsCode?: string;
+
+  /** Filter by the site's Beat (EXACT, case-insensitive) — the field RS/Beat filter. */
+  @IsOptional()
+  @IsString()
+  beatName?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

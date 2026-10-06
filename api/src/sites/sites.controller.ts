@@ -47,6 +47,26 @@ export class SitesController {
     return this.sites.create(user, dto);
   }
 
+  /**
+   * GET /v1/sites/filter-options/rs-codes — distinct RS codes among the caller's scoped
+   * sites (the field RS-code drop-down source). Scoped exactly like the list.
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN', 'VENDOR_FIELD')
+  @Get('filter-options/rs-codes')
+  rsCodeOptions(@CurrentUser() user: JwtPayload) {
+    return this.sites.rsCodeOptions(user);
+  }
+
+  /**
+   * GET /v1/sites/filter-options/beats?rsCode=<X> — distinct Beats for one exact RS code
+   * among the caller's scoped sites (the dependent Beat drop-down). `rsCode` is required.
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN', 'VENDOR_FIELD')
+  @Get('filter-options/beats')
+  beatOptions(@CurrentUser() user: JwtPayload, @Query('rsCode') rsCode?: string) {
+    return this.sites.beatOptions(user, rsCode);
+  }
+
   /** GET /v1/sites/:id — scoped single fetch. */
   @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
   @Get(':id')

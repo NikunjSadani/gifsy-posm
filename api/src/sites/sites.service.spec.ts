@@ -1,5 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
+import { validate } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
 import { SitesService } from './sites.service';
+import { CreateSiteDto } from './dto/create-site.dto';
+import { UpdateSiteDto } from './dto/update-site.dto';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
 
@@ -126,6 +130,15 @@ describe('SitesService.list — role scoping', () => {
     expect(where.town).toEqual({ contains: 'bar', mode: 'insensitive' });
   });
 
+  it('rsCode + beatName are EXACT case-insensitive matches (not contains)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { rsCode: 'RS1', beatName: 'Beat 1' });
+    const where = findMany.mock.calls[0][0].where;
+    expect(where.rsCode).toEqual({ equals: 'RS1', mode: 'insensitive' });
+    expect(where.beatName).toEqual({ equals: 'Beat 1', mode: 'insensitive' });
+  });
+
   it('pendingRecce=true filters to outlets with NO recce (recces: none), AND-ed onto scope', async () => {
     const { prisma, findMany, count } = makePrisma();
     const svc = new SitesService(prisma);
@@ -181,5 +194,125 @@ describe('SitesService.create — F8 tenant-context write gate', () => {
     await expect(
       svc.create(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), { code: 'A1', name: 'Alpha' } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+// ── Filter drop-down options — scoped like list(), fail-closed for an unscoped vendor ──
+describe('SitesService.rsCodeOptions', () => {
+  function makeOptionPrisma(rows: { rsCode: string | null }[] = []) {
+    const findMany = jest.fn().mockResolvedValue(rows);
+    const prisma = { site: { findMany } } as unknown as PrismaService;
+    return { prisma, findMany };
+  }
+
+  it('returns distinct, sorted, non-empty RS codes under the ACTIVE vendor pin (VENDOR_FIELD)', async () => {
+    const { prisma, findMany } = makeOptionPrisma([
+      { rsCode: 'RS2' }, { rsCode: 'RS1' }, { rsCode: null }, { rsCode: '' },
+    ]);
+    const svc = new SitesService(prisma);
+    const res = await svc.rsCodeOptions(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }));
+    expect(res).toEqual({ rsCodes: ['RS1', 'RS2'] });
+    const args = findMany.mock.calls[0][0];
+    expect(args.distinct).toEqual(['rsCode']);
+    expect(args.where.vendorId).toBe('v9');
+    expect(args.where.clientId).toBe('c1');
+    expect(args.where.status).toBe('ACTIVE'); // non-admin → ACTIVE-only
+  });
+
+  it('admin is NOT pinned to ACTIVE (sees all statuses)', async () => {
+    const { prisma, findMany } = makeOptionPrisma([]);
+    const svc = new SitesService(prisma);
+    await svc.rsCodeOptions(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+    expect(findMany.mock.calls[0][0].where.status).toBeUndefined();
+  });
+
+  it('FAIL-CLOSED: a vendor with no scope returns [] and issues NO query', async () => {
+    const { prisma, findMany } = makeOptionPrisma([]);
+    const svc = new SitesService(prisma);
+    const res = await svc.rsCodeOptions(user({ role: 'VENDOR_FIELD', vendorId: undefined }));
+    expect(res).toEqual({ rsCodes: [] });
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('SitesService.beatOptions', () => {
+  function makeOptionPrisma(rows: { beatName: string | null }[] = []) {
+    const findMany = jest.fn().mockResolvedValue(rows);
+    const prisma = { site: { findMany } } as unknown as PrismaService;
+    return { prisma, findMany };
+  }
+
+  it('requires the rsCode query param (400 when missing/blank)', async () => {
+    const { prisma, findMany } = makeOptionPrisma([]);
+    const svc = new SitesService(prisma);
+    await expect(
+      svc.beatOptions(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), '  '),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('returns distinct sorted Beats for an EXACT (case-insensitive) rsCode under the vendor pin', async () => {
+    const { prisma, findMany } = makeOptionPrisma([
+      { beatName: 'Beat B' }, { beatName: 'Beat A' }, { beatName: null },
+    ]);
+    const svc = new SitesService(prisma);
+    const res = await svc.beatOptions(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }), 'RS1');
+    expect(res).toEqual({ beats: ['Beat A', 'Beat B'] });
+    const args = findMany.mock.calls[0][0];
+    expect(args.distinct).toEqual(['beatName']);
+    expect(args.where.rsCode).toEqual({ equals: 'RS1', mode: 'insensitive' });
+    expect(args.where.vendorId).toBe('v9');
+    expect(args.where.status).toBe('ACTIVE');
+  });
+
+  it('FAIL-CLOSED: a vendor with no scope returns [] and issues NO query', async () => {
+    const { prisma, findMany } = makeOptionPrisma([]);
+    const svc = new SitesService(prisma);
+    const res = await svc.beatOptions(user({ role: 'VENDOR_FIELD', vendorId: undefined }), 'RS1');
+    expect(res).toEqual({ beats: [] });
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ── RS code + Beat are now MANDATORY on create, non-clearable on update ─────────────
+describe('CreateSiteDto — rsCode + beatName are required', () => {
+  const base = { code: 'A1', name: 'Alpha', rsCode: 'RS1', beatName: 'Beat 1' };
+
+  it('rejects a payload missing rsCode and beatName', async () => {
+    const errors = await validate(plainToInstance(CreateSiteDto, { code: 'A1', name: 'Alpha' }));
+    const props = errors.map((e) => e.property);
+    expect(props).toContain('rsCode');
+    expect(props).toContain('beatName');
+  });
+
+  it('rejects empty-string rsCode / beatName', async () => {
+    const errors = await validate(plainToInstance(CreateSiteDto, { ...base, rsCode: '', beatName: '' }));
+    const props = errors.map((e) => e.property);
+    expect(props).toContain('rsCode');
+    expect(props).toContain('beatName');
+  });
+
+  it('accepts a payload carrying both', async () => {
+    const errors = await validate(plainToInstance(CreateSiteDto, base));
+    expect(errors).toHaveLength(0);
+  });
+});
+
+describe('UpdateSiteDto — rsCode + beatName optional but non-clearable', () => {
+  it('accepts omitting them (unchanged)', async () => {
+    const errors = await validate(plainToInstance(UpdateSiteDto, { name: 'New' }));
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects clearing them to empty strings', async () => {
+    const errors = await validate(plainToInstance(UpdateSiteDto, { rsCode: '', beatName: '' }));
+    const props = errors.map((e) => e.property);
+    expect(props).toContain('rsCode');
+    expect(props).toContain('beatName');
+  });
+
+  it('accepts non-empty values', async () => {
+    const errors = await validate(plainToInstance(UpdateSiteDto, { rsCode: 'RS9', beatName: 'Beat 9' }));
+    expect(errors).toHaveLength(0);
   });
 });

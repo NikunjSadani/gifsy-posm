@@ -238,6 +238,20 @@ export class RecceService {
         code: { contains: q.siteCode, mode: 'insensitive' },
       };
     }
+    // RS code + Beat are EXACT case-insensitive matches (the field picks one value per
+    // drop-down). Spread-merged into `where.site` so the vendor pin (set by scopeWhere) holds.
+    if (q.rsCode) {
+      where.site = {
+        ...(where.site as Prisma.SiteWhereInput | undefined),
+        rsCode: { equals: q.rsCode, mode: 'insensitive' },
+      };
+    }
+    if (q.beatName) {
+      where.site = {
+        ...(where.site as Prisma.SiteWhereInput | undefined),
+        beatName: { equals: q.beatName, mode: 'insensitive' },
+      };
+    }
 
     const [rows, total] = await Promise.all([
       this.prisma.recce.findMany({

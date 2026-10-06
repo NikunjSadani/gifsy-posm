@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-/** `/field` → the Sites home. */
+/** `/field` → the mandatory outlet-filter landing (RS code + Beat). */
 export default function FieldIndex() {
-  redirect('/field/sites');
+  redirect('/field/filter');
 }

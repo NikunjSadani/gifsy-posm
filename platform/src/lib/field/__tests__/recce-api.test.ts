@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the network edge so we can assert the exact POST body the submit helpers build.
 // `vi.hoisted` runs before the hoisted vi.mock factory, so `post` is initialised in time.
-const { post } = vi.hoisted(() => ({
+const { post, get } = vi.hoisted(() => ({
   post: vi.fn((_path: string, _body?: unknown) =>
     Promise.resolve({ success: true, data: { id: 'r1', status: 'SUBMITTED' } }),
   ),
+  get: vi.fn((_url: string) => Promise.resolve({ success: true, data: { recces: [] } })),
 }));
-vi.mock('@/lib/api-client', () => ({ api: { post, get: vi.fn() } }));
+vi.mock('@/lib/api-client', () => ({ api: { post, get } }));
 
 import {
   groupRecces,
@@ -15,6 +16,7 @@ import {
   rejectionLabel,
   submitRecce,
   resubmitRecce,
+  fetchMyRecces,
   RECCE_STATUS_ORDER,
   type RecceListRow,
   type RecceStatus,
@@ -102,6 +104,29 @@ describe('rejectionLabel', () => {
   it('returns null for a missing code', () => {
     expect(rejectionLabel(null)).toBeNull();
     expect(rejectionLabel(undefined)).toBeNull();
+  });
+});
+
+describe('fetchMyRecces — query building', () => {
+  beforeEach(() => get.mockClear());
+  const urlOf = () => get.mock.calls[0][0] as string;
+
+  it('requests the endpoint with only the default limit when no filters', () => {
+    void fetchMyRecces();
+    // limit is always set (200, matching the sites screen) so work in a beat isn't truncated at 50.
+    expect(urlOf()).toBe('/api/recce?limit=200');
+  });
+
+  it('appends rsCode + beatName when set', () => {
+    void fetchMyRecces({ rsCode: 'RS1', beatName: 'Beat A' });
+    const url = urlOf();
+    expect(url).toContain('rsCode=RS1');
+    expect(url).toContain('beatName=Beat+A');
+  });
+
+  it('appends status when set', () => {
+    void fetchMyRecces({ status: 'APPROVED' });
+    expect(urlOf()).toContain('status=APPROVED');
   });
 });
 

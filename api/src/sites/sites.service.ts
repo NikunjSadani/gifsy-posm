@@ -141,7 +141,11 @@ export class SitesService {
     if (q.name) where.name = { contains: q.name, mode: 'insensitive' };
     if (q.code) where.code = { contains: q.code, mode: 'insensitive' };
     if (q.town) where.town = { contains: q.town, mode: 'insensitive' };
-    if (q.rsCode) where.rsCode = { contains: q.rsCode, mode: 'insensitive' };
+    // RS code + Beat are EXACT case-insensitive matches (the field app picks one value from
+    // a dependent drop-down, not a substring). The field app is the only consumer passing
+    // these; the admin list does not filter on rsCode, so no substring behaviour is lost.
+    if (q.rsCode) where.rsCode = { equals: q.rsCode, mode: 'insensitive' };
+    if (q.beatName) where.beatName = { equals: q.beatName, mode: 'insensitive' };
     // Visibility by status: a DEACTIVATED (INACTIVE) outlet is ADMIN-ONLY. Field / ASM / vendor-HO
     // roles are hard-pinned to ACTIVE outlets — a `status` filter they pass is ignored, so a
     // deactivated outlet can never surface in the field list, the nearby map, or the recce picker.
@@ -170,6 +174,59 @@ export class SitesService {
       this.prisma.site.count({ where }),
     ]);
     return { sites, total, page, limit };
+  }
+
+  // ── Filter drop-down options (RS code → Beat, scoped like list) ─────────────────
+  /**
+   * Distinct, sorted RS codes among the caller's SCOPED sites — the source for the field
+   * app's RS-code drop-down. Scoped identically to {@link list} (vendor pin for a vendor
+   * role, tenant pin, ACTIVE-only for non-admins) and FAILS CLOSED for a vendor with no
+   * scope (empty array, NO query). Null/empty rsCode values are dropped.
+   */
+  async rsCodeOptions(user: JwtPayload): Promise<{ rsCodes: string[] }> {
+    const scope = this.scopedWhere(user);
+    if (scope === null) return { rsCodes: [] }; // fail-closed: no scope → no query
+    const where: Prisma.SiteWhereInput = { ...scope };
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
+    if (!isAdmin) where.status = SiteStatus.ACTIVE;
+
+    const rows = await this.prisma.site.findMany({
+      where,
+      distinct: ['rsCode'],
+      select: { rsCode: true },
+    });
+    const rsCodes = rows
+      .map((r) => r.rsCode)
+      .filter((v): v is string => !!v && v.trim() !== '')
+      .sort((a, b) => a.localeCompare(b));
+    return { rsCodes };
+  }
+
+  /**
+   * Distinct, sorted Beat names among the caller's SCOPED sites whose `rsCode` EXACT-equals
+   * the required `rsCode` query param (case-insensitive) — the dependent Beat drop-down.
+   * Same scoping + fail-closed behaviour as {@link rsCodeOptions}; a missing rsCode is a 400.
+   */
+  async beatOptions(user: JwtPayload, rsCode?: string): Promise<{ beats: string[] }> {
+    const code = (rsCode ?? '').trim();
+    if (!code) throw new BadRequestException('rsCode query parameter is required.');
+    const scope = this.scopedWhere(user);
+    if (scope === null) return { beats: [] }; // fail-closed: no scope → no query
+    const where: Prisma.SiteWhereInput = { ...scope };
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
+    if (!isAdmin) where.status = SiteStatus.ACTIVE;
+    where.rsCode = { equals: code, mode: 'insensitive' };
+
+    const rows = await this.prisma.site.findMany({
+      where,
+      distinct: ['beatName'],
+      select: { beatName: true },
+    });
+    const beats = rows
+      .map((r) => r.beatName)
+      .filter((v): v is string => !!v && v.trim() !== '')
+      .sort((a, b) => a.localeCompare(b));
+    return { beats };
   }
 
   // ── Get one (scoped) ───────────────────────────────────────────────────────────
@@ -325,6 +382,28 @@ export class SitesService {
       );
     }
 
+    // Which codes already exist in this tenant? A row whose code is NOT present would CREATE a
+    // new outlet, and a new outlet MUST carry RS code + Beat (mandatory, mirroring CreateSiteDto).
+    // An existing code is an UPDATE and keeps the blank-preserve behaviour. Matched EXACTLY — the
+    // same equality the upsert `where` uses — and bounded by the sheet's own codes (≤ MAX rows).
+    const fileCodes = new Set<string>();
+    for (const row of rows) {
+      const lower: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(row)) lower[k.trim().toLowerCase()] = v;
+      const code = String(lower['code'] ?? '').trim();
+      if (code) fileCodes.add(code);
+    }
+    const existingCodes = new Set<string>(
+      fileCodes.size > 0
+        ? (
+            await this.prisma.site.findMany({
+              where: { clientId, code: { in: [...fileCodes] } },
+              select: { code: true },
+            })
+          ).map((s) => s.code)
+        : [],
+    );
+
     const successRows: SiteSuccessRow[] = [];
     const errorRows: SiteErrorRow[] = [];
     const seenCodes = new Set<string>(); // within-file de-dup
@@ -371,6 +450,13 @@ export class SitesService {
         continue;
       }
       if (!name) { addError('name is required'); continue; }
+
+      // A NEW outlet (code not already in the tenant) MUST carry RS code + Beat — both are
+      // mandatory. An existing code is an UPDATE and keeps the blank-preserve behaviour below.
+      if (!existingCodes.has(code)) {
+        if (!rsCode) { addError('RS code is required for a new outlet'); continue; }
+        if (!beatName) { addError('Beat name is required for a new outlet'); continue; }
+      }
 
       // lat/lng: both-or-neither, each in valid Earth range.
       let lat: number | null = null;

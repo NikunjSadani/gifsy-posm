@@ -25,6 +25,7 @@ export interface Site {
   lng: string | number | null;
   town: string | null;
   rsCode: string | null;
+  beatName: string | null;
   vendorId: string | null;
   asmUserId: string | null;
   status: SiteStatus;
@@ -44,6 +45,8 @@ export interface SiteFilters {
   code?: string;
   town?: string;
   rsCode?: string;
+  /** Beat is matched EXACTLY by name (there is no beatId) — the filter-first field screen. */
+  beatName?: string;
   /** "Recce to do": only outlets that still owe a recce (no recce yet). */
   pendingRecce?: boolean;
   page?: number;
@@ -60,11 +63,30 @@ export function fetchSites(filters: SiteFilters = {}) {
   if (filters.code) params.set('code', filters.code);
   if (filters.town) params.set('town', filters.town);
   if (filters.rsCode) params.set('rsCode', filters.rsCode);
+  if (filters.beatName) params.set('beatName', filters.beatName);
   if (filters.pendingRecce) params.set('pendingRecce', 'true');
   params.set('page', String(filters.page ?? 1));
   params.set('limit', String(filters.limit ?? 200));
   const qs = params.toString();
   return api.get<SiteListResult>(`/api/sites?${qs}`);
+}
+
+/**
+ * Distinct, sorted RS codes available to this vendor login (for the filter-first screen's
+ * first dropdown). Vendor-scoped server-side.
+ */
+export function fetchRsCodes() {
+  return api.get<{ rsCodes: string[] }>('/api/sites/filter-options/rs-codes');
+}
+
+/**
+ * Distinct, sorted beat names under a given RS code (the filter screen's second dropdown).
+ * Beats have no id — they are matched by name — so this returns plain strings.
+ */
+export function fetchBeats(rsCode: string) {
+  return api.get<{ beats: string[] }>(
+    `/api/sites/filter-options/beats?rsCode=${encodeURIComponent(rsCode)}`,
+  );
 }
 
 /** Normalise a site's lat/lng to numbers, or null when it has no (valid) geotag. */

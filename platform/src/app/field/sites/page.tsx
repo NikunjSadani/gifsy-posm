@@ -1,40 +1,63 @@
 'use client';
 
 /**
- * Recce to do — the vendor's outlets that still owe a recce (backend filters to sites with no
- * recce yet). Search + filters (name / code / town / rsCode),
- * tappable cards, and a bottom-sheet detail with directions + "Start recce".
+ * Recce to do — the vendor's outlets (for the active RS code + Beat) that still owe a recce
+ * (backend filters to sites with no recce yet). The screen is gated on the per-device outlet
+ * filter: with none set the rep is sent to /field/filter to choose one. A name search, an
+ * active-filter chip (with "Change"), tappable cards and a bottom-sheet detail round it out.
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, SlidersHorizontal, MapPin } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Search, MapPin, SlidersHorizontal } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { SiteCard } from '@/components/field/site-card';
 import { SiteSheet } from '@/components/field/site-sheet';
 import { fetchSites, type Site, type SiteFilters } from '@/lib/field/sites';
+import { getOutletFilter, type OutletFilter } from '@/lib/field/outlet-filter';
 
 export default function SitesPage() {
-  const [query, setQuery] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [code, setCode] = useState('');
-  const [town, setTown] = useState('');
-  const [rsCode, setRsCode] = useState('');
+  const router = useRouter();
 
+  // `undefined` = not yet read; `null` = read, none set (redirecting away); object = active.
+  const [outlet, setOutlet] = useState<OutletFilter | null | undefined>(undefined);
+
+  const [query, setQuery] = useState('');
   const [sites, setSites] = useState<Site[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Site | null>(null);
 
+  // Gate: a device with no outlet filter is sent to the filter screen before any list loads.
+  useEffect(() => {
+    const f = getOutletFilter();
+    if (!f) {
+      setOutlet(null);
+      router.replace('/field/filter');
+      return;
+    }
+    setOutlet(f);
+  }, [router]);
+
   // Debounce the filter set so typing doesn't fire a request per keystroke.
-  const filters: SiteFilters = useMemo(
-    // "Recce to do": only outlets that still owe a recce (backend filters on no existing recce).
-    () => ({ name: query.trim(), code: code.trim(), town: town.trim(), rsCode: rsCode.trim(), pendingRecce: true }),
-    [query, code, town, rsCode],
+  const filters: SiteFilters | null = useMemo(
+    () =>
+      outlet
+        ? {
+            name: query.trim(),
+            rsCode: outlet.rsCode,
+            beatName: outlet.beatName,
+            // "Recce to do": only outlets that still owe a recce (backend filters on no recce).
+            pendingRecce: true,
+          }
+        : null,
+    [query, outlet],
   );
   const filtersKey = JSON.stringify(filters);
 
   useEffect(() => {
+    if (!filters) return;
     let cancelled = false;
     setLoading(true);
     const t = setTimeout(async () => {
@@ -59,18 +82,41 @@ export default function SitesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtersKey]);
 
-  const activeFilterCount = [code, town, rsCode].filter((v) => v.trim()).length;
+  // Until the device filter has been read (and while redirecting when none is set), show a
+  // spinner rather than flashing an empty list.
+  if (outlet === undefined || outlet === null) {
+    return (
+      <div className="flex justify-center py-16">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
 
   return (
     <div className="px-4 pt-4">
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-lg font-bold text-gray-900">Recce to do</h1>
-        {!loading && !error && (
-          <span className="text-xs text-gray-500">{total} to do</span>
-        )}
+        {!loading && !error && <span className="text-xs text-gray-500">{total} to do</span>}
       </div>
 
-      {/* Search + filter toggle */}
+      {/* Active outlet filter — RS code · Beat, with a Change control. */}
+      <button
+        type="button"
+        onClick={() => router.push('/field/filter')}
+        data-testid="sites-filter-chip"
+        className="mb-3 flex w-full items-center justify-between gap-2 rounded-2xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] px-3 py-2.5 text-left active:scale-[0.99] transition-transform"
+      >
+        <span className="flex min-w-0 items-center gap-2 text-sm text-gray-800">
+          <SlidersHorizontal className="h-4 w-4 shrink-0 text-[var(--brand-primary)]" />
+          <span className="truncate">
+            RS <span className="font-semibold">{outlet.rsCode}</span> · Beat{' '}
+            <span className="font-semibold">{outlet.beatName}</span>
+          </span>
+        </span>
+        <span className="shrink-0 text-xs font-bold text-[var(--brand-primary)]">Change</span>
+      </button>
+
+      {/* Name search */}
       <div className="flex items-center gap-2 mb-3">
         <div className="flex-1 flex items-center gap-2 bg-white rounded-2xl border border-gray-200 px-3 py-2.5 focus-within:border-[var(--brand-primary)] transition-colors">
           <Search className="h-4 w-4 text-gray-400 shrink-0" />
@@ -81,46 +127,7 @@ export default function SitesPage() {
             className="flex-1 text-sm text-gray-900 focus:outline-none bg-transparent"
           />
         </div>
-        <button
-          onClick={() => setShowFilters((s) => !s)}
-          aria-label="Filters"
-          className={`relative h-11 w-11 rounded-2xl border flex items-center justify-center active:scale-95 transition-transform ${
-            showFilters || activeFilterCount
-              ? 'bg-[var(--brand-primary-light)] border-[var(--brand-primary)] text-[var(--brand-primary)]'
-              : 'bg-white border-gray-200 text-gray-500'
-          }`}
-        >
-          <SlidersHorizontal className="h-4 w-4" />
-          {activeFilterCount > 0 && (
-            <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-[var(--brand-primary)] text-white text-[10px] font-bold flex items-center justify-center">
-              {activeFilterCount}
-            </span>
-          )}
-        </button>
       </div>
-
-      {showFilters && (
-        <div className="grid grid-cols-3 gap-2 mb-4 fade-in">
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Code"
-            className="text-sm text-gray-900 bg-white rounded-xl border border-gray-200 px-3 py-2 focus:outline-none focus:border-[var(--brand-primary)]"
-          />
-          <input
-            value={town}
-            onChange={(e) => setTown(e.target.value)}
-            placeholder="Town"
-            className="text-sm text-gray-900 bg-white rounded-xl border border-gray-200 px-3 py-2 focus:outline-none focus:border-[var(--brand-primary)]"
-          />
-          <input
-            value={rsCode}
-            onChange={(e) => setRsCode(e.target.value)}
-            placeholder="RS code"
-            className="text-sm text-gray-900 bg-white rounded-xl border border-gray-200 px-3 py-2 focus:outline-none focus:border-[var(--brand-primary)]"
-          />
-        </div>
-      )}
 
       {/* List states */}
       {loading ? (
@@ -138,12 +145,12 @@ export default function SitesPage() {
             <MapPin className="h-6 w-6 text-gray-400" />
           </div>
           <p className="text-sm font-medium text-gray-700">
-            {query || activeFilterCount ? 'No matching outlets' : 'No recces pending'}
+            {query ? 'No matching outlets' : 'No recces pending'}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            {query || activeFilterCount
-              ? 'Try a different search or filter.'
-              : 'You’re all caught up — every assigned outlet has a recce.'}
+            {query
+              ? 'Try a different search.'
+              : 'You’re all caught up — every outlet on this beat has a recce.'}
           </p>
         </div>
       ) : (

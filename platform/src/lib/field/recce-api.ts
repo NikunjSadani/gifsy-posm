@@ -94,10 +94,26 @@ export interface RecceDetail {
 
 // ── API edge ────────────────────────────────────────────────────────────────
 
-/** Fetch the field user's own recces (optionally filtered by status). */
-export function fetchMyRecces(status?: RecceStatus) {
-  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-  return api.get<RecceListResult>(`/api/recce${qs}`);
+/** Optional filters for the field user's own recce list. */
+export interface MyReccesFilters {
+  status?: RecceStatus;
+  /** Filter-first field screen: EXACT RS code + Beat (there is no beatId). */
+  rsCode?: string;
+  beatName?: string;
+  limit?: number;
+}
+
+/** Fetch the field user's own recces (optionally filtered by status / RS code / beat). */
+export function fetchMyRecces(filters: MyReccesFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.rsCode) params.set('rsCode', filters.rsCode);
+  if (filters.beatName) params.set('beatName', filters.beatName);
+  // Match the sites screen's page size (backend max is 200) so a rep's work in a beat isn't
+  // silently truncated at the default of 50.
+  params.set('limit', String(filters.limit ?? 200));
+  const qs = params.toString();
+  return api.get<RecceListResult>(`/api/recce${qs ? `?${qs}` : ''}`);
 }
 
 /** Fetch one recce with its POSM lines + rejection reason. */

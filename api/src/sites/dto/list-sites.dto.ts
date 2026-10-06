@@ -3,10 +3,11 @@ import { Type, Transform } from 'class-transformer';
 import { SiteStatus } from '@prisma/client';
 
 /**
- * Query filters for GET /v1/sites. All optional; string filters are case-insensitive
- * `contains`. `vendorId` is applied ONLY for non-vendor callers — a vendor-role caller
- * is already hard-pinned to its own vendor by the service scope, so this filter can
- * never widen a vendor's view.
+ * Query filters for GET /v1/sites. All optional. `name` / `code` / `town` are case-insensitive
+ * `contains`; `rsCode` / `beatName` are EXACT case-insensitive matches (the field app's
+ * dependent RS-code + Beat drop-down filter picks a single value, not a substring). `vendorId`
+ * is applied ONLY for non-vendor callers — a vendor-role caller is already hard-pinned to its
+ * own vendor by the service scope, so this filter can never widen a vendor's view.
  */
 export class ListSitesDto {
   @IsOptional()
@@ -24,6 +25,10 @@ export class ListSitesDto {
   @IsOptional()
   @IsString()
   rsCode?: string;
+
+  @IsOptional()
+  @IsString()
+  beatName?: string;
 
   @IsOptional()
   @IsString()
