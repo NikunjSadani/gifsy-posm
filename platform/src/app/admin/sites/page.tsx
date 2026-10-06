@@ -416,6 +416,8 @@ export default function SitesPage() {
           </>
         }
         upload={sitesApi.bulkUpload}
+        templateUrl="/api/sites/bulk-upload/template"
+        templateFileName="site-upload-template.xlsx"
         onUploaded={() => void load()}
       />
 

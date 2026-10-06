@@ -13,6 +13,7 @@ import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
 import { ListSitesDto } from './dto/list-sites.dto';
 import {
+  SITE_UPLOAD_HEADERS,
   SITE_UPLOAD_REQUIRED_HEADERS,
   SITE_ERROR_HEADERS,
 } from './sites.constants';
@@ -634,6 +635,16 @@ export class SitesService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
+  /** A blank single-sheet .xlsx (header row only) — the sites bulk-upload download template. */
+  buildUploadTemplate(): Buffer {
+    const headers = [...SITE_UPLOAD_HEADERS];
+    const ws = aoaToSheetSafe([headers]);
+    ws['!cols'] = headers.map((h) => ({ wch: h.length + 8 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sites');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
   /** Build the base64 rejection report — CSV-injection-safe via aoaToSheetSafe. */
   private buildErrorFile(errorRows: SiteErrorRow[]): string {
     const headers = [...SITE_ERROR_HEADERS];

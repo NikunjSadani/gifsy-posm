@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Query,
-  UploadedFile, UseInterceptors, HttpCode, HttpStatus,
+  UploadedFile, UseInterceptors, HttpCode, HttpStatus, StreamableFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { SitesService } from './sites.service';
@@ -27,6 +27,20 @@ export class SitesController {
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: ListSitesDto) {
     return this.sites.list(user, query);
+  }
+
+  /**
+   * GET /v1/sites/bulk-upload/template — a blank .xlsx (header row only) to fill and re-upload.
+   * Declared before the POST; served as a StreamableFile with an attachment disposition (the
+   * global interceptor passes StreamableFile through unwrapped).
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
+  @Get('bulk-upload/template')
+  template(): StreamableFile {
+    return new StreamableFile(this.sites.buildUploadTemplate(), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="site-upload-template.xlsx"',
+    });
   }
 
   /** POST /v1/sites/bulk-upload — Excel bulk-ingestion with a base64 rejection report. */
