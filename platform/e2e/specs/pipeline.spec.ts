@@ -70,7 +70,7 @@ test.describe.serial('capture pipeline (recce → approve → install → audit)
 
     const res = await api.post('/v1/sites', {
       headers: { Authorization: `Bearer ${adminTok}` },
-      data: { code, name: 'E2E Pipeline Site', vendorId: VENDOR_ID, asmUserId: ASM_ID, lat: LAT, lng: LNG },
+      data: { code, name: 'E2E Pipeline Site', vendorId: VENDOR_ID, asmUserId: ASM_ID, lat: LAT, lng: LNG, rsCode: 'RS001', beatName: 'Beat 1' },
     });
     expect(res.ok(), `create site: ${await res.text()}`).toBeTruthy();
     siteId = (await res.json()).data.id;

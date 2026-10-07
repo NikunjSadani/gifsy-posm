@@ -54,7 +54,7 @@ async function buildEscalatedInstall(
 
   const siteRes = await api.post('/v1/sites', {
     ...auth(tokens.admin),
-    data: { code, name: `E2E HO ${tag}`, vendorId: VENDOR_ID, asmUserId: ASM_ID, lat: LAT, lng: LNG },
+    data: { code, name: `E2E HO ${tag}`, vendorId: VENDOR_ID, asmUserId: ASM_ID, lat: LAT, lng: LNG, rsCode: 'RS001', beatName: 'Beat 1' },
   });
   expect(siteRes.ok(), `create site: ${await siteRes.text()}`).toBeTruthy();
   const siteId = (await siteRes.json()).data.id as string;
