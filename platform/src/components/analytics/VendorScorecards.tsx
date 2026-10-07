@@ -17,6 +17,7 @@ type SortKey =
   | 'sites'
   | 'recced'
   | 'approved'
+  | 'hoApproved'
   | 'installed'
   | 'audited'
   | 'recceApprovalRatePct'
@@ -40,10 +41,11 @@ const COLS: ColDef[] = [
   ) },
   { key: 'sites', header: 'Sites', numeric: true, render: (r) => r.sites.toLocaleString() },
   { key: 'recced', header: 'Recced', numeric: true, render: (r) => r.recced.toLocaleString() },
-  { key: 'approved', header: 'Approved', numeric: true, render: (r) => r.approved.toLocaleString() },
+  { key: 'approved', header: 'ASM approved', numeric: true, render: (r) => r.approved.toLocaleString() },
+  { key: 'hoApproved', header: 'HO approved', numeric: true, render: (r) => r.hoApproved.toLocaleString() },
   { key: 'installed', header: 'Installed', numeric: true, render: (r) => r.installed.toLocaleString() },
   { key: 'audited', header: 'Audited', numeric: true, render: (r) => r.audited.toLocaleString() },
-  { key: 'recceApprovalRatePct', header: 'Approval %', numeric: true, render: (r) => formatPct(r.recceApprovalRatePct) },
+  { key: 'recceApprovalRatePct', header: 'ASM approval %', numeric: true, render: (r) => formatPct(r.recceApprovalRatePct) },
   { key: 'geoFencePassPct', header: 'Geo-fence %', numeric: true, render: (r) => formatPct(r.geoFencePassPct) },
   { key: 'avgTurnaroundDays', header: 'Turnaround', numeric: true, render: (r) => formatDays(r.avgTurnaroundDays) },
   { key: 'rejectedCount', header: 'Rejected', numeric: true, render: (r) => (

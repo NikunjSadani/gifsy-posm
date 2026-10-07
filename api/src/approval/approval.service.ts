@@ -375,23 +375,31 @@ export class ApprovalService {
 
   /**
    * The stage-funnel counts, scoped to the caller: total sites (universe) / recced /
-   * approved / installed / audited. An ASM sees only their territory; CLIENT_ADMIN their
-   * tenant; an un-assumed GIFSY_ADMIN the whole platform.
+   * ASM-approved / HO-approved / installed / audited. An ASM sees only their territory;
+   * CLIENT_ADMIN their tenant; an un-assumed GIFSY_ADMIN the whole platform.
+   *
+   * `approved` = ASM-approved (status APPROVED, regardless of HO). `hoApproved` = the subset
+   * that HO has ALSO signed off (status APPROVED && hoReviewStatus APPROVED) — i.e. the
+   * installable recces. The two are reported side-by-side so a stakeholder never mistakes an
+   * ASM-approved recce for an installable one.
    */
   async waterfall(user: JwtPayload) {
     const siteWhere = this.siteWhere(user);
     const recceWhere = this.recceWhere(user);
     const installWhere = this.installWhere(user);
 
-    const [totalSites, recced, approved, installed, audited] = await Promise.all([
+    const [totalSites, recced, approved, hoApproved, installed, audited] = await Promise.all([
       this.prisma.site.count({ where: siteWhere }),
       this.prisma.recce.count({ where: recceWhere }),
+      // ASM-approved: status APPROVED (regardless of the HO review stage).
       this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED' } }),
+      // HO-approved / installable: ASM-approved AND signed off by HO.
+      this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
       this.prisma.installation.count({ where: installWhere }),
       this.prisma.installation.count({ where: { ...installWhere, status: 'AUDIT_APPROVED' } }),
     ]);
 
-    return { totalSites, recced, approved, installed, audited };
+    return { totalSites, recced, approved, hoApproved, installed, audited };
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────────

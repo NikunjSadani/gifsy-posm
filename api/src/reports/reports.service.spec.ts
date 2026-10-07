@@ -220,7 +220,8 @@ describe('ReportsService.computeCounts', () => {
       .mockResolvedValueOnce(3) // pendingRecceReview
       .mockResolvedValueOnce(9) // pendingHoReview (ASM-approved, awaiting HO)
       .mockResolvedValueOnce(1) // staleRecces
-      .mockResolvedValueOnce(5) // approvedRecceLast24h
+      .mockResolvedValueOnce(5) // approvedRecceLast24h (ASM-approved in 24h)
+      .mockResolvedValueOnce(4) // hoApprovedRecceLast24h (HO-approved / installable in 24h)
       .mockResolvedValueOnce(2); // rejectedRecceLast24h
     fns.installation.count
       .mockResolvedValueOnce(4) // pendingInstallAudit
@@ -238,6 +239,7 @@ describe('ReportsService.computeCounts', () => {
       staleRecces: 1,
       staleInstalls: 1,
       approvedRecceLast24h: 5,
+      hoApprovedRecceLast24h: 4,
       rejectedRecceLast24h: 2,
     });
   });
@@ -256,10 +258,45 @@ describe('ReportsService.computeCounts', () => {
     const html = service.buildDigestHtml('Acme', {
       pendingRecceReview: 0, pendingHoReview: 4, pendingInstallAudit: 0, openManualTasks: 0,
       manualPendingReview: 0, staleRecces: 0, staleInstalls: 0, approvedRecceLast24h: 0,
-      rejectedRecceLast24h: 0,
+      hoApprovedRecceLast24h: 0, rejectedRecceLast24h: 0,
     }, new Date());
     expect(html).toContain('Recces awaiting HO approval');
     expect(html).toContain('>4<');
+  });
+
+  it('hoApprovedRecceLast24h counts ONLY status APPROVED && hoReviewStatus APPROVED (by hoReviewedAt), and the digest distinguishes ASM vs HO approved', async () => {
+    const { service, fns } = makeService();
+    const now = new Date('2026-08-28T10:00:00Z');
+    await service.computeCounts('c1', fullConfig() as never, now);
+
+    // The HO-approved-last-24h count pins status APPROVED + hoReviewStatus APPROVED and windows on
+    // hoReviewedAt (the HO decision time), NOT reviewedAt (the ASM time).
+    const hoApprovedCall = fns.recce.count.mock.calls.find(
+      (c: any[]) =>
+        c[0].where.status === 'APPROVED' &&
+        c[0].where.hoReviewStatus === 'APPROVED' &&
+        c[0].where.hoReviewedAt,
+    );
+    expect(hoApprovedCall).toBeDefined();
+    expect(hoApprovedCall[0].where.clientId).toBe('c1');
+    expect(hoApprovedCall[0].where.hoReviewedAt.gte).toEqual(new Date('2026-08-27T10:00:00Z'));
+
+    // The ASM-approved-last-24h count does NOT pin hoReviewStatus (ASM stage, regardless of HO).
+    const asmApprovedCall = fns.recce.count.mock.calls.find(
+      (c: any[]) =>
+        c[0].where.status === 'APPROVED' && c[0].where.reviewedAt && !c[0].where.hoReviewStatus,
+    );
+    expect(asmApprovedCall).toBeDefined();
+
+    // The rendered digest labels the two distinctly — never a bare "Recces approved".
+    const html = service.buildDigestHtml('Acme', {
+      pendingRecceReview: 0, pendingHoReview: 0, pendingInstallAudit: 0, openManualTasks: 0,
+      manualPendingReview: 0, staleRecces: 0, staleInstalls: 0, approvedRecceLast24h: 7,
+      hoApprovedRecceLast24h: 3, rejectedRecceLast24h: 1,
+    }, now);
+    expect(html).toContain('Recces ASM-approved');
+    expect(html).toContain('Recces HO-approved (installable)');
+    expect(html).not.toContain('>Recces approved<');
   });
 });
 

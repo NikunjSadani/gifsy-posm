@@ -109,10 +109,11 @@ export default function ReviewDashboardPage() {
           <div>
             <h2 className="text-sm font-semibold text-gray-700 mb-2">Execution funnel</h2>
             {state.waterfall ? (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 <FunnelCard icon={<MapPin className="h-5 w-5" />} label="Sites" value={state.waterfall.totalSites} tone="gray" />
                 <FunnelCard icon={<ClipboardCheck className="h-5 w-5" />} label="Recced" value={state.waterfall.recced} tone="blue" />
-                <FunnelCard icon={<CheckCircle2 className="h-5 w-5" />} label="Approved" value={state.waterfall.approved} tone="green" />
+                <FunnelCard icon={<CheckCircle2 className="h-5 w-5" />} label="ASM approved" value={state.waterfall.approved} tone="indigo" />
+                <FunnelCard icon={<ShieldCheck className="h-5 w-5" />} label="HO approved" value={state.waterfall.hoApproved} tone="green" />
                 <FunnelCard icon={<Hammer className="h-5 w-5" />} label="Installed" value={state.waterfall.installed} tone="amber" />
                 <FunnelCard icon={<ShieldCheck className="h-5 w-5" />} label="Audited" value={state.waterfall.audited} tone="purple" />
               </div>
@@ -131,6 +132,7 @@ export default function ReviewDashboardPage() {
 const toneStyles: Record<string, string> = {
   gray: 'text-gray-600 bg-gray-100',
   blue: 'text-blue-600 bg-blue-50',
+  indigo: 'text-indigo-600 bg-indigo-50',
   green: 'text-emerald-600 bg-emerald-50',
   amber: 'text-amber-600 bg-amber-50',
   purple: 'text-purple-600 bg-purple-50',

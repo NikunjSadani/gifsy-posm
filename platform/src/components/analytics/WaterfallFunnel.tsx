@@ -1,10 +1,12 @@
 'use client';
 
 /**
- * Five-stage execution funnel (Total sites → Recced → Approved → Installed → Audited) drawn
- * as horizontal bars whose width is each stage's share of total sites, with the step-to-step
- * conversion % annotated. Clicking a drillable stage calls `onStageClick` so the page can open
- * the evidence drill-down. Owns its own loading / error state.
+ * Six-stage execution funnel (Total sites → Recced → ASM approved → HO approved → Installed →
+ * Audited) drawn as horizontal bars whose width is each stage's share of total sites, with the
+ * step-to-step conversion % annotated. ASM approved (status APPROVED) is shown distinctly from
+ * HO approved (installable: status APPROVED && hoReviewStatus APPROVED). Clicking a drillable
+ * stage calls `onStageClick` so the page can open the evidence drill-down. Owns its own
+ * loading / error state.
  */
 
 import { AlertTriangle } from 'lucide-react';
@@ -22,7 +24,8 @@ import {
 const STAGE_BAR: Record<FunnelStage['key'], string> = {
   totalSites: '#6b7280', // slate — the universe
   recced: stageColor('RECCED'),
-  approved: stageColor('APPROVED'),
+  approved: stageColor('ASM_APPROVED'),
+  hoApproved: stageColor('HO_APPROVED'),
   installed: stageColor('INSTALLED'),
   audited: stageColor('AUDITED'),
 };

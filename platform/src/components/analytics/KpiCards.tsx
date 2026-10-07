@@ -36,7 +36,7 @@ const TONE: Record<Tile['tone'], string> = {
 
 function tilesFor(k: SummaryKpis): Tile[] {
   return [
-    { label: 'Recce approval rate', value: formatPct(k.recceApprovalRatePct), icon: CheckCircle2, tone: 'good' },
+    { label: 'ASM approval rate', value: formatPct(k.recceApprovalRatePct), icon: CheckCircle2, tone: 'good' },
     { label: 'Install audit pass rate', value: formatPct(k.installAuditApprovalRatePct), icon: ShieldCheck, tone: 'good' },
     { label: 'Geo-fence pass rate', value: formatPct(k.geoFencePassRatePct), icon: MapPin, tone: 'good' },
     { label: 'Avg turnaround', value: formatDays(k.avgTurnaroundDays), icon: Clock, tone: 'neutral' },

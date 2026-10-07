@@ -374,8 +374,30 @@ describe('ApprovalService.waterfall — scoped counts', () => {
     await svc.waterfall(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }));
     expect(fns.site.count.mock.calls[0][0].where).toEqual({ clientId: 'c1', asmUserId: 'asm-7' });
     expect(fns.recce.count.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
-    // approved recce count adds status APPROVED on top of the same scope
+    // ASM-approved recce count adds status APPROVED on top of the same scope (regardless of HO)
     expect(fns.recce.count.mock.calls[1][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED' });
+    // HO-approved / installable count also pins hoReviewStatus APPROVED — the subset that is installable.
+    expect(fns.recce.count.mock.calls[2][0].where).toEqual({
+      clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', hoReviewStatus: 'APPROVED',
+    });
     expect(fns.installation.count.mock.calls[1][0].where).toMatchObject({ status: 'AUDIT_APPROVED' });
+  });
+
+  it('reports ASM-approved (approved) and HO-approved (hoApproved) as DISTINCT counts', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.count.mockResolvedValue(10);
+    // recce.count order: recced, approved (ASM), hoApproved (installable).
+    fns.recce.count
+      .mockResolvedValueOnce(8) // recced
+      .mockResolvedValueOnce(6) // ASM-approved (status APPROVED)
+      .mockResolvedValueOnce(4); // HO-approved (status APPROVED && hoReviewStatus APPROVED)
+    fns.installation.count
+      .mockResolvedValueOnce(3) // installed
+      .mockResolvedValueOnce(2); // audited
+    const svc = new ApprovalService(prisma);
+    const res = await svc.waterfall(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+    expect(res).toEqual({ totalSites: 10, recced: 8, approved: 6, hoApproved: 4, installed: 3, audited: 2 });
+    // hoApproved (4) is a strict subset of approved (6) — never conflated.
+    expect(res.hoApproved).toBeLessThanOrEqual(res.approved);
   });
 });

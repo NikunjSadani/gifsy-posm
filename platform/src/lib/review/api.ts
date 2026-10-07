@@ -103,7 +103,10 @@ export interface QueueResult {
 export interface Waterfall {
   totalSites: number;
   recced: number;
+  /** ASM-approved: status APPROVED, regardless of the HO review stage. */
   approved: number;
+  /** HO-approved / installable: status APPROVED && hoReviewStatus APPROVED (subset of `approved`). */
+  hoApproved: number;
   installed: number;
   audited: number;
 }

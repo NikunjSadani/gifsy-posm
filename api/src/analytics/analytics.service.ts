@@ -119,6 +119,7 @@ export class AnalyticsService {
       totalSites,
       recced,
       approved,
+      hoApproved,
       rejectedRecce,
       pendingRecceReview,
       geoTrue,
@@ -132,7 +133,10 @@ export class AnalyticsService {
     ] = await Promise.all([
       this.prisma.site.count({ where: s.site }),
       this.prisma.recce.count({ where: s.recce }),
+      // ASM-approved: status APPROVED (regardless of HO).
       this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED' } }),
+      // HO-approved / installable: status APPROVED AND hoReviewStatus APPROVED.
+      this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
       this.prisma.recce.count({ where: { ...s.recce, status: 'REJECTED' } }),
       this.prisma.recce.count({ where: { ...s.recce, status: 'SUBMITTED' } }),
       this.prisma.recce.count({ where: { ...s.recce, geoFenceOk: true } }),
@@ -148,7 +152,8 @@ export class AnalyticsService {
     const avgTurnaroundDays = await this.avgTurnaround(s.install);
 
     const kpis: Record<string, number | null> = {
-      // Approval rate = approved among DECIDED recces (approved + rejected); null when none.
+      // ASM-approval rate = ASM-approved among DECIDED recces (approved + rejected); null when
+      // none. This is the ASM stage rate — NOT the HO/installable rate (see hoApproved below).
       recceApprovalRatePct: this.pct(approved, approved + rejectedRecce),
       installAuditApprovalRatePct: this.pct(audited, audited + rejectedInstall),
       // Geo pass rate = among recces with a verifiable fix (geoFenceOk not null).
@@ -162,7 +167,8 @@ export class AnalyticsService {
     if (avgTurnaroundDays !== null) kpis.avgTurnaroundDays = avgTurnaroundDays;
 
     return {
-      waterfall: { totalSites, recced, approved, installed, audited },
+      // `approved` = ASM-approved; `hoApproved` = HO-approved / installable (subset of approved).
+      waterfall: { totalSites, recced, approved, hoApproved, installed, audited },
       kpis,
       manual: { openTasks, pendingReview: manualPendingReview },
     };
@@ -239,7 +245,7 @@ export class AnalyticsService {
     });
 
     // EXACT per-site aggregates via groupBy (NO row cap) — attributed to vendors via siteToVendor.
-    const [recceByStatus, recceByGeo, installByStatus, turnaroundRows] = await Promise.all([
+    const [recceByStatus, recceByGeo, recceHoApproved, installByStatus, turnaroundRows] = await Promise.all([
       this.prisma.recce.groupBy({
         by: ['siteId', 'status'],
         where: s.recce,
@@ -248,6 +254,13 @@ export class AnalyticsService {
       this.prisma.recce.groupBy({
         by: ['siteId', 'geoFenceOk'],
         where: s.recce,
+        _count: { _all: true },
+      }),
+      // HO-approved / installable per site: ASM-approved AND HO-signed-off. Separate from
+      // recceByStatus because that groups by status alone and can't see hoReviewStatus.
+      this.prisma.recce.groupBy({
+        by: ['siteId'],
+        where: { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' },
         _count: { _all: true },
       }),
       this.prisma.installation.groupBy({
@@ -270,13 +283,13 @@ export class AnalyticsService {
     ]);
 
     interface Bucket {
-      recced: number; approved: number; rejectedRecce: number;
+      recced: number; approved: number; hoApproved: number; rejectedRecce: number;
       geoTrue: number; geoDecided: number;
       installed: number; audited: number; rejectedInstall: number;
       turnaroundSum: number; turnaroundN: number;
     }
     const empty = (): Bucket => ({
-      recced: 0, approved: 0, rejectedRecce: 0, geoTrue: 0, geoDecided: 0,
+      recced: 0, approved: 0, hoApproved: 0, rejectedRecce: 0, geoTrue: 0, geoDecided: 0,
       installed: 0, audited: 0, rejectedInstall: 0, turnaroundSum: 0, turnaroundN: 0,
     });
     const buckets = new Map<string, Bucket>();
@@ -295,6 +308,12 @@ export class AnalyticsService {
       b.recced += n;
       if (g.status === 'APPROVED') b.approved += n;
       else if (g.status === 'REJECTED') b.rejectedRecce += n;
+    }
+    // HO-approved / installable per site (status APPROVED && hoReviewStatus APPROVED).
+    for (const g of recceHoApproved) {
+      const b = bucket(siteToVendor.get(g.siteId));
+      if (!b) continue;
+      b.hoApproved += g._count._all;
     }
     // Geo-fence pass among recces with a verifiable fix (geoFenceOk not null).
     for (const g of recceByGeo) {
@@ -333,9 +352,12 @@ export class AnalyticsService {
         vendorName: v.name,
         sites: sitesByVendor.get(v.id) ?? 0,
         recced: b.recced,
+        // `approved` = ASM-approved; `hoApproved` = HO-approved / installable (subset).
         approved: b.approved,
+        hoApproved: b.hoApproved,
         installed: b.installed,
         audited: b.audited,
+        // ASM-approval rate (ASM-approved among decided) — NOT the HO/installable rate.
         recceApprovalRatePct: this.pct(b.approved, b.approved + b.rejectedRecce),
         geoFencePassPct: this.pct(b.geoTrue, b.geoDecided),
         avgTurnaroundDays:
@@ -370,7 +392,7 @@ export class AnalyticsService {
       where,
       select: {
         id: true, code: true, name: true, town: true, lat: true, lng: true, vendorId: true,
-        recces: { select: { status: true } }, // 0 or 1 (one live recce per site)
+        recces: { select: { status: true, hoReviewStatus: true } }, // 0 or 1 (one live recce per site)
         installs: { select: { status: true } }, // 0 or 1
       },
       take: AnalyticsService.GEO_CAP + 1, // +1 to detect truncation
@@ -383,8 +405,17 @@ export class AnalyticsService {
     const points = page.map((site) => {
       const recce = site.recces[0];
       const install = site.installs[0];
-      let furthestStage: 'NONE' | 'RECCED' | 'APPROVED' | 'INSTALLED' | 'AUDITED' = 'NONE';
-      if (recce) furthestStage = recce.status === 'APPROVED' ? 'APPROVED' : 'RECCED';
+      let furthestStage:
+        | 'NONE' | 'RECCED' | 'ASM_APPROVED' | 'HO_APPROVED' | 'INSTALLED' | 'AUDITED' = 'NONE';
+      if (recce) {
+        // An ASM-approved recce resolves to HO_APPROVED only once HO has signed off; otherwise
+        // it is ASM_APPROVED (installable vs merely ASM-approved — never conflated).
+        if (recce.status === 'APPROVED') {
+          furthestStage = recce.hoReviewStatus === 'APPROVED' ? 'HO_APPROVED' : 'ASM_APPROVED';
+        } else {
+          furthestStage = 'RECCED';
+        }
+      }
       if (install) furthestStage = install.status === 'AUDIT_APPROVED' ? 'AUDITED' : 'INSTALLED';
       const latestStatus = install?.status ?? recce?.status ?? 'NONE';
       return {
@@ -509,10 +540,11 @@ export class AnalyticsService {
     const summaryRows: Record<string, unknown>[] = [
       { Metric: 'Total sites', Value: summary.waterfall.totalSites },
       { Metric: 'Recced', Value: summary.waterfall.recced },
-      { Metric: 'Approved', Value: summary.waterfall.approved },
+      { Metric: 'ASM approved', Value: summary.waterfall.approved },
+      { Metric: 'HO approved (installable)', Value: summary.waterfall.hoApproved },
       { Metric: 'Installed', Value: summary.waterfall.installed },
       { Metric: 'Audited', Value: summary.waterfall.audited },
-      { Metric: 'Recce approval rate (%)', Value: summary.kpis.recceApprovalRatePct },
+      { Metric: 'ASM approval rate (%)', Value: summary.kpis.recceApprovalRatePct },
       { Metric: 'Install audit approval rate (%)', Value: summary.kpis.installAuditApprovalRatePct },
       { Metric: 'Geo-fence pass rate (%)', Value: summary.kpis.geoFencePassRatePct },
       {
@@ -532,10 +564,11 @@ export class AnalyticsService {
       'Vendor name': v.vendorName,
       Sites: v.sites,
       Recced: v.recced,
-      Approved: v.approved,
+      'ASM approved': v.approved,
+      'HO approved': v.hoApproved,
       Installed: v.installed,
       Audited: v.audited,
-      'Recce approval %': v.recceApprovalRatePct,
+      'ASM approval %': v.recceApprovalRatePct,
       'Geo-fence pass %': v.geoFencePassPct,
       'Avg turnaround (days)': v.avgTurnaroundDays ?? 'n/a',
       Rejected: v.rejectedCount,

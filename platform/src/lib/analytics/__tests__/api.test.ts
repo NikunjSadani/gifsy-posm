@@ -66,40 +66,51 @@ describe('formatDays', () => {
 // ─── buildFunnel ──────────────────────────────────────────────────────────────
 
 describe('buildFunnel', () => {
-  const w: SummaryWaterfall = { totalSites: 100, recced: 80, approved: 60, installed: 40, audited: 20 };
+  // approved (ASM-approved) = 60; hoApproved (installable) = 50 — distinct, HO ⊆ ASM.
+  const w: SummaryWaterfall = { totalSites: 100, recced: 80, approved: 60, hoApproved: 50, installed: 40, audited: 20 };
 
-  it('produces the 5 ordered stages', () => {
+  it('produces the 6 ordered stages (ASM approved + HO approved distinct)', () => {
     const stages = buildFunnel(w);
-    expect(stages.map((s) => s.key)).toEqual(['totalSites', 'recced', 'approved', 'installed', 'audited']);
+    expect(stages.map((s) => s.key)).toEqual([
+      'totalSites', 'recced', 'approved', 'hoApproved', 'installed', 'audited',
+    ]);
+    // ASM approved and HO approved are labelled unambiguously (never a bare "Approved").
+    expect(stages[2].label).toBe('ASM approved');
+    expect(stages[3].label).toBe('HO approved');
   });
 
   it('sets bar width as a share of total sites', () => {
     const stages = buildFunnel(w);
     expect(stages[0].pctOfTotal).toBe(100); // total
     expect(stages[1].pctOfTotal).toBe(80); // recced
-    expect(stages[4].pctOfTotal).toBe(20); // audited
+    expect(stages[2].pctOfTotal).toBe(60); // ASM approved
+    expect(stages[3].pctOfTotal).toBe(50); // HO approved
+    expect(stages[5].pctOfTotal).toBe(20); // audited
   });
 
   it('computes step-to-step conversion from the previous stage', () => {
     const stages = buildFunnel(w);
     expect(stages[0].conversionFromPrev).toBeNull(); // first stage
-    expect(stages[1].conversionFromPrev).toBe(80); // 80/100
-    expect(stages[2].conversionFromPrev).toBe(75); // 60/80
-    expect(stages[3].conversionFromPrev).toBeCloseTo(66.666, 2); // 40/60
-    expect(stages[4].conversionFromPrev).toBe(50); // 20/40
+    expect(stages[1].conversionFromPrev).toBe(80); // recced 80/100
+    expect(stages[2].conversionFromPrev).toBe(75); // ASM approved 60/80
+    expect(stages[3].conversionFromPrev).toBeCloseTo(83.333, 2); // HO approved 50/60
+    expect(stages[4].conversionFromPrev).toBe(80); // installed 40/50 (from HO approved, not ASM)
+    expect(stages[5].conversionFromPrev).toBe(50); // audited 20/40
   });
 
-  it('gives drill targets for every stage except the total universe', () => {
+  it('gives drill targets except the total universe and the HO-approved stage', () => {
     const stages = buildFunnel(w);
     expect(stages[0].drill).toBeNull();
     expect(stages[1].drill).toEqual({ stage: 'recce' });
-    expect(stages[2].drill).toEqual({ stage: 'recce', status: 'APPROVED' });
-    expect(stages[3].drill).toEqual({ stage: 'install' });
-    expect(stages[4].drill).toEqual({ stage: 'install', status: 'AUDITED' });
+    expect(stages[2].drill).toEqual({ stage: 'recce', status: 'APPROVED' }); // ASM approved
+    // HO approved is not drillable — the records endpoint has no hoReviewStatus lens.
+    expect(stages[3].drill).toBeNull();
+    expect(stages[4].drill).toEqual({ stage: 'install' });
+    expect(stages[5].drill).toEqual({ stage: 'install', status: 'AUDITED' });
   });
 
   it('degrades honestly when there are zero sites (no divide-by-zero, no fake 0%)', () => {
-    const stages = buildFunnel({ totalSites: 0, recced: 0, approved: 0, installed: 0, audited: 0 });
+    const stages = buildFunnel({ totalSites: 0, recced: 0, approved: 0, hoApproved: 0, installed: 0, audited: 0 });
     expect(stages[0].pctOfTotal).toBeNull();
     expect(stages[1].pctOfTotal).toBeNull();
     expect(stages[1].conversionFromPrev).toBeNull();
@@ -110,15 +121,18 @@ describe('buildFunnel', () => {
 // ─── stageColor / stage tables ─────────────────────────────────────────────────
 
 describe('stageColor', () => {
-  it('maps each furthest stage to its heatmap colour', () => {
+  it('maps each furthest stage to its heatmap colour (ASM vs HO approved distinct)', () => {
     expect(stageColor('NONE')).toBe('#9ca3af');
     expect(stageColor('RECCED')).toBe('#f59e0b');
-    expect(stageColor('APPROVED')).toBe('#3b82f6');
+    expect(stageColor('ASM_APPROVED')).toBe('#3b82f6');
+    expect(stageColor('HO_APPROVED')).toBe('#6366f1');
+    expect(stageColor('ASM_APPROVED')).not.toBe(stageColor('HO_APPROVED'));
     expect(stageColor('INSTALLED')).toBe('#8b5cf6');
     expect(stageColor('AUDITED')).toBe('#22c55e');
   });
-  it('falls back to grey for an unknown / null value', () => {
+  it('falls back to grey for an unknown / null value (incl. the retired bare APPROVED)', () => {
     expect(stageColor('WHATEVER')).toBe(STAGE_COLORS.NONE);
+    expect(stageColor('APPROVED')).toBe(STAGE_COLORS.NONE); // bare APPROVED no longer a stage
     expect(stageColor(null)).toBe(STAGE_COLORS.NONE);
     expect(stageColor(undefined)).toBe(STAGE_COLORS.NONE);
   });
@@ -127,7 +141,9 @@ describe('stageColor', () => {
       expect(STAGE_COLORS[s as FurthestStage]).toBeTruthy();
       expect(STAGE_LABELS[s as FurthestStage]).toBeTruthy();
     }
-    expect(STAGE_ORDER).toHaveLength(5);
+    expect(STAGE_ORDER).toHaveLength(6);
+    expect(STAGE_LABELS.ASM_APPROVED).toBe('ASM approved');
+    expect(STAGE_LABELS.HO_APPROVED).toBe('HO approved');
   });
 });
 

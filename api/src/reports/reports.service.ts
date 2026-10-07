@@ -53,7 +53,10 @@ export interface DigestCounts {
   manualPendingReview: number;
   staleRecces: number;
   staleInstalls: number;
+  /** Recces ASM-approved in the last 24h (status APPROVED, regardless of HO). */
   approvedRecceLast24h: number;
+  /** Recces HO-approved (installable) in the last 24h (status APPROVED && hoReviewStatus APPROVED). */
+  hoApprovedRecceLast24h: number;
   rejectedRecceLast24h: number;
 }
 
@@ -467,6 +470,7 @@ export class ReportsService {
       staleRecces,
       staleInstalls,
       approvedRecceLast24h,
+      hoApprovedRecceLast24h,
       rejectedRecceLast24h,
     ] = await Promise.all([
       this.prisma.recce.count({ where: { clientId, status: 'SUBMITTED' } }),
@@ -482,8 +486,20 @@ export class ReportsService {
       this.prisma.installation.count({
         where: { clientId, status: 'SUBMITTED', receivedAt: { lt: staleInstallBefore } },
       }),
+      // ASM-approved in the last 24h — status APPROVED by the reviewedAt (ASM) stamp, regardless
+      // of HO. Keyed on reviewedAt (the ASM decision time), matching the "Recces rejected" line.
       this.prisma.recce.count({
         where: { clientId, status: 'APPROVED', reviewedAt: { gte: since24h } },
+      }),
+      // HO-approved (installable) in the last 24h — status APPROVED && hoReviewStatus APPROVED,
+      // keyed on the HO decision time (hoReviewedAt), so it counts the HO sign-off, not the ASM one.
+      this.prisma.recce.count({
+        where: {
+          clientId,
+          status: 'APPROVED',
+          hoReviewStatus: 'APPROVED',
+          hoReviewedAt: { gte: since24h },
+        },
       }),
       this.prisma.recce.count({
         where: { clientId, status: 'REJECTED', reviewedAt: { gte: since24h } },
@@ -499,6 +515,7 @@ export class ReportsService {
       staleRecces,
       staleInstalls,
       approvedRecceLast24h,
+      hoApprovedRecceLast24h,
       rejectedRecceLast24h,
     };
   }
@@ -566,7 +583,8 @@ export class ReportsService {
           </table>
           <div style="color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Last 24 hours</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-            ${row('Recces approved', counts.approvedRecceLast24h)}
+            ${row('Recces ASM-approved', counts.approvedRecceLast24h)}
+            ${row('Recces HO-approved (installable)', counts.hoApprovedRecceLast24h)}
             ${row('Recces rejected', counts.rejectedRecceLast24h)}
           </table>
         </div>

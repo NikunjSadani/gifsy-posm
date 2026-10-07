@@ -124,10 +124,12 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
 
   it('computes approval rate among DECIDED recces + geo pass among verifiable fixes', async () => {
     const { prisma, fns } = makePrisma();
-    // Order of the Promise.all in summary(): [totalSites(site), recced, approved, rejectedRecce,
-    // pendingRecceReview, geoTrue, geoDecided](recce ×6), then installation ×4, then manual ×2.
+    // Order of the Promise.all in summary(): [totalSites(site), recced, approved(ASM), hoApproved,
+    // rejectedRecce, pendingRecceReview, geoTrue, geoDecided](recce ×7), then installation ×4,
+    // then manual ×2.
     fns.site.count.mockResolvedValueOnce(10); // totalSites
-    const recceCounts = [8, 6, 2, 0, 9, 10]; // recced, approved, rejectedRecce, pending, geoTrue, geoDecided
+    // recced, approved(ASM), hoApproved, rejectedRecce, pending, geoTrue, geoDecided
+    const recceCounts = [8, 6, 4, 2, 0, 9, 10];
     let ri = 0;
     fns.recce.count.mockImplementation(() => Promise.resolve(recceCounts[ri++]));
     const installCounts = [5, 3, 1, 1]; // installed, audited, rejectedInstall, pending
@@ -141,8 +143,14 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
     const svc = new AnalyticsService(prisma);
     const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
-    expect(res.waterfall).toEqual({ totalSites: 10, recced: 8, approved: 6, installed: 5, audited: 3 });
-    // approved 6 / decided (6 approved + 2 rejected = 8) = 75
+    // approved = ASM-approved (6); hoApproved = installable (4), a strict subset.
+    expect(res.waterfall).toEqual({ totalSites: 10, recced: 8, approved: 6, hoApproved: 4, installed: 5, audited: 3 });
+    expect(res.waterfall.hoApproved).toBeLessThanOrEqual(res.waterfall.approved);
+    // The hoApproved count (3rd recce.count) pins status APPROVED && hoReviewStatus APPROVED.
+    expect(fns.recce.count.mock.calls[2][0].where).toEqual({
+      clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
+    });
+    // ASM-approval rate: approved 6 / decided (6 approved + 2 rejected = 8) = 75
     expect(res.kpis.recceApprovalRatePct).toBe(75);
     // audited 3 / (3 + 1 rejected = 4) = 75
     expect(res.kpis.installAuditApprovalRatePct).toBe(75);
@@ -183,6 +191,7 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     ]);
     fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
     // EXACT per-site groupBy results: 3 recces (1 APPROVED, 1 REJECTED, 1 SUBMITTED).
+    // recce.groupBy call order: #1 by status, #2 by geoFenceOk, #3 the HO-approved (installable) count.
     fns.recce.groupBy
       .mockResolvedValueOnce([
         { siteId: 's1', status: 'APPROVED', _count: { _all: 1 } },
@@ -193,7 +202,9 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
         { siteId: 's1', geoFenceOk: true, _count: { _all: 1 } },
         { siteId: 's2', geoFenceOk: false, _count: { _all: 1 } },
         { siteId: 's3', geoFenceOk: null, _count: { _all: 1 } },
-      ]);
+      ])
+      // HO-approved (installable): the one APPROVED recce on s1 has ALSO been HO-signed-off.
+      .mockResolvedValueOnce([{ siteId: 's1', _count: { _all: 1 } }]);
     fns.installation.groupBy.mockResolvedValue([]);
     fns.installation.findMany.mockResolvedValue([]); // no AUDIT_APPROVED turnaround rows
     const svc = new AnalyticsService(prisma);
@@ -201,7 +212,13 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
 
     expect(res.items).toHaveLength(1);
     const row = res.items[0];
-    expect(row).toMatchObject({ vendorId: 'v-1', vendorCode: 'VC1', vendorName: 'Vendor One', sites: 4, recced: 3, approved: 1 });
+    expect(row).toMatchObject({ vendorId: 'v-1', vendorCode: 'VC1', vendorName: 'Vendor One', sites: 4, recced: 3, approved: 1, hoApproved: 1 });
+    // hoApproved (installable) is a subset of ASM-approved.
+    expect(row.hoApproved).toBeLessThanOrEqual(row.approved);
+    // The HO-approved groupBy (3rd recce.groupBy) pins status APPROVED && hoReviewStatus APPROVED.
+    expect(fns.recce.groupBy.mock.calls[2][0].where).toEqual({
+      clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
+    });
     // approved 1 / decided (1+1)=2 → 50
     expect(row.recceApprovalRatePct).toBe(50);
     // geoTrue 1 / geoDecided 2 → 50
@@ -280,6 +297,22 @@ describe('AnalyticsService.geo — scoping + truncation + furthestStage', () => 
     const res = await svc.geo(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: 'recce' });
     expect(res.points[0]).toMatchObject({ furthestStage: 'NONE', latestStatus: 'NONE' });
     expect(res.truncated).toBe(false);
+  });
+
+  it('an APPROVED recce resolves to ASM_APPROVED (HO pending) vs HO_APPROVED (HO signed off)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.findMany.mockResolvedValue([
+      // ASM-approved but HO still pending → ASM_APPROVED (not yet installable).
+      { id: 's1', code: 'C1', name: 'N1', town: 't', lat: 1, lng: 2, vendorId: null,
+        recces: [{ status: 'APPROVED', hoReviewStatus: 'PENDING' }], installs: [] },
+      // ASM-approved AND HO-approved → HO_APPROVED (installable).
+      { id: 's2', code: 'C2', name: 'N2', town: 't', lat: 3, lng: 4, vendorId: null,
+        recces: [{ status: 'APPROVED', hoReviewStatus: 'APPROVED' }], installs: [] },
+    ]);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.geo(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: 'recce' });
+    expect(res.points[0].furthestStage).toBe('ASM_APPROVED');
+    expect(res.points[1].furthestStage).toBe('HO_APPROVED');
   });
 });
 

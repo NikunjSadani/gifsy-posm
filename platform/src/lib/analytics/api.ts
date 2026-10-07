@@ -17,7 +17,10 @@ import { api, type ApiResponse } from '@/lib/api-client';
 export interface SummaryWaterfall {
   totalSites: number;
   recced: number;
+  /** ASM-approved: status APPROVED, regardless of the HO review stage. */
   approved: number;
+  /** HO-approved / installable: status APPROVED && hoReviewStatus APPROVED (subset of `approved`). */
+  hoApproved: number;
   installed: number;
   audited: number;
 }
@@ -51,9 +54,13 @@ export interface VendorScorecard {
   vendorName: string;
   sites: number;
   recced: number;
+  /** ASM-approved: status APPROVED, regardless of HO. */
   approved: number;
+  /** HO-approved / installable: status APPROVED && hoReviewStatus APPROVED (subset of `approved`). */
+  hoApproved: number;
   installed: number;
   audited: number;
+  /** ASM-approval rate (ASM-approved among decided) — NOT the HO/installable rate. */
   recceApprovalRatePct: number | null;
   geoFencePassPct: number | null;
   avgTurnaroundDays: number | null;
@@ -65,7 +72,13 @@ export interface VendorScorecardsResult {
 }
 
 /** GET /api/analytics/geo?stage=recce|install */
-export type FurthestStage = 'NONE' | 'RECCED' | 'APPROVED' | 'INSTALLED' | 'AUDITED';
+export type FurthestStage =
+  | 'NONE'
+  | 'RECCED'
+  | 'ASM_APPROVED'
+  | 'HO_APPROVED'
+  | 'INSTALLED'
+  | 'AUDITED';
 
 export interface GeoPoint {
   siteId: string;
@@ -116,7 +129,8 @@ export type AnalyticsStage = 'recce' | 'install';
 export const STAGE_COLORS: Record<FurthestStage, string> = {
   NONE: '#9ca3af', // grey-400
   RECCED: '#f59e0b', // amber-500
-  APPROVED: '#3b82f6', // blue-500
+  ASM_APPROVED: '#3b82f6', // blue-500 — ASM approved (not yet installable)
+  HO_APPROVED: '#6366f1', // indigo-500 — HO approved (installable)
   INSTALLED: '#8b5cf6', // violet-500
   AUDITED: '#22c55e', // green-500
 };
@@ -125,13 +139,21 @@ export const STAGE_COLORS: Record<FurthestStage, string> = {
 export const STAGE_LABELS: Record<FurthestStage, string> = {
   NONE: 'Not started',
   RECCED: 'Recced',
-  APPROVED: 'Recce approved',
+  ASM_APPROVED: 'ASM approved',
+  HO_APPROVED: 'HO approved',
   INSTALLED: 'Installed',
   AUDITED: 'Audited',
 };
 
 /** Ordered stages for a stable legend. */
-export const STAGE_ORDER: FurthestStage[] = ['NONE', 'RECCED', 'APPROVED', 'INSTALLED', 'AUDITED'];
+export const STAGE_ORDER: FurthestStage[] = [
+  'NONE',
+  'RECCED',
+  'ASM_APPROVED',
+  'HO_APPROVED',
+  'INSTALLED',
+  'AUDITED',
+];
 
 /** Colour for a furthest-stage value; falls back to grey for an unknown value. */
 export function stageColor(stage: FurthestStage | string | null | undefined): string {
@@ -167,7 +189,13 @@ export function formatDays(days: number | null | undefined): string {
 
 // ─── Waterfall funnel math ─────────────────────────────────────────────────────
 
-export type FunnelStageKey = 'totalSites' | 'recced' | 'approved' | 'installed' | 'audited';
+export type FunnelStageKey =
+  | 'totalSites'
+  | 'recced'
+  | 'approved'
+  | 'hoApproved'
+  | 'installed'
+  | 'audited';
 
 export interface FunnelStage {
   key: FunnelStageKey;
@@ -182,9 +210,11 @@ export interface FunnelStage {
 }
 
 /**
- * Turn the summary waterfall counts into an ordered 5-stage funnel with bar widths (share of
- * total sites) and step-to-step conversion percentages. Pure + deterministic so the admin and
- * vendor funnels render identically.
+ * Turn the summary waterfall counts into an ordered 6-stage funnel with bar widths (share of
+ * total sites) and step-to-step conversion percentages. The funnel order is
+ * Total sites → Recced → ASM approved → HO approved → Installed → Audited, so an ASM-approved
+ * recce is never conflated with an installable (HO-approved) one. Pure + deterministic so the
+ * admin and vendor funnels render identically.
  */
 export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
   const total = w.totalSites;
@@ -208,18 +238,31 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
     },
     {
       key: 'approved',
-      label: 'Recce approved',
+      label: 'ASM approved',
       count: w.approved,
       pctOfTotal: pctOfTotal(w.approved),
       conversionFromPrev: conversionPct(w.approved, w.recced),
+      // Drills to all APPROVED recces (the ASM-approved set).
       drill: { stage: 'recce', status: 'APPROVED' },
+    },
+    {
+      key: 'hoApproved',
+      label: 'HO approved',
+      count: w.hoApproved,
+      pctOfTotal: pctOfTotal(w.hoApproved),
+      conversionFromPrev: conversionPct(w.hoApproved, w.approved),
+      // The records endpoint filters by `status` only (no hoReviewStatus lens), so this stage is
+      // not independently drillable — a drill-down here would misleadingly show every ASM-approved
+      // recce, not only the HO-approved ones.
+      drill: null,
     },
     {
       key: 'installed',
       label: 'Installed',
       count: w.installed,
       pctOfTotal: pctOfTotal(w.installed),
-      conversionFromPrev: conversionPct(w.installed, w.approved),
+      // Conversion is measured from HO approved (the installable set), not ASM approved.
+      conversionFromPrev: conversionPct(w.installed, w.hoApproved),
       drill: { stage: 'install' },
     },
     {
