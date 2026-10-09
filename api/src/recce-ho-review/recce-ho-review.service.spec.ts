@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { Prisma } from '@prisma/client';
@@ -31,6 +31,8 @@ function makePrisma() {
     },
     // Shared ImageHash store backing the duplicate-photo fraud signal (empty = no duplicate).
     imageHash: { findMany: jest.fn().mockResolvedValue([]) },
+    // Site used by the manual-recce Outlet-ID exists-check + code write at approve.
+    site: { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn().mockResolvedValue({}) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
   fns.$transaction = jest.fn((arg: unknown) =>
@@ -46,14 +48,49 @@ const user = (over: Partial<JwtPayload>): JwtPayload => ({
 });
 
 describe('RecceHoReviewService.listQueue — the recce-HO queue', () => {
-  it('CLIENT_ADMIN: pins the tenant + status APPROVED + hoReviewStatus PENDING', async () => {
+  it('CLIENT_ADMIN: pins the tenant + widens to app OR manual pending-HO clauses', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new RecceHoReviewService(prisma);
     await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
     const where = fns.recce.findMany.mock.calls[0][0].where;
     expect(where.clientId).toBe('c1');
-    expect(where.status).toBe('APPROVED');
-    expect(where.hoReviewStatus).toBe('PENDING');
+    // R4 — app (ASM-approved, pending HO) OR manual (skipped ASM, SUBMITTED, pending HO).
+    expect(where.OR).toEqual([
+      { status: 'APPROVED', hoReviewStatus: 'PENDING' },
+      { recceMode: 'MANUAL', status: 'SUBMITTED', hoReviewStatus: 'PENDING' },
+    ]);
+  });
+
+  it('mode=manual narrows to the manual clause; mode=app to the app clause', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new RecceHoReviewService(prisma);
+    await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { mode: 'manual' });
+    expect(fns.recce.findMany.mock.calls[0][0].where.OR).toEqual([
+      { recceMode: 'MANUAL', status: 'SUBMITTED', hoReviewStatus: 'PENDING' },
+    ]);
+    await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { mode: 'app' });
+    expect(fns.recce.findMany.mock.calls[1][0].where.OR).toEqual([
+      { status: 'APPROVED', hoReviewStatus: 'PENDING' },
+    ]);
+  });
+
+  it('a manual queue item carries recceMode + outletId (null while the code is provisional)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([
+      {
+        id: 'rM', clientId: 'c1', status: 'SUBMITTED', recceMode: 'MANUAL', hoReviewStatus: 'PENDING', version: 1,
+        capturedAt: null, receivedAt: new Date(), reviewedAt: null, hoReviewedAt: null,
+        hoRejectionReasonCode: null, hoRejectionReason: null,
+        geoFenceOk: null, distanceMeters: null, captureAccuracy: null, captureLat: null, captureLng: null,
+        site: { id: 's1', code: 'MAN-abc', name: 'Prov Shop', town: null, lat: null, lng: null },
+        submittedBy: { id: 'v1', name: 'Rep' }, hoReviewedBy: null,
+        posms: [{ id: 'rp1', slotNo: 1, dimensions: {}, photo: { key: 'posm-media/c1/p.jpg' }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'B', name: 'Board' } }],
+      },
+    ]);
+    const svc = new RecceHoReviewService(prisma);
+    const res = await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
+    expect(res.items[0].recceMode).toBe('MANUAL');
+    expect(res.items[0].outletId).toBeNull(); // provisional MAN- code → no real Outlet ID yet
   });
 
   it('un-assumed GIFSY_ADMIN: platform-wide (no clientId filter)', async () => {
@@ -217,6 +254,65 @@ describe('RecceHoReviewService.approve/reject — transitions', () => {
     await expect(svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'r1')).rejects.toBeInstanceOf(ConflictException);
     expect(fns.recce.update.mock.calls[0][0].where).toEqual({ id: 'r1', hoReviewStatus: 'PENDING' });
     expect(fns.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('RecceHoReviewService.approve — MANUAL recces (Outlet-ID gate)', () => {
+  const manualRecce = (over: Record<string, unknown> = {}) => ({
+    id: 'rM', clientId: 'c1', status: 'SUBMITTED', hoReviewStatus: 'PENDING', recceMode: 'MANUAL',
+    site: { id: 's1', code: 'MAN-abc', name: 'Prov Shop' },
+    ...over,
+  });
+
+  it('no outletId + a provisional outlet code → 400, never updates', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce());
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', {}),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+    expect(fns.site.update).not.toHaveBeenCalled();
+  });
+
+  it('with a new outletId → writes site.code AND sets status=APPROVED + hoReviewStatus=APPROVED', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce());
+    fns.site.findFirst.mockResolvedValue(null); // no collision
+    fns.recce.update.mockResolvedValue({ id: 'rM', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
+    const svc = new RecceHoReviewService(prisma);
+    await svc.approve(user({ role: 'CLIENT_ADMIN', sub: 'ho-1', clientId: 'c1' }), 'rM', { outletId: 'OUT-9' });
+    // The provisional code is overwritten with the real Outlet ID.
+    expect(fns.site.update.mock.calls[0][0]).toMatchObject({ where: { id: 's1' }, data: { code: 'OUT-9' } });
+    const data = fns.recce.update.mock.calls[0][0].data;
+    // No ASM stage → HO sets BOTH, so the install gate (status===APPROVED && hoReviewStatus===APPROVED) passes.
+    expect(data.status).toBe('APPROVED');
+    expect(data.hoReviewStatus).toBe('APPROVED');
+    expect(fns.recce.update.mock.calls[0][0].where).toEqual({ id: 'rM', hoReviewStatus: 'PENDING' });
+  });
+
+  it('D6 exists-check: an outletId matching a DIFFERENT outlet → 409 with that outlet name, no write', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce());
+    fns.site.findFirst.mockResolvedValue({ name: 'Shah Stores' }); // OUT-9 already belongs elsewhere
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-9' }),
+    ).rejects.toThrow(/Shah Stores/);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+    // The exists-check excludes the recce's own site row.
+    expect(fns.site.findFirst.mock.calls[0][0].where).toMatchObject({ clientId: 'c1', code: 'OUT-9', id: { not: 's1' } });
+  });
+
+  it('outlet already carries a REAL code, no outletId → approves without rewriting the code', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce({ site: { id: 's1', code: 'OUT1', name: 'Real Shop' } }));
+    fns.recce.update.mockResolvedValue({ id: 'rM' });
+    const svc = new RecceHoReviewService(prisma);
+    await svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', {});
+    expect(fns.site.update).not.toHaveBeenCalled();
+    expect(fns.recce.update.mock.calls[0][0].data.status).toBe('APPROVED');
+    expect(fns.recce.update.mock.calls[0][0].data.hoReviewStatus).toBe('APPROVED');
   });
 });
 

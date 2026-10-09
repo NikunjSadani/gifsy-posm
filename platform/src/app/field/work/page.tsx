@@ -36,11 +36,13 @@ import { Spinner } from '@/components/ui/spinner';
 import {
   fetchMyRecces,
   groupRecces,
+  groupInstallableByOutlet,
   classifyRecce,
   rejectionLabel,
   type RecceListRow,
   type RecceGroup,
   type RecceGroupKey,
+  type InstallableOutlet,
 } from '@/lib/field/recce-api';
 import { getOutletFilter, type OutletFilter } from '@/lib/field/outlet-filter';
 
@@ -206,19 +208,28 @@ export default function MyWorkPage() {
           {groups.map((group) => {
             const meta = STATUS_META[group.key];
             const Icon = meta.icon;
+            // Ready-to-install collapses by OUTLET: an outlet with one installable recce links
+            // straight to capture (unchanged); an outlet with several (manual) opens the picker.
+            const installOutlets =
+              group.key === 'READY_TO_INSTALL' ? groupInstallableByOutlet(group.recces) : null;
+            const headerCount = installOutlets ? installOutlets.length : group.recces.length;
             return (
               <section key={group.key}>
                 <div className="mb-2 flex items-center gap-2">
                   <Icon className={`h-4 w-4 ${meta.tint}`} />
                   <h2 className="text-sm font-bold text-gray-700">{meta.label}</h2>
                   <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-500">
-                    {group.recces.length}
+                    {headerCount}
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {group.recces.map((recce) => (
-                    <RecceCard key={recce.id} recce={recce} groupKey={group.key} />
-                  ))}
+                  {installOutlets
+                    ? installOutlets.map((outlet) => (
+                        <InstallOutletCard key={outlet.site.id} outlet={outlet} />
+                      ))
+                    : group.recces.map((recce) => (
+                        <RecceCard key={recce.id} recce={recce} groupKey={group.key} />
+                      ))}
                 </div>
               </section>
             );
@@ -292,7 +303,9 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: RecceGr
         </div>
       )}
 
-      {/* Install is offered ONLY once the recce is fully approved (ASM + HO). */}
+      {/* Install is offered ONLY once the recce is fully approved (ASM + HO). READY_TO_INSTALL is
+          normally rendered by InstallOutletCard (grouped by outlet); this stays as a defensive
+          per-recce fallback. */}
       {key === 'READY_TO_INSTALL' && (
         <Link
           href={`/field/install/${encodeURIComponent(recce.id)}`}
@@ -302,6 +315,48 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: RecceGr
           Start installation
         </Link>
       )}
+    </div>
+  );
+}
+
+// ── One installable OUTLET (ready-to-install, collapsed by outlet) ─────────────
+// An outlet with a single installable recce links straight to its capture screen (unchanged app
+// behaviour); an outlet with several recces (only possible for manual) opens the recce picker.
+function InstallOutletCard({ outlet }: { outlet: InstallableOutlet }) {
+  const { site, recces } = outlet;
+  const many = recces.length > 1;
+  const href = many
+    ? `/field/install/select/${encodeURIComponent(site.id)}`
+    : `/field/install/${encodeURIComponent(recces[0].id)}`;
+  const meta = STATUS_META.READY_TO_INSTALL;
+  const subtitle = many
+    ? `${recces.length} recces ready`
+    : `${recces[0].posmCount} Element${recces[0].posmCount === 1 ? '' : 's'}`;
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-bold text-gray-900">{site.name}</h3>
+          <p className="mt-0.5 text-xs text-gray-500">
+            <span className="font-mono text-gray-400">{site.code}</span>
+            {site.town && <span> · {site.town}</span>}
+            <span> · {subtitle}</span>
+          </p>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-600">
+          <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: meta.dot }} />
+          {meta.label}
+        </span>
+      </div>
+
+      <Link
+        href={href}
+        className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand-primary)] py-3 text-sm font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95"
+      >
+        <Hammer className="h-4 w-4" />
+        {many ? 'Choose recce to install' : 'Start installation'}
+      </Link>
     </div>
   );
 }

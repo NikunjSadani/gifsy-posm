@@ -81,6 +81,17 @@ export class SitesController {
     return this.sites.beatOptions(user, rsCode);
   }
 
+  /**
+   * GET /v1/sites/lookup?outletId=<X> — exact Outlet ID resolution for the Manual Recce
+   * warn-and-prefill UX. Vendor-scoped for a field exec, tenant-scoped for an admin. Declared
+   * before `:id` so the literal segment wins the route match.
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN', 'VENDOR_FIELD')
+  @Get('lookup')
+  lookup(@CurrentUser() user: JwtPayload, @Query('outletId') outletId?: string) {
+    return this.sites.lookup(user, outletId);
+  }
+
   /** GET /v1/sites/:id — scoped single fetch. */
   @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
   @Get(':id')

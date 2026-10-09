@@ -263,6 +263,15 @@ enum RecceStatus {
   REJECTED
 }
 
+/// How a recce was captured.
+///   APP    — the standard in-app recce against a pre-existing outlet (RS/Beat picked). One per outlet.
+///   MANUAL — field exec typed the outlet details inline (outlet may be off-master); skips ASM, goes
+///            straight to HO. UNLIMITED per outlet (different elements installed at different times).
+enum RecceMode {
+  APP
+  MANUAL
+}
+
 enum InstallationStatus {
   SUBMITTED
   AUDIT_APPROVED
@@ -304,6 +313,7 @@ model Recce {
   siteId        String
   submittedById String // VENDOR_FIELD user
   status        RecceStatus @default(SUBMITTED)
+  recceMode     RecceMode   @default(APP) // APP = one per outlet; MANUAL = unlimited, skips ASM → HO
   version       Int         @default(1)
 
   // geo (worst/representative fixed photo — same math as loyalty geo-fence)
@@ -345,7 +355,11 @@ model Recce {
   posms        ReccePosm[]
   installation Installation?
 
-  @@unique([clientId, siteId]) // one live recce per site
+  // One live APP recce per outlet; MANUAL recces are unlimited. Prisma can't express a partial
+  // unique, so APP-only uniqueness is enforced by the raw partial index `recces_app_one_per_site`
+  // (WHERE "recceMode" = 'APP') created in migration `add_manual_recce`. This plain index covers
+  // the (clientId, siteId) lookups that remain.
+  @@index([clientId, siteId])
   @@index([clientId, status])
   @@index([clientId, hoReviewStatus])
   @@map("recces")

@@ -81,7 +81,7 @@ describe('RecceService', () => {
 
   it('rejects (400) two POSM lines that reuse the SAME photo — no write (parity with install lane)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     // Both lines carry the same hardcoded KEY → one photo can't fill two distinct POSM slots.
     await expect(
@@ -105,7 +105,7 @@ describe('RecceService', () => {
 
   it('HARD-BLOCKS a photo captured outside the geo-fence (403) when the fence is enabled', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     await expect(
@@ -116,7 +116,7 @@ describe('RecceService', () => {
 
   it('409s when a site already has a live (submitted) recce (immutable)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'SUBMITTED' });
+    mockPrisma.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'SUBMITTED' });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.076, lng: 72.877 })] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -124,7 +124,7 @@ describe('RecceService', () => {
 
   it('happy path: submits → SUBMITTED, records hashes, writes a CREATE audit', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
@@ -164,7 +164,7 @@ describe('RecceService', () => {
   // ── B1 fail-CLOSED on unverifiable geo ─────────────────────────────────────────
   it('B1: fence enabled + a MISSING-geo photo → hard 403 (unverifiable no longer passes)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     // A photo with NO geo at all — previously fell through as a soft null and PASSED.
@@ -177,7 +177,7 @@ describe('RecceService', () => {
 
   it('B8→B1: fence enabled + an over-accuracy-cap fix → hard 403 (unverifiable)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     const poorFix = { posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' }, photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771, accuracy: 500 } } };
@@ -249,7 +249,7 @@ describe('RecceService', () => {
   // ── A4 clean 409 on a create race ──────────────────────────────────────────────
   it('A4: a P2002 unique-violation race on create surfaces a 409, not a raw 500', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockPrisma.$transaction.mockRejectedValue(
@@ -263,7 +263,7 @@ describe('RecceService', () => {
   // ── B5/B6 computed reviewer flags surfaced on the recce response ────────────────
   it('B5/B6: present() surfaces lowAccuracy + clockSkew reviewer flags from stored signals', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
@@ -294,7 +294,7 @@ describe('RecceService', () => {
 
   it('B8: a duplicate hash reported by recordImageHashes surfaces duplicate=true', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
@@ -324,7 +324,7 @@ describe('RecceService', () => {
   // ── Per-POSM stored quality flags (blur/lowLight/overexposed/lowAccuracy) ──────
   it('prepare(): computes + persists per-POSM qualityFlags on the recce.create write (duplicate dropped)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
@@ -361,7 +361,7 @@ describe('RecceService', () => {
 
   it('present(): surfaces each stored per-POSM qualityFlags on the read shape (null for a legacy row)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
@@ -438,5 +438,101 @@ describe('RecceService', () => {
       rejectionReasonCode: null,
       hoRejectionReasonCode: 'GEO_MISMATCH',
     });
+  });
+
+  // ── Manual recce submit (field-typed outlet → straight to HO) ───────────────────
+  const manualRecceRow = (over: Record<string, unknown> = {}) => ({
+    id: 'rM', status: 'SUBMITTED', recceMode: 'MANUAL', version: 1,
+    captureLat: null, captureLng: null, captureAccuracy: null, distanceMeters: null, geoFenceOk: null,
+    capturedAt: null, receivedAt: new Date(),
+    rejectionReasonCode: null, rejectionReason: null,
+    hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
+    site: { id: 'sNew', code: 'MAN-xyz', name: 'New Shop', town: null, lat: null, lng: null },
+    submittedBy: { id: 'u1', name: 'Field' },
+    posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    ...over,
+  });
+
+  const manualPrepMocks = () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+  };
+
+  it('manual: a blank outletName → 400, no outlet/recce write', async () => {
+    await expect(
+      service.createManual(vendorField, { outletName: '   ', posms: [line({ lat: 19.076, lng: 72.877 })] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('manual: a vendor with no resolvable vendor is DENIED (404) — fail-closed', async () => {
+    const noVendor = { sub: 'u1', role: 'VENDOR_FIELD', clientId: 'kwality', phone: '9', name: 'F' } as any;
+    await expect(
+      service.createManual(noVendor, { outletName: 'X', posms: [line({ lat: 19.076, lng: 72.877 })] }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('manual: no outletId → creates a provisional MAN- outlet + MANUAL recce (SUBMITTED + hoReviewStatus PENDING)', async () => {
+    manualPrepMocks();
+    const tx = {
+      site: { create: jest.fn().mockResolvedValue({ id: 'sNew' }) },
+      recce: { create: jest.fn().mockResolvedValue(manualRecceRow()) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const res = await service.createManual(vendorField, { outletName: 'New Shop', outletAddress: '12 Main St', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+
+    const siteData = tx.site.create.mock.calls[0][0].data;
+    expect(siteData.code.startsWith('MAN-')).toBe(true); // provisional sentinel
+    expect(siteData.name).toBe('New Shop');
+    expect(siteData.vendorId).toBe('vA'); // vendor derived from the caller
+    expect(siteData.address).toBe('12 Main St');
+    const recceData = tx.recce.create.mock.calls[0][0].data;
+    expect(recceData.recceMode).toBe('MANUAL');
+    expect(recceData.status).toBe('SUBMITTED');
+    expect(recceData.hoReviewStatus).toBe('PENDING'); // straight to HO, no ASM
+    expect(recceData.siteId).toBe('sNew');
+    expect(res.recceMode).toBe('MANUAL');
+    // Audit records the manual-submit event.
+    expect(tx.auditLog.create.mock.calls[0][0].data.metadata.event).toBe('RECCE_MANUAL_SUBMIT');
+  });
+
+  it('manual: an EXISTING owned outletId → ATTACHES (no new outlet) — allowed even if it has an app recce', async () => {
+    manualPrepMocks();
+    // Vendor-scoped attach lookup returns the owned outlet (its app recce is irrelevant to manual).
+    mockPrisma.site.findFirst.mockResolvedValue({ id: 'sExisting', lat: 19.076, lng: 72.877, status: 'ACTIVE' });
+    const tx = {
+      site: { create: jest.fn() },
+      recce: { create: jest.fn().mockResolvedValue(manualRecceRow({ site: { id: 'sExisting', code: 'OUT1', name: 'Existing', town: null, lat: 19.076, lng: 72.877 } })) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await service.createManual(vendorField, { outletId: 'OUT1', outletName: 'Existing', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+
+    expect(tx.site.create).not.toHaveBeenCalled(); // reused, not duplicated
+    expect(tx.recce.create.mock.calls[0][0].data.siteId).toBe('sExisting');
+    // The attach lookup carried the vendor pin — a foreign outlet is invisible here.
+    expect(mockPrisma.site.findFirst.mock.calls[0][0].where).toEqual({ clientId: 'kwality', code: 'OUT1', vendorId: 'vA' });
+  });
+
+  it('manual: an outletId that collides with a NON-owned outlet → 409 (no cross-vendor attach)', async () => {
+    manualPrepMocks();
+    mockPrisma.site.findFirst.mockResolvedValue(null); // not found under this vendor → create branch
+    const tx = {
+      site: { create: jest.fn().mockRejectedValue(new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'x' })) },
+      recce: { create: jest.fn() },
+      auditLog: { create: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await expect(
+      service.createManual(vendorField, { outletId: 'OTHER', outletName: 'X', posms: [line({ lat: 19.0761, lng: 72.8771 })] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.recce.create).not.toHaveBeenCalled();
   });
 });

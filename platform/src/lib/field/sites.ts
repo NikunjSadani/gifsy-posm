@@ -72,6 +72,34 @@ export function fetchSites(filters: SiteFilters = {}) {
 }
 
 /**
+ * One outlet matched by `GET /v1/sites/lookup?outletId=…` (the warn-and-prefill contract). Note
+ * `address` is carried here (the list `Site` has no address) because the manual-recce form
+ * prefills it read-only when an entered Outlet ID already exists.
+ */
+export interface SiteLookupMatch {
+  id: string;
+  code: string;
+  name: string;
+  address: string | null;
+  phone: string | null;
+}
+
+/** `GET /v1/sites/lookup` payload — `exists` plus the matched outlet when found. */
+export interface SiteLookupResult {
+  exists: boolean;
+  site?: SiteLookupMatch;
+}
+
+/**
+ * Look up an outlet by its Outlet ID (= `Site.code`). Drives the manual-recce warn-and-prefill
+ * UX (D6): a hit means the recce attaches to that existing outlet. Scoped server-side to the
+ * caller's tenant/fleet. Returns the api-client `ApiResponse` so callers branch on `.success`.
+ */
+export function lookupSiteByOutletId(outletId: string) {
+  return api.get<SiteLookupResult>(`/api/sites/lookup?outletId=${encodeURIComponent(outletId)}`);
+}
+
+/**
  * Distinct, sorted RS codes available to this vendor login (for the filter-first screen's
  * first dropdown). Vendor-scoped server-side.
  */

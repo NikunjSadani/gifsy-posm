@@ -8,7 +8,7 @@ import { InstallationService } from './installation.service';
 
 const mockPrisma = {
   site: { findFirst: jest.fn() },
-  recce: { findUnique: jest.fn() },
+  recce: { findFirst: jest.fn(), findMany: jest.fn() },
   installation: { findFirst: jest.fn(), create: jest.fn() },
   imageHash: { findMany: jest.fn() },
   client: { findUnique: jest.fn() },
@@ -47,7 +47,7 @@ describe('InstallationService', () => {
 
   it('409s when the site recce is NOT APPROVED (install-before-approval)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'SUBMITTED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
+    mockPrisma.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'SUBMITTED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -57,7 +57,7 @@ describe('InstallationService', () => {
   it('409s when the recce is ASM-APPROVED but NOT yet HO-approved (hoReviewStatus PENDING)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
     // The ASM approved it (status APPROVED) but it still awaits HO review → install is gated.
-    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'PENDING', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
+    mockPrisma.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'PENDING', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -66,7 +66,7 @@ describe('InstallationService', () => {
 
   it('409s when the recce was HO-REJECTED (hoReviewStatus REJECTED)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'REJECTED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
+    mockPrisma.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'REJECTED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: null });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -75,7 +75,7 @@ describe('InstallationService', () => {
 
   it('409s when no recce exists for the site', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -83,7 +83,7 @@ describe('InstallationService', () => {
 
   it('409s when the recce already has an installation', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: { id: 'i0' } });
+    mockPrisma.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED', posms: [{ id: 'rp1', photo: { key: 'k' } }], installation: { id: 'i0' } });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -99,7 +99,7 @@ describe('InstallationService', () => {
 
   it('HARD-BLOCKS a missing photo — every recce POSM must be fulfilled (400)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({
+    mockPrisma.recce.findFirst.mockResolvedValue({
       id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
       posms: [{ id: 'rp1', photo: { key: 'k1' } }, { id: 'rp2', photo: { key: 'k2' } }],
       installation: null,
@@ -112,7 +112,7 @@ describe('InstallationService', () => {
 
   it('happy path: submits → SUBMITTED, persists integrity signals, writes a CREATE audit', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({
+    mockPrisma.recce.findFirst.mockResolvedValue({
       id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
       posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce.jpg', geo } }],
       installation: null,
@@ -166,7 +166,7 @@ describe('InstallationService', () => {
   // ── B1 fail-CLOSED on unverifiable geo ─────────────────────────────────────────
   it('B1: fence enabled + a MISSING-geo install photo → hard 403 (unverifiable)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.recce.findFirst.mockResolvedValue(approvedRecce());
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     mockPrisma.imageHash.findMany.mockResolvedValue([]);
     await expect(
@@ -177,7 +177,7 @@ describe('InstallationService', () => {
 
   it('B8→B1: fence enabled + an over-accuracy-cap install fix → hard 403', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.recce.findFirst.mockResolvedValue(approvedRecce());
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     mockPrisma.imageHash.findMany.mockResolvedValue([]);
     await expect(
@@ -192,7 +192,7 @@ describe('InstallationService', () => {
   // ── B3 hard-block install-photo reuse ──────────────────────────────────────────
   it('B3: an install photo IDENTICAL to its recce photo (beforeAfterDiffOk false) → 409, no write', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.recce.findFirst.mockResolvedValue(approvedRecce());
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     mockPrisma.imageHash.findMany.mockResolvedValue([]);
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
@@ -206,7 +206,7 @@ describe('InstallationService', () => {
 
   it('B3: an install photo whose exact hash was already seen (duplicate) → 409, no write', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.recce.findFirst.mockResolvedValue(approvedRecce());
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: true, radiusMeters: 100 } } });
     mockPrisma.imageHash.findMany.mockResolvedValue([{ hash: 'ihash-dup' }]); // seen elsewhere
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
@@ -221,7 +221,7 @@ describe('InstallationService', () => {
   // ── Fix 1: one photo must not fulfil multiple install POSM lines ───────────────
   it('Fix 1: the SAME photo key on two POSM lines → 400, no write ("install one, get paid for two")', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue({
+    mockPrisma.recce.findFirst.mockResolvedValue({
       id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
       posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce1.jpg' } }, { id: 'rp2', photo: { key: 'posm-media/kwality/recce2.jpg' } }],
       installation: null,
@@ -243,7 +243,7 @@ describe('InstallationService', () => {
   // ── Fix 2: cross-submission duplicate race closed by the DB unique (P2002 → 409) ──
   it('Fix 2: a P2002 on the ImageHash (clientId, hash) unique → 409 duplicate-photo hard block', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.recce.findFirst.mockResolvedValue(approvedRecce());
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockPrisma.imageHash.findMany.mockResolvedValue([]); // pre-read dup-set empty (the race window)
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
@@ -274,7 +274,7 @@ describe('InstallationService', () => {
   // ── A4 clean 409 on a create race ──────────────────────────────────────────────
   it('A4: a P2002 unique-violation race (one-install-per-recce) surfaces a 409, not a raw 500', async () => {
     mockPrisma.site.findFirst.mockResolvedValue(activeSite);
-    mockPrisma.recce.findUnique.mockResolvedValue(approvedRecce());
+    mockPrisma.recce.findFirst.mockResolvedValue(approvedRecce());
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockPrisma.imageHash.findMany.mockResolvedValue([]);
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
@@ -286,5 +286,83 @@ describe('InstallationService', () => {
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  // ── R1: installation is recce-keyed (explicit recceId) with an app-recce fallback ─
+  it('R1: an explicit recceId targets THAT recce, scoped to the owned site', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null); // the chosen recce is not installable
+    await expect(
+      service.create(vendorField, { siteId: 's1', recceId: 'rX', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    // Scoped by id + owned-site (clientId, siteId) — a foreign/other-site recce is invisible here.
+    expect(mockPrisma.recce.findFirst.mock.calls[0][0].where).toEqual({ id: 'rX', clientId: 'kwality', siteId: 's1' });
+  });
+
+  it('R1 fallback: no recceId → resolves the outlet\'s single APP recce (back-compat)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(mockPrisma.recce.findFirst.mock.calls[0][0].where).toEqual({ clientId: 'kwality', siteId: 's1', recceMode: 'APP' });
+  });
+
+  it('R1: installs against the chosen approved (manual) recce — recceId honoured on the write', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue({
+      id: 'rManual', status: 'APPROVED', hoReviewStatus: 'APPROVED',
+      posms: [{ id: 'rp1', photo: { key: 'posm-media/kwality/recce.jpg', geo } }],
+      installation: null,
+    });
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockPrisma.imageHash.findMany.mockResolvedValue([]);
+    mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 2));
+    mockIntegrity.hash.mockReturnValue('ihash-m');
+    mockIntegrity.beforeAfterDiffOk.mockReturnValue(true);
+
+    const createdRow = {
+      id: 'i9', status: 'SUBMITTED', version: 1, capturedAt: null, receivedAt: new Date(),
+      auditedAt: null, rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'MAN-abc', name: 'Store', town: null, lat: null, lng: null },
+      submittedBy: { id: 'u1', name: 'Field' },
+      recce: { id: 'rManual', status: 'APPROVED', version: 1 },
+      posms: [{
+        id: 'ip1', reccePosmId: 'rp1', photo: { key: KEY }, captureLat: null, captureLng: null,
+        geoFenceOk: null, distanceFromRecce: null, beforeAfterDiffOk: true, qualityFlags: {},
+        reccePosm: { id: 'rp1', slotNo: 1, dimensions: {}, photo: { key: 'posm-media/kwality/recce.jpg' }, markup: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } },
+      }],
+    };
+    const tx = {
+      installation: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    await service.create(vendorField, { siteId: 's1', recceId: 'rManual', posms: [{ reccePosmId: 'rp1', photo: { key: KEY, geo } }] });
+    expect(tx.installation.create.mock.calls[0][0].data.recceId).toBe('rManual');
+  });
+
+  // ── GET /installable — the field recce picker ──────────────────────────────────
+  it('installable: lists APPROVED + HO-APPROVED, un-installed recces with recceMode + element summary', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findMany.mockResolvedValue([
+      {
+        id: 'rA', recceMode: 'MANUAL', version: 1, capturedAt: null, receivedAt: new Date(),
+        posms: [{ slotNo: 1, posmType: { id: 'pt1', code: 'B', name: 'Board' } }],
+      },
+    ]);
+    const res = await service.installable(vendorField, 's1');
+    expect(res.recces[0]).toMatchObject({ id: 'rA', recceMode: 'MANUAL', elements: ['Board'], posmCount: 1 });
+    const where = mockPrisma.recce.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({
+      clientId: 'kwality', siteId: 's1', status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: { is: null },
+    });
+  });
+
+  it('installable: a foreign / other-vendor outlet is invisible (404)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(null);
+    await expect(service.installable(vendorField, 'foreign')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

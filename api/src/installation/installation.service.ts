@@ -1,7 +1,7 @@
 import {
   BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
-import { Prisma, InstallationStatus, RecceStatus, HoReviewStatus } from '@prisma/client';
+import { Prisma, InstallationStatus, RecceStatus, HoReviewStatus, RecceMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope } from '../common/tenant-scope';
@@ -75,21 +75,30 @@ export class InstallationService {
     const clientId = user.clientId;
     const site = await this.loadOwnedActiveSite(user, dto.siteId);
 
-    // The site's recce must exist, be ASM-APPROVED, AND be HO-APPROVED (the two-stage gate) —
-    // else 409. ASM approval alone no longer unlocks installation; the recce must clear the HO
-    // review stage (hoReviewStatus APPROVED). `include` auto-selects every Recce scalar, so
-    // `hoReviewStatus` rides along here.
-    const recce = await this.prisma.recce.findUnique({
-      where: { clientId_siteId: { clientId, siteId: site.id } },
-      include: { posms: true, installation: { select: { id: true } } },
-    });
+    // R1 — installation is recce-KEYED, not site-keyed (an outlet can now carry many recces: 1 app
+    // + N manual). When `recceId` is supplied the installer targets THAT recce (scoped to the
+    // owned site, so a foreign/other-site recce is invisible → treated as not installable). When
+    // omitted we fall back to the outlet's single APP recce (back-compat). `include` auto-selects
+    // every Recce scalar, so `status` / `hoReviewStatus` ride along here.
+    const recce = dto.recceId
+      ? await this.prisma.recce.findFirst({
+          where: { id: dto.recceId, clientId, siteId: site.id },
+          include: { posms: true, installation: { select: { id: true } } },
+        })
+      : await this.prisma.recce.findFirst({
+          where: { clientId, siteId: site.id, recceMode: RecceMode.APP },
+          include: { posms: true, installation: { select: { id: true } } },
+        });
+    // The chosen recce must exist, be ASM-APPROVED, AND HO-APPROVED (the two-stage gate) — else 409.
     if (
       !recce ||
       recce.status !== RecceStatus.APPROVED ||
       recce.hoReviewStatus !== HoReviewStatus.APPROVED
     ) {
       throw new ConflictException(
-        "Installation requires the site's recce to be HO-approved first.",
+        dto.recceId
+          ? 'The selected recce is not installable (not found on this outlet, or not HO-approved).'
+          : "Installation requires the site's recce to be HO-approved first.",
       );
     }
     if (recce.installation) {
@@ -180,6 +189,50 @@ export class InstallationService {
     }
 
     return this.present(installation);
+  }
+
+  // ── Installable recces for an outlet (the field install picker — R1) ─────────────
+  /**
+   * List the outlet's INSTALLABLE recces — APPROVED + HO-APPROVED with no installation yet — so the
+   * field exec can pick WHICH recce they are installing (an outlet may have 1 app + N manual recces).
+   * Vendor-scoped via the owned-active-site load (a foreign/other-vendor outlet → 404). Each entry
+   * carries `recceMode` + a short element summary (POSM type names) for the picker.
+   */
+  async installable(user: JwtPayload, siteId: string) {
+    const site = await this.loadOwnedActiveSite(user, siteId);
+    const recces = await this.prisma.recce.findMany({
+      where: {
+        clientId: user.clientId,
+        siteId: site.id,
+        status: RecceStatus.APPROVED,
+        hoReviewStatus: HoReviewStatus.APPROVED,
+        installation: { is: null }, // not yet installed
+      },
+      orderBy: [{ createdAt: 'desc' }],
+      include: {
+        posms: {
+          orderBy: { slotNo: 'asc' },
+          select: { slotNo: true, posmType: { select: { id: true, code: true, name: true } } },
+        },
+      },
+    });
+
+    return {
+      recces: recces.map((r) => ({
+        id: r.id,
+        recceMode: r.recceMode,
+        version: r.version,
+        // Same outlet for every row (siteId-scoped), but the field picker labels/groups each option
+        // by outlet, so it carries the outlet identity per recce (matches the FE InstallableRecce).
+        site: { id: site.id, code: site.code, name: site.name, town: site.town },
+        capturedAt: r.capturedAt,
+        receivedAt: r.receivedAt,
+        posmCount: r.posms.length,
+        // Short element summary for the picker row (e.g. "Board, Shelf Strip").
+        elements: r.posms.map((p) => p.posmType.name),
+        posms: r.posms.map((p) => ({ slotNo: p.slotNo, posmType: p.posmType })),
+      })),
+    };
   }
 
   // ── Get one (with POSM lines, both photos' view-paths, integrity signals) ────────

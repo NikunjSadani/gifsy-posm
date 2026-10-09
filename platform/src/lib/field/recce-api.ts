@@ -21,6 +21,13 @@ import type { RecceMarkup } from '@/lib/markup';
 export type RecceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
 /**
+ * How a recce entered the system (mirrors the backend `RecceMode` enum). `APP` = the in-app
+ * recce captured against a master outlet (ASM → HO); `MANUAL` = a field-typed outlet that goes
+ * straight to HO. Every legacy row is backfilled to `APP`.
+ */
+export type RecceMode = 'APP' | 'MANUAL';
+
+/**
  * The Head-Office review decision on an ASM-approved recce (mirrors the backend enum). A recce is
  * only installable once the ASM has approved it (`status==='APPROVED'`) AND HO has too
  * (`hoReviewStatus==='APPROVED'`). 'NONE' = not yet at the HO stage; 'PENDING' = ASM-approved,
@@ -179,6 +186,42 @@ export function resubmitRecce(recceId: string, posms: CapturedReccePosm[]) {
   );
 }
 
+/**
+ * The manual-recce submit body (mirrors the backend `POST /v1/recce/manual` contract). Only
+ * `outletName` is required; `outletId`/address/phone are optional. When `outletId` matches an
+ * existing outlet the backend ATTACHES this recce to it (no duplicate outlet); otherwise a
+ * provisional outlet is created and the real Outlet ID is finalized by HO at approval.
+ */
+export interface ManualRecceInput {
+  /** Optional Outlet ID — when it matches an existing outlet the recce attaches to it. */
+  outletId?: string;
+  /** REQUIRED outlet name (backend returns 400 if blank). */
+  outletName: string;
+  outletAddress?: string;
+  outletPhone?: string;
+  posms: CapturedReccePosm[];
+}
+
+/**
+ * Submit a field-typed MANUAL recce. The outlet is provisioned-or-attached server-side; the
+ * recce lands as `recceMode=MANUAL, status=SUBMITTED, hoReviewStatus=PENDING` and goes straight
+ * to HO (no ASM). Optional fields are omitted from the body when blank so the backend sees a
+ * clean payload. Returns the created recce id/status (+ `recceMode`).
+ */
+export function submitManualRecce(input: ManualRecceInput) {
+  const body: Record<string, unknown> = {
+    outletName: input.outletName.trim(),
+    posms: input.posms.map(toPosmBody),
+  };
+  const outletId = input.outletId?.trim();
+  const outletAddress = input.outletAddress?.trim();
+  const outletPhone = input.outletPhone?.trim();
+  if (outletId) body.outletId = outletId;
+  if (outletAddress) body.outletAddress = outletAddress;
+  if (outletPhone) body.outletPhone = outletPhone;
+  return api.post<{ id: string; status: RecceStatus; recceMode?: RecceMode }>('/api/recce/manual', body);
+}
+
 // ── Pure workflow helpers (unit-tested) ───────────────────────────────────────
 
 /**
@@ -246,9 +289,40 @@ export function groupRecces(recces: RecceListRow[]): RecceGroup[] {
 /**
  * The most relevant existing recce for a site (there is at most one live recce per site).
  * Pure — unit-tested. Returns undefined when the site has no recce yet.
+ *
+ * NOTE: valid only for the APP path (one app recce per outlet). A manual outlet can carry several
+ * recces, so install selection groups by outlet via `groupInstallableByOutlet` instead.
  */
 export function findSiteRecce(recces: RecceListRow[], siteId: string): RecceListRow | undefined {
   return recces.find((r) => r.site.id === siteId);
+}
+
+/** An outlet and its ready-to-install recces, for the install picker entry on My Work. */
+export interface InstallableOutlet {
+  site: RecceSiteLite;
+  recces: RecceListRow[];
+}
+
+/**
+ * Collapse a flat list of ready-to-install recces into one entry PER OUTLET, preserving first-seen
+ * order (the list is newest-first). An outlet with a single installable recce links straight to
+ * that recce's install capture (unchanged app behaviour); an outlet with several (only possible
+ * for manual recces) routes to the recce picker so the exec chooses which to install. Pure —
+ * unit-tested.
+ */
+export function groupInstallableByOutlet(recces: RecceListRow[]): InstallableOutlet[] {
+  const order: string[] = [];
+  const bySite = new Map<string, InstallableOutlet>();
+  for (const r of recces) {
+    const existing = bySite.get(r.site.id);
+    if (existing) {
+      existing.recces.push(r);
+    } else {
+      order.push(r.site.id);
+      bySite.set(r.site.id, { site: r.site, recces: [r] });
+    }
+  }
+  return order.map((id) => bySite.get(id)!);
 }
 
 const REJECT_LABELS: Record<RejectReasonCode, string> = {

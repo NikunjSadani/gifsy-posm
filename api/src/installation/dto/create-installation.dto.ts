@@ -59,6 +59,17 @@ export class CreateInstallationDto {
   @IsNotEmpty()
   siteId: string;
 
+  /**
+   * The specific APPROVED + HO-APPROVED recce this installation fulfils (R1 — recce-keyed install).
+   * REQUIRED in practice once an outlet can carry many recces (1 app + N manual): the field picker
+   * passes it. When OMITTED the service falls back to the outlet's single APP recce, preserving the
+   * original app-recce install behaviour.
+   */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  recceId?: string;
+
   @IsArray()
   @ArrayMinSize(1, { message: 'An installation needs at least 1 Element photo' })
   @ArrayMaxSize(2, { message: 'An installation may have at most 2 Element photos' })

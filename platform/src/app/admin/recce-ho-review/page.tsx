@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   Search, SlidersHorizontal, ShieldCheck, RefreshCw, ChevronLeft, ChevronRight,
-  MapPin, User, Clock, Camera, ChevronRight as Arrow,
+  MapPin, User, Clock, Camera, ChevronRight as Arrow, ClipboardPen,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { pageCount } from '@/components/audit/pagination';
@@ -170,6 +170,12 @@ export default function RecceHoReviewQueuePage() {
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-gray-900 truncate">
                       {item.site.name} <span className="font-mono text-xs text-gray-400">{item.site.code}</span>
+                      {item.recceMode === 'MANUAL' && (
+                        <span className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 align-middle text-[10px] font-bold uppercase tracking-wide text-indigo-700">
+                          <ClipboardPen className="h-3 w-3" />
+                          Manual
+                        </span>
+                      )}
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
                       {item.site.town && (
@@ -185,7 +191,7 @@ export default function RecceHoReviewQueuePage() {
                     </div>
                     <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-800">
                       <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-                      ASM approved · awaiting HO
+                      {item.recceMode === 'MANUAL' ? 'Manual recce · awaiting HO' : 'ASM approved · awaiting HO'}
                     </div>
                   </div>
                   <Arrow className="h-5 w-5 text-gray-300 shrink-0 mt-0.5" />

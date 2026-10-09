@@ -1,16 +1,19 @@
 import {
   BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
-import { Prisma, RecceStatus, HoReviewStatus } from '@prisma/client';
+import { Prisma, RecceStatus, HoReviewStatus, RecceMode } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope } from '../common/tenant-scope';
+import { PROVISIONAL_CODE_PREFIX } from '../common/provisional-code';
 import { PosmMediaService } from '../capture/posm-media.service';
 import { readMediaValue } from '../capture/visibility-types';
 import { CaptureIntegrityService } from '../capture-integrity/capture-integrity.service';
 import { readPosmCaptureConfig, readGpsAccuracyCapMeters } from '../capture-integrity/posm-config.helper';
 import { aggregatePhotoFence } from '../capture-integrity/photo-geo.helper';
 import { CreateRecceDto, ReccePosmLineDto } from './dto/create-recce.dto';
+import { CreateManualRecceDto } from './dto/create-manual-recce.dto';
 import { ResubmitRecceDto } from './dto/resubmit-recce.dto';
 import { ListRecceDto } from './dto/list-recce.dto';
 
@@ -77,10 +80,12 @@ export class RecceService {
     const site = await this.loadOwnedActiveSite(user, dto.siteId);
     this.assertMaxTwo(dto.posms);
 
-    // One live recce per site — a submitted/approved recce is immutable; a rejected one
-    // must go through resubmit (not a fresh POST).
-    const existing = await this.prisma.recce.findUnique({
-      where: { clientId_siteId: { clientId, siteId: site.id } },
+    // One live APP recce per site — a submitted/approved recce is immutable; a rejected one must
+    // go through resubmit (not a fresh POST). The old (clientId, siteId) hard unique was relaxed to
+    // an APP-only partial unique (`recces_app_one_per_site`) so MANUAL recces can be unlimited, so
+    // this guard now filters to recceMode=APP (findFirst, not findUnique on the dropped compound).
+    const existing = await this.prisma.recce.findFirst({
+      where: { clientId, siteId: site.id, recceMode: RecceMode.APP },
       select: { id: true, status: true },
     });
     if (existing) {
@@ -145,6 +150,132 @@ export class RecceService {
     return this.present(recce, { duplicate });
   }
 
+  // ── Manual submit (field-typed outlet → straight to HO, no ASM) ──────────────────
+  /**
+   * Submit a MANUAL recce: the field exec types the outlet (only Outlet Name required) and does
+   * the identical element capture. The Site is RESOLVED-OR-CREATED (vendor derived from the token,
+   * same confinement as the app recce) and the recce is created `recceMode=MANUAL,
+   * status=SUBMITTED, hoReviewStatus=PENDING` so it lands directly in the HO queue (no ASM stage).
+   *
+   * Outlet resolution (D6 / D8):
+   *   - `outletId` matches an existing Site the caller's vendor services → ATTACH (reuse it).
+   *   - `outletId` new → create a Site with `code = outletId`.
+   *   - `outletId` blank → create a Site with a provisional `MAN-<uuid>` code (HO finalises it).
+   * An `outletId` that collides with an outlet NOT serviced by this vendor surfaces a clean 409
+   * (the (clientId, code) unique) — never a cross-vendor attach or a silent duplicate. A manual
+   * recce is allowed even when the outlet already has an APP recce (manual is unlimited per outlet).
+   */
+  async createManual(user: JwtPayload, dto: CreateManualRecceDto) {
+    const clientId = user.clientId;
+    // Vendor derived from the caller's token — identical confinement to the app recce lane. A
+    // vendor role with no resolvable vendor FAILS CLOSED (404), never an unscoped create.
+    const v = vendorScope(user);
+    if ((user.role === 'VENDOR_FIELD' || user.role === 'VENDOR_HO') && !v) {
+      throw new NotFoundException('Site not found');
+    }
+
+    // Outlet Name is REQUIRED (also guarded in the DTO) — reject a blank / whitespace-only name.
+    const outletName = (dto.outletName ?? '').trim();
+    if (!outletName) throw new BadRequestException('Outlet Name is required.');
+    this.assertMaxTwo(dto.posms);
+
+    const outletId = (dto.outletId ?? '').trim();
+
+    // Resolve an existing outlet to ATTACH to — scoped to the caller's vendor so a foreign /
+    // other-vendor outlet is never attached (it is invisible here). A collision with such an outlet
+    // falls through to the create branch and surfaces as a P2002 → 409 below (no existence leak).
+    let existingSite: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; status: string } | null = null;
+    if (outletId) {
+      existingSite = await this.prisma.site.findFirst({
+        where: { clientId, code: outletId, ...(v ? { vendorId: v } : {}) },
+        select: { id: true, lat: true, lng: true, status: true },
+      });
+      if (existingSite && existingSite.status !== 'ACTIVE') {
+        throw new BadRequestException('That outlet is not active.');
+      }
+    }
+
+    // Prepare (media + integrity + per-photo fence) against the resolved geo reference. A
+    // brand-new manual outlet has no lat/lng → geoFenceOk stays null (flag, not block — R5).
+    const siteForPrepare = existingSite ?? { id: '', lat: null, lng: null };
+    const prepared = await this.prepare(clientId, siteForPrepare, dto.posms);
+
+    let duplicate = false;
+    let recce;
+    try {
+      recce = await this.prisma.$transaction(async (tx) => {
+        // Create the outlet row at submit (D8) when not attaching to an existing one.
+        let siteId: string;
+        if (existingSite) {
+          siteId = existingSite.id;
+        } else {
+          const code = outletId || `${PROVISIONAL_CODE_PREFIX}${randomUUID()}`;
+          const created = await tx.site.create({
+            data: {
+              clientId,
+              code,
+              name: outletName,
+              address: dto.outletAddress?.trim() || null,
+              phone: dto.outletPhone?.trim() || null,
+              vendorId: v ?? null,
+              status: 'ACTIVE',
+            },
+            select: { id: true },
+          });
+          siteId = created.id;
+        }
+
+        const createdRecce = await tx.recce.create({
+          data: {
+            clientId,
+            siteId,
+            submittedById: user.sub,
+            status: RecceStatus.SUBMITTED,
+            recceMode: RecceMode.MANUAL,
+            // No ASM stage: the manual recce enters HO review directly (R4).
+            hoReviewStatus: HoReviewStatus.PENDING,
+            version: 1,
+            ...prepared.geo,
+            posms: { create: prepared.posmCreate },
+          },
+          include: this.detailInclude(),
+        });
+        if (prepared.hashes.length > 0) {
+          const rec = await this.media.recordImageHashes(
+            tx, clientId, { ownerKind: 'RECCE', ownerId: createdRecce.id }, prepared.hashes,
+          );
+          duplicate = rec.dupHashes.length > 0;
+        }
+        await tx.auditLog.create({
+          data: {
+            actorId: user.sub,
+            action: 'CREATE',
+            entityType: 'RECCE',
+            entityId: createdRecce.id,
+            newValues: toJson({
+              status: createdRecce.status, recceMode: RecceMode.MANUAL, siteId, version: createdRecce.version,
+            }),
+            metadata: { clientId, event: 'RECCE_MANUAL_SUBMIT' } as Prisma.InputJsonValue,
+          },
+        });
+        return createdRecce;
+      });
+    } catch (e) {
+      // An outletId that collides with an existing outlet (clientId, code) NOT serviced by this
+      // vendor — or a concurrent create racing the same code — surfaces a clean 409.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(
+          outletId
+            ? `An outlet with Outlet ID "${outletId}" already exists.`
+            : 'This outlet could not be created (concurrent submit).',
+        );
+      }
+      throw e;
+    }
+
+    return this.present(recce, { duplicate });
+  }
+
   // ── Resubmit (REJECTED → SUBMITTED, version++) ──────────────────────────────────
   async resubmit(user: JwtPayload, id: string, dto: ResubmitRecceDto) {
     const clientId = user.clientId;
@@ -186,10 +317,12 @@ export class RecceService {
             reviewedAt: null,
             rejectionReasonCode: null,
             rejectionReason: null,
-            // A re-captured recce re-enters the pipeline from scratch: clear the HO review stage
-            // (set by a prior ASM approve) so a previously HO-rejected/pending recce returns to NONE
-            // and must be re-approved by the ASM (→ PENDING) then HO before installation.
-            hoReviewStatus: HoReviewStatus.NONE,
+            // A re-captured recce re-enters the pipeline from scratch. For an APP recce it returns
+            // to NONE and must be re-approved by the ASM (→ PENDING) then HO. A MANUAL recce has NO
+            // ASM stage, so it re-enters the HO queue directly (→ PENDING) — otherwise a re-captured
+            // manual recce (NONE) would match neither HO-queue clause and silently vanish.
+            hoReviewStatus:
+              recce.recceMode === RecceMode.MANUAL ? HoReviewStatus.PENDING : HoReviewStatus.NONE,
             hoReviewedById: null,
             hoReviewedAt: null,
             hoRejectionReasonCode: null,
@@ -504,7 +637,7 @@ export class RecceService {
   /** Shape a recce (with includes) into the API response, resolving media view-paths. */
   private present(
     r: {
-      id: string; status: RecceStatus; version: number;
+      id: string; status: RecceStatus; recceMode: RecceMode; version: number;
       captureLat: Prisma.Decimal | null; captureLng: Prisma.Decimal | null; captureAccuracy: number | null;
       distanceMeters: Prisma.Decimal | null; geoFenceOk: boolean | null;
       capturedAt: Date | null; receivedAt: Date;
@@ -530,6 +663,8 @@ export class RecceService {
     return {
       id: r.id,
       status: r.status,
+      // APP vs MANUAL — the FE renders the Manual badge / entry-path classification off this.
+      recceMode: r.recceMode,
       version: r.version,
       site: {
         id: r.site.id, code: r.site.code, name: r.site.name, town: r.site.town,

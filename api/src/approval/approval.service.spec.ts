@@ -401,3 +401,49 @@ describe('ApprovalService.waterfall — scoped counts', () => {
     expect(res.hoApproved).toBeLessThanOrEqual(res.approved);
   });
 });
+
+describe('ApprovalService — R3: the ASM lane excludes MANUAL recces', () => {
+  it('listQueue is APP-only (recceMode APP added to the queue where)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.listQueue(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), {});
+    expect(fns.recce.findMany.mock.calls[0][0].where.recceMode).toBe('APP');
+  });
+
+  it('getRecce filters to APP recces (a manual id → 404)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(null);
+    const svc = new ApprovalService(prisma);
+    await expect(
+      svc.getRecce(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'x'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(fns.recce.findFirst.mock.calls[0][0].where.recceMode).toBe('APP');
+  });
+
+  it('approve on a MANUAL recce → 404 (it belongs to the HO console, never the ASM stage)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue({ id: 'rM', status: 'SUBMITTED', clientId: 'c1', recceMode: 'MANUAL', site: { asmUserId: 'asm-7' } });
+    const svc = new ApprovalService(prisma);
+    await expect(
+      svc.approve(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'rM'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+  });
+
+  it('reject on a MANUAL recce → 404, never updates', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue({ id: 'rM', status: 'SUBMITTED', clientId: 'c1', recceMode: 'MANUAL', site: { asmUserId: 'asm-7' } });
+    const svc = new ApprovalService(prisma);
+    await expect(
+      svc.reject(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'rM', { reasonCode: 'OTHER' } as RejectRecceDto),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+  });
+
+  it('bulkApprove candidate read is APP-only (manual ids never enter the candidate set)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.bulkApprove(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { ids: ['x'] });
+    expect(fns.recce.findMany.mock.calls[0][0].where.recceMode).toBe('APP');
+  });
+});

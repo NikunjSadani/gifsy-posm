@@ -6,6 +6,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateRecceDto } from './dto/create-recce.dto';
+import { CreateManualRecceDto } from './dto/create-manual-recce.dto';
 import { ResubmitRecceDto } from './dto/resubmit-recce.dto';
 import { ListRecceDto } from './dto/list-recce.dto';
 
@@ -26,6 +27,18 @@ export class RecceController {
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateRecceDto) {
     return this.recce.create(user, dto);
+  }
+
+  /**
+   * POST /v1/recce/manual — submit a MANUAL recce (field-typed outlet, only Outlet Name required).
+   * Provisions-or-attaches the outlet and goes straight to HO review (no ASM). Literal path, so it
+   * never collides with POST /v1/recce (create) or POST /v1/recce/:id/resubmit.
+   */
+  @Roles('VENDOR_FIELD')
+  @Post('manual')
+  @HttpCode(HttpStatus.CREATED)
+  createManual(@CurrentUser() user: JwtPayload, @Body() dto: CreateManualRecceDto) {
+    return this.recce.createManual(user, dto);
   }
 
   /** GET /v1/recce — the field user's own recces (vendor-scoped). */

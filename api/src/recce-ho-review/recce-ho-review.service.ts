@@ -1,11 +1,13 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, RejectReasonCode } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, RejectReasonCode, RecceMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope } from '../common/tenant-scope';
+import { isProvisionalCode } from '../common/provisional-code';
 import { readMediaValue } from '../capture/visibility-types';
 import { ListRecceHoQueueDto } from './dto/list-recce-ho-queue.dto';
 import { RecceHoRejectDto } from './dto/recce-ho-reject.dto';
+import { RecceHoApproveDto } from './dto/recce-ho-approve.dto';
 
 /** JSON-safe snapshot for AuditLog. */
 const toJson = (v: unknown): Prisma.InputJsonValue =>
@@ -66,18 +68,30 @@ export class RecceHoReviewService {
   // ── Queue ──────────────────────────────────────────────────────────────────────
 
   /**
-   * The recce-HO queue: recces the ASM approved that still await HO review (status APPROVED AND
-   * hoReviewStatus PENDING). Tenant-scoped, FIFO by `reviewedAt` (the ASM-approval time).
+   * The recce-HO queue (widened for Manual Recce — R4). It holds recces awaiting HO review from
+   * BOTH entry paths:
+   *   - APP    — the ASM approved it (status APPROVED) and it awaits HO (hoReviewStatus PENDING).
+   *   - MANUAL — field-typed, skips ASM, so it arrives status SUBMITTED + hoReviewStatus PENDING.
+   * `?mode=all|app|manual` (default `all`) narrows to one path. Tenant-scoped; ordered oldest-first
+   * (manual recces have no ASM `reviewedAt`, so a null-last secondary sort on `receivedAt` keeps the
+   * FIFO sane across both kinds).
    */
   async listQueue(user: JwtPayload, q: ListRecceHoQueueDto) {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
     const skip = (page - 1) * limit;
 
+    const appClause: Prisma.RecceWhereInput = { status: 'APPROVED', hoReviewStatus: 'PENDING' };
+    const manualClause: Prisma.RecceWhereInput = {
+      recceMode: RecceMode.MANUAL, status: 'SUBMITTED', hoReviewStatus: 'PENDING',
+    };
+    const mode = q.mode ?? 'all';
+    const orClauses =
+      mode === 'app' ? [appClause] : mode === 'manual' ? [manualClause] : [appClause, manualClause];
+
     const where: Prisma.RecceWhereInput = {
       ...this.recceWhere(user),
-      status: 'APPROVED',
-      hoReviewStatus: 'PENDING',
+      OR: orClauses,
     };
     const siteFilter: Prisma.SiteWhereInput = {};
     if (q.siteCode) siteFilter.code = { contains: q.siteCode, mode: 'insensitive' };
@@ -87,7 +101,7 @@ export class RecceHoReviewService {
     const [recces, total] = await Promise.all([
       this.prisma.recce.findMany({
         where,
-        orderBy: [{ reviewedAt: 'asc' }],
+        orderBy: [{ reviewedAt: { sort: 'asc', nulls: 'last' } }, { receivedAt: 'asc' }],
         skip,
         take: limit,
         include: RECCE_HO_INCLUDE,
@@ -117,6 +131,11 @@ export class RecceHoReviewService {
     return {
       id: r.id,
       status: r.status,
+      // APP vs MANUAL — drives the queue's Manual badge + classification.
+      recceMode: r.recceMode,
+      // The real Outlet ID (= site.code), or null while the outlet still carries a provisional
+      // `MAN-…` code (HO must assign a real Outlet ID to approve a manual recce).
+      outletId: isProvisionalCode(r.site.code) ? null : r.site.code,
       hoReviewStatus: r.hoReviewStatus,
       version: r.version,
       site: {
@@ -161,11 +180,26 @@ export class RecceHoReviewService {
 
   // ── Transitions ──────────────────────────────────────────────────────────────
 
-  /** HO approve: hoReviewStatus PENDING → APPROVED (status stays APPROVED; unlocks install). */
-  async approve(user: JwtPayload, id: string) {
+  /**
+   * HO approve. For an APP recce: hoReviewStatus PENDING → APPROVED (status stays APPROVED;
+   * unlocks install) — behaviour UNCHANGED, `outletId` ignored. For a MANUAL recce: the Outlet ID
+   * is mandatory (unless the attached outlet already has a real code) + editable, runs the D6
+   * exists-check, writes site.code, and sets BOTH status=APPROVED AND hoReviewStatus=APPROVED
+   * (there was no ASM step, so HO sets both — making the install gate pass unchanged).
+   */
+  async approve(user: JwtPayload, id: string, dto: RecceHoApproveDto = {}) {
     const recce = await this.loadForMutation(user, id);
     this.assertPending(recce.hoReviewStatus);
+    if (recce.recceMode === RecceMode.MANUAL) return this.approveManual(user, recce, dto);
+    return this.approveApp(user, recce);
+  }
 
+  /** APP recce approve — the original transition (hoReviewStatus PENDING → APPROVED only). */
+  private approveApp(
+    user: JwtPayload,
+    recce: { id: string; hoReviewStatus: string },
+  ) {
+    const id = recce.id;
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.recce
         .update({
@@ -190,6 +224,89 @@ export class RecceHoReviewService {
         id,
         { hoReviewStatus: recce.hoReviewStatus },
         { hoReviewStatus: 'APPROVED' },
+      );
+      return updated;
+    });
+  }
+
+  /**
+   * MANUAL recce approve — assigns the final Outlet ID and promotes the recce in one step.
+   *
+   *  - Outlet ID is MANDATORY unless the attached outlet already carries a real (non-provisional)
+   *    code → 400 if neither the body nor the existing code supplies one.
+   *  - D6 exists-check: if the supplied Outlet ID matches a DIFFERENT existing outlet in the tenant
+   *    → 409 with that outlet's NAME (the FE warns/confirms). Matching the SAME attached outlet is
+   *    fine (the self-row is excluded).
+   *  - On approve: writes site.code (when a new Outlet ID is supplied) AND sets status=APPROVED +
+   *    hoReviewStatus=APPROVED (no ASM stage, so HO sets both → the install gate passes unchanged).
+   */
+  private async approveManual(
+    user: JwtPayload,
+    recce: {
+      id: string; clientId: string; status: string; hoReviewStatus: string;
+      site: { id: string; code: string; name: string };
+    },
+    dto: RecceHoApproveDto,
+  ) {
+    const id = recce.id;
+    const provided = (dto.outletId ?? '').trim();
+    const currentCodeReal = !isProvisionalCode(recce.site.code);
+
+    if (!provided && !currentCodeReal) {
+      throw new BadRequestException('An Outlet ID is required to approve a manual recce.');
+    }
+
+    // D6 exists-check — a supplied Outlet ID that belongs to a DIFFERENT outlet is a 409. When
+    // `provided` equals the attached outlet's own code the self-row is excluded (so re-confirming
+    // the same Outlet ID is allowed). Scoped to the recce's tenant.
+    if (provided) {
+      const other = await this.prisma.site.findFirst({
+        where: { clientId: recce.clientId, code: provided, id: { not: recce.site.id } },
+        select: { name: true },
+      });
+      if (other) {
+        throw new ConflictException(
+          `Outlet ID "${provided}" already belongs to another outlet: ${other.name}.`,
+        );
+      }
+    }
+
+    const writeCode = provided && provided !== recce.site.code ? provided : null;
+
+    return this.prisma.$transaction(async (tx) => {
+      if (writeCode) {
+        await tx.site
+          .update({ where: { id: recce.site.id }, data: { code: writeCode } })
+          .catch((e) => {
+            // A concurrent create/approve grabbed the Outlet ID between the exists-check and here.
+            if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+              throw new ConflictException(`Outlet ID "${writeCode}" is already in use.`);
+            }
+            throw e;
+          });
+      }
+      const updated = await tx.recce
+        .update({
+          // Status-guarded on hoReviewStatus PENDING — same race protection as the app path.
+          where: { id, hoReviewStatus: 'PENDING' },
+          data: {
+            status: 'APPROVED',
+            hoReviewStatus: 'APPROVED',
+            hoReviewedById: user.sub,
+            hoReviewedAt: new Date(),
+            hoRejectionReasonCode: null,
+            hoRejectionReason: null,
+          },
+        })
+        .catch((e) => this.conflictOnLostRace(e));
+
+      await this.audit(
+        tx,
+        user,
+        'APPROVE',
+        id,
+        { status: recce.status, hoReviewStatus: recce.hoReviewStatus, outletId: recce.site.code },
+        { status: 'APPROVED', hoReviewStatus: 'APPROVED', outletId: writeCode ?? recce.site.code },
       );
       return updated;
     });
@@ -234,7 +351,12 @@ export class RecceHoReviewService {
     const scope = tenantScope(user);
     const recce = await this.prisma.recce.findFirst({
       where: { id, ...(scope !== undefined ? { clientId: scope } : {}) },
-      select: { id: true, status: true, hoReviewStatus: true },
+      // recceMode + the attached site (id/code/name) are needed for the manual-recce Outlet-ID
+      // write + exists-check at approve; clientId scopes that exists-check to the recce's tenant.
+      select: {
+        id: true, clientId: true, status: true, hoReviewStatus: true, recceMode: true,
+        site: { select: { id: true, code: true, name: true } },
+      },
     });
     if (!recce) throw new NotFoundException('Recce not found');
     return recce;

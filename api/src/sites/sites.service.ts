@@ -239,6 +239,31 @@ export class SitesService {
     return site;
   }
 
+  // ── Outlet-ID lookup (warn-and-prefill for the Manual Recce UX) ─────────────────
+  /**
+   * Resolve an exact Outlet ID (Site.code) within the caller's SCOPE for the Manual Recce
+   * warn-and-prefill UX (D6). A VENDOR_FIELD is vendor-pinned (only their own fleet's outlets —
+   * never leaking a sibling vendor's outlet name/address/phone); an admin (CLIENT_ADMIN /
+   * GIFSY_ADMIN) sees the whole tenant master. Fails closed (`exists:false`) for a vendor with no
+   * scope. Exact (case-sensitive) match, mirroring the (clientId, code) unique the attach/create
+   * paths key on — so a lookup "exists" iff a submit would attach to that same outlet.
+   */
+  async lookup(user: JwtPayload, outletId?: string): Promise<{
+    exists: boolean;
+    site?: { id: string; code: string; name: string; address: string | null; phone: string | null };
+  }> {
+    const code = (outletId ?? '').trim();
+    if (!code) throw new BadRequestException('outletId query parameter is required.');
+    const scope = this.scopedWhere(user);
+    if (scope === null) return { exists: false }; // fail-closed: a vendor with no scope sees nothing
+    const site = await this.prisma.site.findFirst({
+      where: { ...scope, code },
+      select: { id: true, code: true, name: true, address: true, phone: true },
+    });
+    if (!site) return { exists: false };
+    return { exists: true, site };
+  }
+
   // ── Create ─────────────────────────────────────────────────────────────────────
   async create(user: JwtPayload, dto: CreateSiteDto) {
     // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.

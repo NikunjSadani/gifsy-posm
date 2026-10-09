@@ -11,13 +11,13 @@
  * (or out of scope) shows the honest "no longer awaiting HO review" state with no dead action bar.
  */
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, CheckCircle2, XCircle, MapPin, User, Clock, ShieldCheck, ShieldAlert,
-  ShieldQuestion, AlertTriangle,
+  ShieldQuestion, AlertTriangle, ClipboardPen, Info,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { PhotoViewer } from '@/components/review/photo-viewer';
@@ -30,6 +30,7 @@ import {
   rejectHoRecce,
   type HoRecceItem,
 } from '@/lib/recce-ho-review/api';
+import { lookupSiteByOutletId } from '@/lib/field/sites';
 import { formatDateTime } from '@/lib/utils';
 
 export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -45,6 +46,14 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
   const [rejectOpen, setRejectOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  // Outlet ID — mandatory + editable for a MANUAL recce (D5). Seeded from the recce's current
+  // Outlet ID (a provisional manual outlet has none yet → the HO must assign one).
+  const [outletId, setOutletId] = useState('');
+  // The backend's authoritative collision message (409) — names the other outlet; cleared on edit.
+  const [collisionMsg, setCollisionMsg] = useState<string | null>(null);
+  // Advisory pre-flight lookup: the typed Outlet ID resolves to a DIFFERENT existing outlet.
+  const [idInUseName, setIdInUseName] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -53,8 +62,10 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
     fetchHoRecce(id).then((res) => {
       if (cancelled) return;
       if (res.success) {
-        if (res.data.hoReviewStatus === 'PENDING') setItem(res.data);
-        else setGone(true);
+        if (res.data.hoReviewStatus === 'PENDING') {
+          setItem(res.data);
+          setOutletId(res.data.outletId ?? '');
+        } else setGone(true);
       } else if (res.status === 404) {
         setGone(true);
       } else {
@@ -65,20 +76,61 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
     return () => { cancelled = true; };
   }, [id]);
 
+  const isManual = item?.recceMode === 'MANUAL';
+  const trimmedOutletId = outletId.trim();
+  // Mandatory for a manual recce that has no real Outlet ID yet (blocks Approve when empty).
+  const outletIdMissing = !!isManual && trimmedOutletId === '';
+
+  // Debounced pre-flight lookup: warn (before the 409) when the typed Outlet ID already belongs to
+  // a DIFFERENT outlet than this recce's own. Only for manual recces; skipped when the id equals
+  // the recce's current code (that's this outlet itself).
+  const lookupSeq = useRef(0);
+  useEffect(() => {
+    if (!isManual || trimmedOutletId === '' || trimmedOutletId === (item?.outletId ?? '')) {
+      setIdInUseName(null);
+      return;
+    }
+    const seq = ++lookupSeq.current;
+    const t = setTimeout(async () => {
+      const res = await lookupSiteByOutletId(trimmedOutletId);
+      if (seq !== lookupSeq.current) return;
+      if (res.success && res.data.exists && res.data.site && res.data.site.id !== item?.site.id) {
+        setIdInUseName(res.data.site.name);
+      } else {
+        setIdInUseName(null);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [isManual, trimmedOutletId, item?.outletId, item?.site.id]);
+
   const siteLabel = item ? `${item.site.name} (${item.site.code})` : 'this recce';
 
   const doApprove = async () => {
+    if (outletIdMissing) return; // guarded by the disabled button; defensive
     setSubmitting(true);
-    const res = await approveHoRecce(id);
+    const res = await approveHoRecce(id, isManual ? { outletId: trimmedOutletId } : {});
     setSubmitting(false);
     if (res.success) {
       setConfirmApprove(false);
       toast.success('Approved — installation is unlocked for this site.');
       router.push('/admin/recce-ho-review');
-    } else {
-      toast.error(res.error || 'Could not approve. Please try again.');
-      if (res.status === 409) { setConfirmApprove(false); setGone(true); }
+      return;
     }
+    // A 409 on a MANUAL approve is an Outlet ID collision (the message names the other outlet) —
+    // keep the admin on the page to change the Outlet ID. A 409 on an APP approve is the
+    // already-decided race, which still resolves to the "no longer awaiting HO" state.
+    if (res.status === 409) {
+      setConfirmApprove(false);
+      if (isManual) {
+        setCollisionMsg(res.error || 'That Outlet ID already belongs to another outlet. Enter a different Outlet ID.');
+        toast.error(res.error || 'Outlet ID already in use by another outlet.');
+        return;
+      }
+      setGone(true);
+      toast.error(res.error || 'This recce is no longer awaiting HO review.');
+      return;
+    }
+    toast.error(res.error || 'Could not approve. Please try again.');
   };
 
   const doReject = async (body: RejectBody) => {
@@ -137,6 +189,12 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-xl font-bold text-gray-900">{item.site.name}</h1>
                   <span className="text-sm font-medium text-gray-400">{item.site.code}</span>
+                  {isManual && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-indigo-700">
+                      <ClipboardPen className="h-3.5 w-3.5" />
+                      Manual
+                    </span>
+                  )}
                   {item.version > 1 && (
                     <span className="text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-full px-2 py-0.5">
                       Recapture v{item.version}
@@ -202,13 +260,57 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
           <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-4">
             <p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-800">
               <ShieldCheck className="h-4 w-4" />
-              ASM approved · awaiting HO
+              {isManual ? 'Manual recce · awaiting HO' : 'ASM approved · awaiting HO'}
             </p>
             <p className="mt-1 text-sm text-emerald-900">
-              Approve to clear Head-Office review (installation unlocks for this site), or reject to
-              send it back to the field for re-capture.
+              {isManual
+                ? 'This is a field-entered manual recce (no ASM stage). Set a valid Outlet ID below, then approve to clear Head-Office review and unlock installation — or reject to send it back to the field.'
+                : 'Approve to clear Head-Office review (installation unlocks for this site), or reject to send it back to the field for re-capture.'}
             </p>
           </div>
+
+          {/* Outlet ID — MANDATORY + EDITABLE for a manual recce (D5). HO assigns/overwrites the
+              real Outlet ID here; the exists-check (D6) runs server-side at approve. App recces
+              keep their master Outlet ID and show no entry. */}
+          {isManual && (
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm mb-4">
+              <label htmlFor="ho-outlet-id" className="block text-sm font-semibold text-gray-800">
+                Outlet ID <span className="text-[var(--brand-primary)]">*</span>
+              </label>
+              <p className="mt-0.5 text-xs text-gray-500">
+                Required to approve a manual recce. It must be unique — it becomes this outlet’s
+                Outlet ID in the master.
+              </p>
+              <input
+                id="ho-outlet-id"
+                value={outletId}
+                onChange={(e) => { setOutletId(e.target.value); setCollisionMsg(null); }}
+                placeholder="Enter the Outlet ID"
+                autoComplete="off"
+                data-testid="recce-ho-review-outlet-id"
+                className="mt-2 w-full rounded-xl border-2 border-gray-200 px-3 py-2.5 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
+              />
+              {/* Backend-authoritative collision (409) — names the other outlet. */}
+              {collisionMsg ? (
+                <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700" data-testid="recce-ho-review-outlet-id-collision">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{collisionMsg} Enter a different Outlet ID, or reject this recce.</span>
+                </p>
+              ) : idInUseName ? (
+                /* Advisory pre-flight warning (before approve) — this id is already another outlet's. */
+                <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Outlet ID already exists — Outlet:{' '}
+                    <span className="font-semibold">{idInUseName}</span>. Approving with this ID will
+                    be blocked; enter a different Outlet ID.
+                  </span>
+                </p>
+              ) : outletIdMissing ? (
+                <p className="mt-2 text-xs text-gray-400">Enter an Outlet ID to enable Approve.</p>
+              ) : null}
+            </div>
+          )}
 
           {/* Integrity flags */}
           {flags.length > 0 && (
@@ -247,7 +349,8 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
               </button>
               <button
                 onClick={() => setConfirmApprove(true)}
-                disabled={submitting}
+                disabled={submitting || outletIdMissing}
+                title={outletIdMissing ? 'Enter an Outlet ID to approve this manual recce' : undefined}
                 data-testid="recce-ho-review-approve"
                 className="flex items-center gap-1.5 text-sm font-semibold text-white bg-[var(--brand-confirm)] hover:brightness-95 rounded-xl px-5 py-2.5 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -261,8 +364,14 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
             title="Approve this recce?"
             message={
               <>
-                Approving <span className="font-semibold">{item.site.name}</span> ({item.site.code}) clears
-                Head-Office review and unlocks installation for this site. This can&apos;t be undone from here.
+                Approving <span className="font-semibold">{item.site.name}</span>
+                {isManual ? (
+                  <> with Outlet ID <span className="font-semibold">{trimmedOutletId}</span></>
+                ) : (
+                  <> ({item.site.code})</>
+                )}{' '}
+                clears Head-Office review and unlocks installation for this site. This can&apos;t be
+                undone from here.
               </>
             }
             confirmLabel="Approve"

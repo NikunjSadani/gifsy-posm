@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, RejectReasonCode } from '@prisma/client';
+import { Prisma, RejectReasonCode, RecceMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope } from '../common/tenant-scope';
@@ -118,7 +118,11 @@ export class ApprovalService {
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
     const skip = (page - 1) * limit;
 
-    const where: Prisma.RecceWhereInput = { ...this.recceWhere(user), status: 'SUBMITTED' };
+    // R3 — the ASM queue is APP-only: a MANUAL recce skips the ASM stage (field → HO directly), so
+    // an ASM must never see one here.
+    const where: Prisma.RecceWhereInput = {
+      ...this.recceWhere(user), status: 'SUBMITTED', recceMode: RecceMode.APP,
+    };
     // Site filters ride the site relation so an ASM's `site` scope is never overwritten
     // (we merge into it rather than replacing it).
     const siteFilter: Prisma.SiteWhereInput = {};
@@ -154,7 +158,9 @@ export class ApprovalService {
    */
   async getRecce(user: JwtPayload, id: string) {
     const recce = await this.prisma.recce.findFirst({
-      where: { ...this.recceWhere(user), id },
+      // R3 — a MANUAL recce is never part of the ASM lane: excluded so an ASM/admin opening one by
+      // id through the approval console gets a 404 (it belongs to the HO console).
+      where: { ...this.recceWhere(user), id, recceMode: RecceMode.APP },
       include: RECCE_INCLUDE,
     });
     if (!recce) throw new NotFoundException('Recce not found');
@@ -292,7 +298,9 @@ export class ApprovalService {
     const ids = [...new Set(dto.ids)];
     const scope = tenantScope(user);
     const recces = await this.prisma.recce.findMany({
-      where: { id: { in: ids }, ...(scope !== undefined ? { clientId: scope } : {}) },
+      // R3 — APP-only: a MANUAL recce id is simply absent from the candidate set (→ skipped
+      // NOT_FOUND), never bulk-approved through the ASM lane.
+      where: { id: { in: ids }, recceMode: RecceMode.APP, ...(scope !== undefined ? { clientId: scope } : {}) },
       include: { site: { select: { asmUserId: true } } },
     });
     const found = new Map(recces.map((r) => [r.id, r]));
@@ -416,6 +424,10 @@ export class ApprovalService {
       include: { site: { select: { asmUserId: true } } },
     });
     if (!recce) throw new NotFoundException('Recce not found');
+    // R3 — a MANUAL recce has no ASM stage: it must never be approved/rejected through the ASM
+    // console (it would wrongly stamp hoReviewStatus=PENDING / bypass the HO Outlet-ID gate). Hide
+    // it from this lane entirely (404), regardless of role.
+    if (recce.recceMode === RecceMode.MANUAL) throw new NotFoundException('Recce not found');
     if (user.role === 'ASM' && recce.site.asmUserId !== user.sub) {
       throw new ForbiddenException('This recce is not in your territory');
     }

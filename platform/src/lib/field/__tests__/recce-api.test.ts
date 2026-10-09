@@ -12,11 +12,13 @@ vi.mock('@/lib/api-client', () => ({ api: { post, get } }));
 
 import {
   groupRecces,
+  groupInstallableByOutlet,
   classifyRecce,
   findSiteRecce,
   rejectionLabel,
   submitRecce,
   resubmitRecce,
+  submitManualRecce,
   fetchMyRecces,
   RECCE_GROUP_ORDER,
   type RecceGroupKey,
@@ -200,5 +202,48 @@ describe('submit body carries markup', () => {
     const body = bodyOf();
     expect(body.posms[0].markup).toEqual(markup);
     expect(body.posms[1].markup).toEqual(other);
+  });
+
+  it('manual submit requires outletName and omits blank optional fields', () => {
+    void submitManualRecce({ outletName: '  Shop A  ', posms: [line()] });
+    const [path, body] = post.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe('/api/recce/manual');
+    expect(body.outletName).toBe('Shop A'); // trimmed
+    expect('outletId' in body).toBe(false);
+    expect('outletAddress' in body).toBe(false);
+    expect('outletPhone' in body).toBe(false);
+    expect((body.posms as unknown[]).length).toBe(1);
+  });
+
+  it('manual submit carries trimmed optional fields when present', () => {
+    void submitManualRecce({
+      outletId: ' OUT-1 ',
+      outletName: 'Shop B',
+      outletAddress: ' 12 Main St ',
+      outletPhone: ' 999 ',
+      posms: [line()],
+    });
+    const [, body] = post.mock.calls[0] as [string, Record<string, unknown>];
+    expect(body.outletId).toBe('OUT-1');
+    expect(body.outletAddress).toBe('12 Main St');
+    expect(body.outletPhone).toBe('999');
+  });
+});
+
+describe('groupInstallableByOutlet', () => {
+  it('collapses recces to one entry per outlet, preserving first-seen order', () => {
+    const recces = [
+      row({ id: '1', status: 'APPROVED', site: { id: 'A', code: 'CA', name: 'A', town: null } }),
+      row({ id: '2', status: 'APPROVED', site: { id: 'B', code: 'CB', name: 'B', town: null } }),
+      row({ id: '3', status: 'APPROVED', site: { id: 'A', code: 'CA', name: 'A', town: null } }),
+    ];
+    const grouped = groupInstallableByOutlet(recces);
+    expect(grouped.map((g) => g.site.id)).toEqual(['A', 'B']);
+    expect(grouped[0].recces.map((r) => r.id)).toEqual(['1', '3']);
+    expect(grouped[1].recces.map((r) => r.id)).toEqual(['2']);
+  });
+
+  it('returns [] for an empty list', () => {
+    expect(groupInstallableByOutlet([])).toEqual([]);
   });
 });

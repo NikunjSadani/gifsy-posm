@@ -24,15 +24,24 @@ import {
 /** The HO decision state on a recce (mirrors the backend enum / the field `hoReviewStatus`). */
 export type HoReviewStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
+/** How the recce entered the system (mirrors the backend `RecceMode`). */
+export type RecceMode = 'APP' | 'MANUAL';
+
 /**
  * One recce in the HO console. It is the ASM review payload (same `posms`/`integrity`/`site`
  * shape the ASM detail renders via `PhotoViewer`) plus the HO decision fields. Used for both the
  * queue rows (which read only the header fields) and the detail view (which renders the photos).
+ *
+ * Manual recces (`recceMode === 'MANUAL'`) skip ASM and arrive here directly; `outletId` is the
+ * finalized Outlet ID (= `site.code`) or `null` while the outlet is still provisional and the HO
+ * must assign a real Outlet ID at approval.
  */
 export interface HoRecceItem extends RecceQueueItem {
   hoReviewStatus: HoReviewStatus;
   hoRejectionReasonCode: RejectReasonCode | null;
   hoRejectionReason: string | null;
+  recceMode: RecceMode;
+  outletId: string | null;
 }
 
 export interface HoRecceQueueResult {
@@ -66,9 +75,23 @@ export function fetchHoRecce(id: string): Promise<ApiResponse<HoRecceItem>> {
   return api.get<HoRecceItem>(`/api/recce-ho-review/recces/${encodeURIComponent(id)}`);
 }
 
-/** HO approve — the recce clears HO and installation unlocks (PENDING → APPROVED). */
-export function approveHoRecce(id: string): Promise<ApiResponse<unknown>> {
-  return api.post<unknown>(`/api/recce-ho-review/recces/${encodeURIComponent(id)}/approve`, {});
+/** Body for the HO approve — `outletId` finalizes a manual recce's Outlet ID (mandatory there). */
+export interface ApproveHoRecceBody {
+  /** The Outlet ID to write onto the outlet. Required for a manual recce without a real code. */
+  outletId?: string;
+}
+
+/**
+ * HO approve — the recce clears HO and installation unlocks (PENDING → APPROVED). For a manual
+ * recce the body MUST carry a real `outletId` (the backend returns 400 otherwise, and 409 when the
+ * Outlet ID collides with a DIFFERENT existing outlet — the message names that outlet). For an app
+ * recce the body is empty (unchanged behaviour).
+ */
+export function approveHoRecce(
+  id: string,
+  body: ApproveHoRecceBody = {},
+): Promise<ApiResponse<unknown>> {
+  return api.post<unknown>(`/api/recce-ho-review/recces/${encodeURIComponent(id)}/approve`, body);
 }
 
 /**

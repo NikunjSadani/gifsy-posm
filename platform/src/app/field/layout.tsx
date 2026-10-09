@@ -10,7 +10,7 @@
  *   Tasks · Installation). Content is padded to clear the fixed bottom nav + iOS safe-area.
  */
 
-import { MapPin, Compass, Wrench, ListChecks, Images } from 'lucide-react';
+import { MapPin, Compass, Wrench, ListChecks, Images, ClipboardPlus } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { NavBottom, type NavItem } from '@/components/layout/nav-bottom';
 import { FieldHeader } from '@/components/field/field-header';
@@ -19,6 +19,7 @@ import { FIELD_ROLES } from '@/lib/field/config';
 
 const NAV: NavItem[] = [
   { href: '/field/sites', label: 'Recce to do', icon: MapPin },
+  { href: '/field/manual', label: 'Manual', icon: ClipboardPlus },
   { href: '/field/nearby', label: 'Nearby', icon: Compass },
   { href: '/field/tasks', label: 'Tasks', icon: ListChecks },
   { href: '/field/work', label: 'Installation', icon: Wrench },

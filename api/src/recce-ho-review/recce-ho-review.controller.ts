@@ -14,6 +14,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { ListRecceHoQueueDto } from './dto/list-recce-ho-queue.dto';
 import { RecceHoRejectDto } from './dto/recce-ho-reject.dto';
+import { RecceHoApproveDto } from './dto/recce-ho-approve.dto';
 
 /**
  * Recce-HO approval console — reviews ASM-approved recces before installation is unlocked.
@@ -40,11 +41,19 @@ export class RecceHoReviewController {
     return this.ho.getRecce(user, id);
   }
 
-  /** POST /v1/recce-ho-review/recces/:id/approve — hoReviewStatus PENDING → APPROVED (unlocks install). */
+  /**
+   * POST /v1/recce-ho-review/recces/:id/approve — hoReviewStatus PENDING → APPROVED (unlocks
+   * install). For a MANUAL recce the body's Outlet ID is mandatory (unless already set) + editable;
+   * for an APP recce the body is ignored (back-compat).
+   */
   @Post('recces/:id/approve')
   @HttpCode(HttpStatus.OK)
-  approve(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.ho.approve(user, id);
+  approve(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: RecceHoApproveDto,
+  ) {
+    return this.ho.approve(user, id, dto);
   }
 
   /** POST /v1/recce-ho-review/recces/:id/reject — hoReviewStatus PENDING → REJECTED + status REJECTED. */

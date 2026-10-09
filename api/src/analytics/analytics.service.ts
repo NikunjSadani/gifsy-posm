@@ -392,8 +392,10 @@ export class AnalyticsService {
       where,
       select: {
         id: true, code: true, name: true, town: true, lat: true, lng: true, vendorId: true,
-        recces: { select: { status: true, hoReviewStatus: true } }, // 0 or 1 (one live recce per site)
-        installs: { select: { status: true } }, // 0 or 1
+        // A site can now carry MANY recces (1 app + N manual), so this is N rows, not 0-or-1. The
+        // furthest-stage reducer below folds across all of them (no [0] single-recce assumption).
+        recces: { select: { status: true, hoReviewStatus: true } },
+        installs: { select: { status: true } }, // 0 or 1 (one install per recce; report rework = Wave B)
       },
       take: AnalyticsService.GEO_CAP + 1, // +1 to detect truncation
       orderBy: { code: 'asc' },
@@ -402,22 +404,33 @@ export class AnalyticsService {
     const truncated = sites.length > AnalyticsService.GEO_CAP;
     const page = truncated ? sites.slice(0, AnalyticsService.GEO_CAP) : sites;
 
+    // Rank for folding many recces → the single furthest recce stage a site has reached. An
+    // ASM-approved recce resolves to HO_APPROVED only once HO has signed off; otherwise ASM_APPROVED
+    // (installable vs merely ASM-approved — never conflated). A SUBMITTED/REJECTED recce is RECCED.
+    const recceStageOf = (r: { status: string; hoReviewStatus: string }) =>
+      r.status === 'APPROVED'
+        ? r.hoReviewStatus === 'APPROVED'
+          ? 'HO_APPROVED'
+          : 'ASM_APPROVED'
+        : 'RECCED';
+    const RECCE_RANK: Record<string, number> = { RECCED: 1, ASM_APPROVED: 2, HO_APPROVED: 3 };
+
     const points = page.map((site) => {
-      const recce = site.recces[0];
       const install = site.installs[0];
+      // Fold across ALL of the site's recces (not recces[0]) → the single furthest-stage recce, so a
+      // site with 1 app + N manual recces is classified by its best stage, deterministically.
       let furthestStage:
         | 'NONE' | 'RECCED' | 'ASM_APPROVED' | 'HO_APPROVED' | 'INSTALLED' | 'AUDITED' = 'NONE';
-      if (recce) {
-        // An ASM-approved recce resolves to HO_APPROVED only once HO has signed off; otherwise
-        // it is ASM_APPROVED (installable vs merely ASM-approved — never conflated).
-        if (recce.status === 'APPROVED') {
-          furthestStage = recce.hoReviewStatus === 'APPROVED' ? 'HO_APPROVED' : 'ASM_APPROVED';
-        } else {
-          furthestStage = 'RECCED';
+      let bestRecce: { status: string; hoReviewStatus: string } | null = null;
+      for (const r of site.recces) {
+        const stage = recceStageOf(r);
+        if (!bestRecce || RECCE_RANK[stage] > RECCE_RANK[recceStageOf(bestRecce)]) {
+          bestRecce = r;
+          furthestStage = stage;
         }
       }
       if (install) furthestStage = install.status === 'AUDIT_APPROVED' ? 'AUDITED' : 'INSTALLED';
-      const latestStatus = install?.status ?? recce?.status ?? 'NONE';
+      const latestStatus = install?.status ?? bestRecce?.status ?? 'NONE';
       return {
         siteId: site.id,
         code: site.code,

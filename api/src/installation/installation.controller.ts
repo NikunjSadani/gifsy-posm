@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Body, Param, HttpCode, HttpStatus,
+  Controller, Get, Post, Body, Param, Query, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { InstallationService } from './installation.service';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -25,6 +25,17 @@ export class InstallationController {
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateInstallationDto) {
     return this.installation.create(user, dto);
+  }
+
+  /**
+   * GET /v1/installation/installable?siteId=<X> — the outlet's installable recces (APPROVED +
+   * HO-APPROVED, no install yet) for the field recce picker. Declared before `:id` so the literal
+   * segment wins the route match.
+   */
+  @Roles('VENDOR_FIELD')
+  @Get('installable')
+  installable(@CurrentUser() user: JwtPayload, @Query('siteId') siteId: string) {
+    return this.installation.installable(user, siteId);
   }
 
   /** GET /v1/installation/:id — a single installation with both photos + integrity signals. */

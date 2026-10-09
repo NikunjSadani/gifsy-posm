@@ -127,6 +127,9 @@ export default function InstallPage({ params }: { params: Promise<{ recceId: str
     setSubmitting(true);
     try {
       const res = await api.post<{ id: string; status: string }>('/api/installation', {
+        // Recce-keyed install (R1): an outlet can have many approved recces (1 app + N manual), so
+        // the install must name WHICH recce it fulfils. `siteId` is kept for back-compat.
+        recceId: recce.id,
         siteId: recce.site.id,
         posms: posms.map((p) => ({
           reccePosmId: p.id,
