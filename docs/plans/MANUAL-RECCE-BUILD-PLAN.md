@@ -1,9 +1,16 @@
 # Manual Recce — Build Plan (Wave A + Wave B, phased)
 
-**Status:** Wave A ✅ DONE — committed `8fb4751` on `develop`, deployed to STAGING (all 3 Cloud Run
-services serving `8fb4751` @ 100% traffic; `add_manual_recce` migration applied via the traffic-gated
-migrate job; local runtime matrix 20/20). ▶ NEXT: Wave B (report rework + E2E + dual/UI audits).
-Owner-approved to build, phased, held on `develop`.
+**Status:** Wave A ✅ + Wave B ✅ DONE — on `develop`, pushed to STAGING.
+- Wave A `8fb4751`: schema + manual capture + attach + HO + install re-key; runtime matrix 20/20.
+- Wave B `246137d`: report (one row per recce + "Recce Mode" App/Manual col), analytics, manual-recce
+  Playwright spec (8/8), + dual adversarial & UI/UX audits APPLIED. Gate-green (api 487 jest, platform 323
+  vitest). HIGH audit bugs fixed + tested: HO can't rename an established outlet's Outlet ID (provisional-only
+  finalize); manual recces now visible + re-capturable in field My Work. D3 no-scroll verified @360/375.
+- ⏳ Staging deploy of `246137d` in flight at write time — confirm all 3 Cloud Run services serve it @100%.
+- 🔸 Owner decisions still open: HO duplicate-Outlet-ID resolution is "change the ID" only (no attach-to-
+  existing branch — plan open-confirmation #3); report layout defaulted to row-per-recce (confirm at UAT).
+- 🔸 Pre-existing (NOT this feature): `field-filter.spec` false-fails on a non-fresh local DB (Site A1 already
+  has a recce → correctly hidden from "recce to do"); tracked as a separate task. Prod deploy = owner-gated.
 **Owner:** Nikunj. **Orchestrator:** Claude (runs gates, integrates, owns the verified result).
 **Created:** 2026-10-09.
 **Related:** `OUTLET-EXECUTION-REPORT-PLAN.md` (the report this extends), the recce→ASM→HO→install→audit pipeline (LIVE), `recce-ho-review` module (LIVE).
