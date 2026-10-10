@@ -17,29 +17,36 @@ import { streamXlsx } from '../common/xlsx';
 import type { Readable } from 'node:stream';
 import {
   OUTLET_REPORT_COLUMNS,
-  buildOutletExecutionRow,
+  buildOutletExecutionRows,
   type RepSite,
 } from './outlet-execution.helper';
 
 /** Rows pulled per DB round-trip while streaming the xlsx — bounds peak memory, not the total. */
 const OUTLET_EXPORT_BATCH = 1_000;
 
-/** Prisma include that feeds the Outlet Execution row builder (one live recce + its install). */
+/**
+ * Prisma include that feeds the Outlet Execution row builder. ONE ROW PER RECCE (Wave B): load ALL
+ * of the outlet's recces (1 app + N manual) with EACH recce's own installation nested under it
+ * (Recce.installation, 0-or-1 via Installation.recceId @unique), so a row's install facts are its
+ * own recce's — never a sibling's. Recces are ordered app-first then manual oldest-first (matching
+ * the helper's sort) for a stable, page-safe row order.
+ */
 const OUTLET_REPORT_INCLUDE = {
   vendor: { select: { name: true } },
   recces: {
+    orderBy: [{ recceMode: 'asc' }, { receivedAt: 'asc' }, { id: 'asc' }],
     // `include` (not `select`) returns ALL Recce scalars, so the report's RepRecce fields —
-    // status, the ASM rejectionReason*, and the recce-side HO-approval fields (hoReviewStatus,
-    // hoRejectionReason*) — all flow through to buildOutletExecutionRow without an explicit select.
+    // recceMode, status, the ASM rejectionReason*, and the recce-side HO-approval fields
+    // (hoReviewStatus, hoRejectionReason*) — all flow through without an explicit select.
     include: {
       submittedBy: { select: { name: true, promoterCode: true } },
       posms: { include: { posmType: { select: { name: true } } } },
-    },
-  },
-  installs: {
-    include: {
-      submittedBy: { select: { name: true, promoterCode: true } },
-      posms: { select: { reccePosmId: true, captureLat: true, captureLng: true, distanceFromRecce: true } },
+      installation: {
+        include: {
+          submittedBy: { select: { name: true, promoterCode: true } },
+          posms: { select: { reccePosmId: true, captureLat: true, captureLng: true, distanceFromRecce: true } },
+        },
+      },
     },
   },
 } satisfies Prisma.SiteInclude;
@@ -299,6 +306,10 @@ export class ReportsService {
           where: {
             clientId: client.id,
             status: 'SUBMITTED',
+            // APP-only: a MANUAL recce skips the ASM stage (field → HO directly), so it must never
+            // be reminded to an ASM as "pending your approval" even when attached to an ASM-owned
+            // outlet. Mirrors the ASM queue filter (approval.service: SUBMITTED + recceMode APP).
+            recceMode: 'APP',
             receivedAt: { lte: thresholdCutoff },
             site: { asmUserId: { not: null } },
             OR: [{ lastRemindedAt: null }, { lastRemindedAt: { lte: remindCutoff } }],
@@ -473,10 +484,26 @@ export class ReportsService {
       hoApprovedRecceLast24h,
       rejectedRecceLast24h,
     ] = await Promise.all([
-      this.prisma.recce.count({ where: { clientId, status: 'SUBMITTED' } }),
-      // ASM-approved recces still awaiting HO sign-off (the new stage between ASM approval and
-      // install). Invisible to the SUBMITTED-only counts above, so counted explicitly here.
-      this.prisma.recce.count({ where: { clientId, status: 'APPROVED', hoReviewStatus: 'PENDING' } }),
+      // Recces awaiting ASM review — APP-only, mirroring the ASM queue (approval.service: status
+      // SUBMITTED + recceMode APP). A MANUAL recce is ALSO status SUBMITTED but skips ASM entirely,
+      // so excluding it here keeps it out of this line and solely under pendingHoReview below (no
+      // double-count of the same manual recce across the two "pending" lines).
+      this.prisma.recce.count({ where: { clientId, status: 'SUBMITTED', recceMode: 'APP' } }),
+      // Recces sitting in the HO queue — mirrors the recce-ho-review queue filter (R4):
+      //   APP    — ASM-approved, awaiting HO sign-off (status APPROVED, hoReviewStatus PENDING);
+      //   MANUAL — field-typed, skips ASM, arrives straight at HO (status SUBMITTED, hoReviewStatus
+      //            PENDING, recceMode MANUAL).
+      // Counted explicitly because both are invisible to the SUBMITTED-only pendingRecceReview count.
+      this.prisma.recce.count({
+        where: {
+          clientId,
+          hoReviewStatus: 'PENDING',
+          OR: [
+            { status: 'APPROVED' },
+            { recceMode: 'MANUAL', status: 'SUBMITTED' },
+          ],
+        },
+      }),
       this.prisma.installation.count({ where: { clientId, status: 'SUBMITTED' } }),
       this.prisma.manualTask.count({ where: { clientId, status: 'OPEN' } }),
       this.prisma.manualTaskSubmission.count({ where: { clientId, status: 'SUBMITTED' } }),
@@ -679,11 +706,18 @@ export class ReportsService {
       }),
       this.prisma.site.count({ where }),
     ]);
-    const rows = sites.map((s) => buildOutletExecutionRow(s as unknown as RepSite));
+    // flatMap: each site expands to one row per recce (app-only → 1 row; mixed → 1 + N; none → 1).
+    const rows = sites.flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite));
     return { rows, total };
   }
 
-  /** GET /v1/reports/outlet-execution — one paginated page of the report for the on-screen table. */
+  /**
+   * GET /v1/reports/outlet-execution — one paginated page of the report for the on-screen table.
+   * Paging is BY OUTLET (skip/take over Sites): `total` is the outlet count and page N holds `limit`
+   * outlets, but because an outlet expands to one row per recce (1 app + N manual), `rows.length` can
+   * EXCEED `limit`. The FE derives its page count from `total` (outlets), so a multi-recce outlet
+   * never straddles a page boundary — every row of an outlet stays on that outlet's page.
+   */
   async outletExecution(user: JwtPayload, q: ListOutletReportDto) {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(500, Math.max(1, q.limit ?? 50));
@@ -714,7 +748,7 @@ export class ReportsService {
       });
       if (sites.length < OUTLET_EXPORT_BATCH) exhausted = true;
       if (sites.length > 0) cursorId = sites[sites.length - 1].id;
-      return sites.map((s) => buildOutletExecutionRow(s as unknown as RepSite));
+      return sites.flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite));
     };
 
     return streamXlsx({

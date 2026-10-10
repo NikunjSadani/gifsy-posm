@@ -30,6 +30,7 @@ import type { RecceMarkup } from '@/lib/markup';
 /** Minimal recce-row factory for the grouping/lookup fixtures. */
 function row(partial: Partial<RecceListRow> & Pick<RecceListRow, 'id' | 'status'>): RecceListRow {
   return {
+    recceMode: 'APP',
     hoReviewStatus: 'NONE',
     version: 1,
     site: { id: `site-${partial.id}`, code: `C${partial.id}`, name: `Site ${partial.id}`, town: null },
@@ -45,22 +46,31 @@ function row(partial: Partial<RecceListRow> & Pick<RecceListRow, 'id' | 'status'
 }
 
 describe('classifyRecce', () => {
-  it('REJECTED → NEEDS_RECAPTURE (ASM or HO sent it back)', () => {
-    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'NONE' })).toBe('NEEDS_RECAPTURE');
-    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'REJECTED' })).toBe('NEEDS_RECAPTURE');
+  it('REJECTED → NEEDS_RECAPTURE (ASM or HO sent it back, APP or MANUAL)', () => {
+    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'NONE', recceMode: 'APP' })).toBe('NEEDS_RECAPTURE');
+    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'REJECTED', recceMode: 'APP' })).toBe('NEEDS_RECAPTURE');
+    // A MANUAL recce HO sent back must also land in re-capture so the exec can re-submit (D5).
+    expect(classifyRecce({ status: 'REJECTED', hoReviewStatus: 'REJECTED', recceMode: 'MANUAL' })).toBe('NEEDS_RECAPTURE');
   });
 
-  it('SUBMITTED → AWAITING_ASM', () => {
-    expect(classifyRecce({ status: 'SUBMITTED', hoReviewStatus: 'NONE' })).toBe('AWAITING_ASM');
+  it('SUBMITTED APP → AWAITING_ASM', () => {
+    expect(classifyRecce({ status: 'SUBMITTED', hoReviewStatus: 'NONE', recceMode: 'APP' })).toBe('AWAITING_ASM');
   });
 
-  it('APPROVED is READY_TO_INSTALL only when HO has also approved', () => {
-    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED' })).toBe('READY_TO_INSTALL');
+  it('SUBMITTED MANUAL → AWAITING_HO (no ASM stage — straight to Head-Office, D4)', () => {
+    // A manual recce lands as SUBMITTED + hoReviewStatus PENDING; it must NOT read as awaiting ASM.
+    expect(classifyRecce({ status: 'SUBMITTED', hoReviewStatus: 'PENDING', recceMode: 'MANUAL' })).toBe('AWAITING_HO');
+    expect(classifyRecce({ status: 'SUBMITTED', hoReviewStatus: 'NONE', recceMode: 'MANUAL' })).toBe('AWAITING_HO');
+  });
+
+  it('APPROVED is READY_TO_INSTALL only when HO has also approved (APP or MANUAL)', () => {
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED', recceMode: 'APP' })).toBe('READY_TO_INSTALL');
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED', recceMode: 'MANUAL' })).toBe('READY_TO_INSTALL');
   });
 
   it('APPROVED but HO not yet approved → AWAITING_HO (PENDING or NONE)', () => {
-    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'PENDING' })).toBe('AWAITING_HO');
-    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'NONE' })).toBe('AWAITING_HO');
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'PENDING', recceMode: 'APP' })).toBe('AWAITING_HO');
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'NONE', recceMode: 'APP' })).toBe('AWAITING_HO');
   });
 });
 
@@ -168,6 +178,11 @@ describe('fetchMyRecces — query building', () => {
   it('appends status when set', () => {
     void fetchMyRecces({ status: 'APPROVED' });
     expect(urlOf()).toContain('status=APPROVED');
+  });
+
+  it('appends recceMode when set (manual recces fetched independent of RS/Beat)', () => {
+    void fetchMyRecces({ recceMode: 'MANUAL' });
+    expect(urlOf()).toContain('recceMode=MANUAL');
   });
 });
 

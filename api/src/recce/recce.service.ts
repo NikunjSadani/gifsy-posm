@@ -261,12 +261,14 @@ export class RecceService {
         return createdRecce;
       });
     } catch (e) {
-      // An outletId that collides with an existing outlet (clientId, code) NOT serviced by this
-      // vendor — or a concurrent create racing the same code — surfaces a clean 409.
+      // An outletId that collides with an existing outlet (clientId, code) the caller's vendor does
+      // NOT service — or a concurrent create racing the same code — surfaces a 409. The message is
+      // intentionally generic: confirming the id belongs to a sibling vendor's outlet would leak its
+      // existence across the vendor boundary that `/sites/lookup` enforces (adversarial audit F3).
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException(
           outletId
-            ? `An outlet with Outlet ID "${outletId}" already exists.`
+            ? "This Outlet ID can't be used. Enter a different Outlet ID, or leave it blank for Head-Office to assign."
             : 'This outlet could not be created (concurrent submit).',
         );
       }
@@ -373,6 +375,9 @@ export class RecceService {
 
     const where: Prisma.RecceWhereInput = { ...scope, submittedById: user.sub };
     if (q.status) where.status = q.status;
+    // Mode filter lets the field app pull the exec's MANUAL recces independent of the RS/Beat gate
+    // (a provisional manual outlet has no RS/Beat) so they stay visible + re-capturable in My Work.
+    if (q.recceMode) where.recceMode = q.recceMode;
     if (q.siteCode) {
       where.site = {
         ...(where.site as Prisma.SiteWhereInput | undefined),
@@ -411,6 +416,9 @@ export class RecceService {
     const recces = rows.map((r) => ({
       id: r.id,
       status: r.status,
+      // APP vs MANUAL — the field My Work list needs this to classify a SUBMITTED recce as
+      // "awaiting HO" (manual, no ASM) vs "awaiting ASM" (app), and to label the card honestly.
+      recceMode: r.recceMode,
       // The HO review verdict the field app needs to gate installation + render the re-recce banner.
       hoReviewStatus: r.hoReviewStatus,
       version: r.version,

@@ -58,6 +58,8 @@ export interface RecceSiteLite {
 export interface RecceListRow {
   id: string;
   status: RecceStatus;
+  /** How this recce entered the system — an APP recce runs ASM→HO; a MANUAL recce goes straight to HO. */
+  recceMode: RecceMode;
   /** The HO review decision — distinguishes 'ready to install' (APPROVED) from 'awaiting HO' (PENDING). */
   hoReviewStatus: HoReviewStatus;
   version: number;
@@ -124,15 +126,22 @@ export interface MyReccesFilters {
   /** Filter-first field screen: EXACT RS code + Beat (there is no beatId). */
   rsCode?: string;
   beatName?: string;
+  /**
+   * Restrict to one entry mode. MANUAL recces carry a null RS/Beat (a provisional outlet), so the
+   * exec fetches them with `recceMode: 'MANUAL'` INDEPENDENT of the RS/Beat gate — otherwise their
+   * own manual submissions (including a rejected one they must re-capture) would never show.
+   */
+  recceMode?: RecceMode;
   limit?: number;
 }
 
-/** Fetch the field user's own recces (optionally filtered by status / RS code / beat). */
+/** Fetch the field user's own recces (optionally filtered by status / RS code / beat / mode). */
 export function fetchMyRecces(filters: MyReccesFilters = {}) {
   const params = new URLSearchParams();
   if (filters.status) params.set('status', filters.status);
   if (filters.rsCode) params.set('rsCode', filters.rsCode);
   if (filters.beatName) params.set('beatName', filters.beatName);
+  if (filters.recceMode) params.set('recceMode', filters.recceMode);
   // Match the sites screen's page size (backend max is 200) so a rep's work in a beat isn't
   // silently truncated at the default of 50.
   params.set('limit', String(filters.limit ?? 200));
@@ -229,10 +238,11 @@ export function submitManualRecce(input: ManualRecceInput) {
  * and installation, so APPROVED splits in two: only an HO-approved recce is 'Ready to install';
  * an ASM-approved one still awaiting HO is read-only 'Awaiting HO approval'.
  *
- *   NEEDS_RECAPTURE   ← status REJECTED (ASM or HO sent it back)       — rep re-captures
- *   READY_TO_INSTALL  ← status APPROVED && hoReviewStatus APPROVED     — rep can start install
- *   AWAITING_HO       ← status APPROVED && hoReviewStatus !== APPROVED — read-only
- *   AWAITING_ASM      ← status SUBMITTED                               — read-only
+ *   NEEDS_RECAPTURE   ← status REJECTED (ASM or HO sent it back)              — rep re-captures
+ *   READY_TO_INSTALL  ← status APPROVED && hoReviewStatus APPROVED            — rep can start install
+ *   AWAITING_HO       ← status APPROVED && hoReviewStatus !== APPROVED, OR    — read-only
+ *                       a SUBMITTED MANUAL recce (no ASM stage — straight to HO)
+ *   AWAITING_ASM      ← status SUBMITTED on an APP recce                      — read-only
  */
 export type RecceGroupKey = 'NEEDS_RECAPTURE' | 'READY_TO_INSTALL' | 'AWAITING_HO' | 'AWAITING_ASM';
 
@@ -266,14 +276,19 @@ export interface RecceGroup {
  * Classify a single recce into its My Work group. A recce is 'Ready to install' ONLY when BOTH
  * the ASM (status APPROVED) and HO (hoReviewStatus APPROVED) have signed off; an ASM-approved
  * recce whose HO decision is anything else (PENDING / NONE) is still 'Awaiting HO approval' and
- * must NOT offer the install action. Pure — unit-tested.
+ * must NOT offer the install action. A SUBMITTED recce is still 'Awaiting ASM' on the APP path,
+ * but a MANUAL recce skips ASM entirely (D4) and is 'Awaiting Head-Office' from submit. A REJECTED
+ * recce (ASM or HO sent it back, APP or MANUAL alike) needs re-capture. Pure — unit-tested.
  */
-export function classifyRecce(r: Pick<RecceListRow, 'status' | 'hoReviewStatus'>): RecceGroupKey {
+export function classifyRecce(
+  r: Pick<RecceListRow, 'status' | 'hoReviewStatus' | 'recceMode'>,
+): RecceGroupKey {
   if (r.status === 'REJECTED') return 'NEEDS_RECAPTURE';
   if (r.status === 'APPROVED') {
     return r.hoReviewStatus === 'APPROVED' ? 'READY_TO_INSTALL' : 'AWAITING_HO';
   }
-  return 'AWAITING_ASM'; // SUBMITTED
+  // SUBMITTED: a manual recce has no ASM stage — it waits on Head-Office, not the ASM.
+  return r.recceMode === 'MANUAL' ? 'AWAITING_HO' : 'AWAITING_ASM';
 }
 
 /**

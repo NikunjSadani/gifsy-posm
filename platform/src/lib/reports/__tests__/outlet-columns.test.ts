@@ -6,11 +6,12 @@ import {
   PINNED_KEYS,
 } from '../outlet-columns';
 
-/** The owner's 36-column spec order (mirrors api OUTLET_REPORT_COLUMNS). */
+/** The owner's spec column order (mirrors api OUTLET_REPORT_COLUMNS). "Recce Mode" (Manual-Recce
+ *  Wave B) sits right after "Direct Installation", just before the Element columns. */
 const SPEC_COLUMNS = [
   'Vendor Name', 'Recce Promoter ID', 'Install Promoter ID', 'Region', 'State', 'Cluster',
   'Town', 'RS Code', 'Beat Name', 'Outlet Code', 'Outlet Name', 'Channel', 'Address',
-  'Lat Long', 'Direct Installation',
+  'Lat Long', 'Direct Installation', 'Recce Mode',
   'Element 1', 'Element 1 Recce Status', 'Element 1 Recce Time and Date', 'Element 1 Recce Location',
   'Element 1 Installation Status', 'Element 1 Installation Time and Date', 'Element 1 Installation Location',
   'Element 1 Recce and Installation distance',
@@ -57,12 +58,22 @@ describe('groupOutletColumns', () => {
     ]);
   });
 
-  it('puts the remaining 13 meta columns in Details, in backend order', () => {
+  it('puts the remaining 14 meta columns in Details, in backend order', () => {
     const details = groups.find((g) => g.label === 'Details')!;
     expect(details.columns.map((c) => c.key)).toEqual([
       'Vendor Name', 'Recce Promoter ID', 'Install Promoter ID', 'Region', 'State', 'Cluster',
       'Town', 'RS Code', 'Beat Name', 'Channel', 'Address', 'Lat Long', 'Direct Installation',
+      'Recce Mode',
     ]);
+  });
+
+  it('places "Recce Mode" in Details, immediately after "Direct Installation" (adjacent, as specced)', () => {
+    const details = groups.find((g) => g.label === 'Details')!;
+    const keys = details.columns.map((c) => c.key);
+    expect(keys).toContain('Recce Mode');
+    expect(keys.indexOf('Recce Mode')).toBe(keys.indexOf('Direct Installation') + 1);
+    // It is NOT absorbed into any Element or status group, and keeps its verbatim label.
+    expect(subColumnLabel('Recce Mode')).toBe('Recce Mode');
   });
 
   it('accounts for every column exactly once (nothing dropped or duplicated)', () => {

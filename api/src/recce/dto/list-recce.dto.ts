@@ -1,6 +1,6 @@
 import { IsOptional, IsString, IsInt, Min, Max, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
-import { RecceStatus } from '@prisma/client';
+import { RecceStatus, RecceMode } from '@prisma/client';
 
 /**
  * Query filters for GET /v1/recce (the field user's own recces). All optional. `@Type` is
@@ -12,6 +12,15 @@ export class ListRecceDto {
   @IsOptional()
   @IsEnum(RecceStatus)
   status?: RecceStatus;
+
+  /**
+   * Filter by recce mode (APP | MANUAL). Lets the field app fetch the exec's MANUAL recces
+   * independent of the RS/Beat gate — a manual recce's provisional outlet has no RS/Beat, so it
+   * would otherwise never surface in My Work (UI/UX audit F1 / owner's reject→re-capture loop).
+   */
+  @IsOptional()
+  @IsEnum(RecceMode)
+  recceMode?: RecceMode;
 
   /** Filter by the site's code (case-insensitive contains). */
   @IsOptional()

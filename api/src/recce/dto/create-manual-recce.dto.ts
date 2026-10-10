@@ -1,6 +1,6 @@
 import {
   IsArray, IsNotEmpty, IsOptional, IsString, MaxLength,
-  ArrayMinSize, ArrayMaxSize, ValidateNested,
+  ArrayMinSize, ArrayMaxSize, ValidateNested, Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ReccePosmLineDto } from './create-recce.dto';
@@ -24,6 +24,9 @@ export class CreateManualRecceDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  // The `MAN-…` prefix is the reserved provisional-code sentinel; a user-supplied Outlet ID using it
+  // would be stored as a real code yet read back as "unassigned" (adversarial audit F2).
+  @Matches(/^(?!MAN-)/, { message: 'Outlet ID cannot start with the reserved prefix "MAN-".' })
   outletId?: string;
 
   @IsString()

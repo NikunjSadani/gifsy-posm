@@ -3,7 +3,7 @@ import { Prisma, RejectReasonCode, RecceMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope } from '../common/tenant-scope';
-import { isProvisionalCode } from '../common/provisional-code';
+import { isProvisionalCode, PROVISIONAL_CODE_PREFIX } from '../common/provisional-code';
 import { readMediaValue } from '../capture/visibility-types';
 import { ListRecceHoQueueDto } from './dto/list-recce-ho-queue.dto';
 import { RecceHoRejectDto } from './dto/recce-ho-reject.dto';
@@ -271,7 +271,23 @@ export class RecceHoReviewService {
       }
     }
 
-    const writeCode = provided && provided !== recce.site.code ? provided : null;
+    // A supplied Outlet ID may not use the reserved provisional prefix — otherwise it would be
+    // stored as a "real" code yet read back as provisional (adversarial audit F2).
+    if (provided && isProvisionalCode(provided)) {
+      throw new BadRequestException(
+        `Outlet ID cannot start with the reserved prefix "${PROVISIONAL_CODE_PREFIX}".`,
+      );
+    }
+    // Only FINALIZE a provisional outlet's code. An ESTABLISHED outlet's code (one this manual
+    // recce merely ATTACHED to) is a shared master identity — approving a recce must NOT rename it
+    // and orphan its history (adversarial audit F1). Renaming a real outlet belongs in the Sites
+    // master, not as a side effect of recce approval.
+    if (provided && currentCodeReal && provided !== recce.site.code) {
+      throw new ConflictException(
+        `This outlet already has Outlet ID "${recce.site.code}"; approving a manual recce can't rename an existing outlet. Edit it from the Sites master instead.`,
+      );
+    }
+    const writeCode = !currentCodeReal && provided ? provided : null;
 
     return this.prisma.$transaction(async (tx) => {
       if (writeCode) {

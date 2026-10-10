@@ -1,10 +1,14 @@
 'use client';
 
 /**
- * Outlet Execution Report (owner spec 2026-09-30) — one row per outlet across recce → ASM →
- * install → audit → HO, for up to 2 POSM elements. The 36-column table is horizontally
- * scrollable; the primary deliverable is the .xlsx download (all matching rows). Filters:
- * outlet code, town, region, state, vendor. Admin-only (inside the /admin shell).
+ * Outlet Execution Report (owner spec 2026-09-30; Manual-Recce Wave B 2026-10-09) — ONE ROW PER
+ * RECCE across recce → ASM → install → audit → HO, for up to 2 POSM elements. An outlet with one
+ * APP recce renders a single row; an outlet with 1 app + N manual recces renders 1 + N rows (the
+ * identity columns repeat, the element/status columns are each recce's own); a no-recce outlet
+ * still renders one "Not started" row. The "Recce Mode" column (App / Manual) classifies each row.
+ * The table is horizontally scrollable; the primary deliverable is the .xlsx download (all matching
+ * rows). Paging is by outlet, so a multi-recce outlet never straddles a page. Filters: outlet code,
+ * town, region, state, vendor. Admin-only (inside the /admin shell).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -108,7 +112,8 @@ export default function ExecutionReportPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">Execution report</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            One row per outlet — recce, installation, approvals and audit across both Elements.
+            One row per recce — an outlet with multiple recces (App + Manual) spans several rows,
+            each with its own Elements, installation, approvals and audit.
             {!loading && !error && <> {' · '}{total} outlet{total === 1 ? '' : 's'}</>}
           </p>
         </div>

@@ -13,12 +13,13 @@
 
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, AlertCircle, Hammer, ChevronRight, RefreshCw, PackageCheck } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertCircle, Hammer, ChevronRight, RefreshCw, PackageCheck, Clock } from 'lucide-react';
 import {
   fetchInstallableRecces,
   installableElementSummary,
   type InstallableRecce,
 } from '@/lib/field/installation-api';
+import { formatDateTime } from '@/lib/utils';
 
 export default function InstallSelectPage({ params }: { params: Promise<{ siteId: string }> }) {
   const { siteId } = use(params);
@@ -141,6 +142,13 @@ export default function InstallSelectPage({ params }: { params: Promise<{ siteId
                 <p className="mt-1 truncate text-xs text-gray-500">
                   {installableElementSummary(r.posms)}
                 </p>
+                {/* Capture time — lets the exec tell apart two recces of the same element type. */}
+                {r.capturedAt && (
+                  <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-gray-400">
+                    <Clock className="h-3 w-3 shrink-0" />
+                    Captured {formatDateTime(r.capturedAt)}
+                  </p>
+                )}
               </div>
               <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
             </button>

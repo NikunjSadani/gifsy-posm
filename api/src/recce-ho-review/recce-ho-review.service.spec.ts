@@ -314,6 +314,29 @@ describe('RecceHoReviewService.approve — MANUAL recces (Outlet-ID gate)', () =
     expect(fns.recce.update.mock.calls[0][0].data.status).toBe('APPROVED');
     expect(fns.recce.update.mock.calls[0][0].data.hoReviewStatus).toBe('APPROVED');
   });
+
+  it('outlet already carries a REAL code + a DIFFERENT outletId → 409, never renames the master outlet (audit F1)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce({ site: { id: 's1', code: 'OUT1', name: 'Real Shop' } }));
+    fns.site.findFirst.mockResolvedValue(null); // the new id is free elsewhere — still must not rename an established outlet
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-2' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(fns.site.update).not.toHaveBeenCalled();
+    expect(fns.recce.update).not.toHaveBeenCalled();
+  });
+
+  it('a provided outletId using the reserved MAN- prefix → 400, no write (audit F2)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce());
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'MAN-xyz' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fns.site.update).not.toHaveBeenCalled();
+    expect(fns.recce.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('RecceHoRejectDto — a valid reason code is required', () => {

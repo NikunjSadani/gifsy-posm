@@ -111,7 +111,19 @@ export class AnalyticsService {
 
   // ── Summary (waterfall + KPIs + manual) ─────────────────────────────────────────
 
-  /** The dashboard headline: stage funnel + rate/queue KPIs + manual-lane counts, all scoped. */
+  /**
+   * The dashboard headline: stage funnel + rate/queue KPIs + manual-lane counts, all scoped.
+   *
+   * FUNNEL GRAIN = recce EVENTS, not outlets. Since an outlet can carry 1 app + N manual recces
+   * (manual recces skip ASM → HO), every stage below counts recce/installation ROWS, and manual
+   * recces are INCLUDED throughout (no recceMode filter anywhere): `recced` = all recces, `approved`
+   * = recces at status APPROVED (a manual recce's HO-approve sets status APPROVED too), `hoApproved`
+   * = those also HO-signed-off, `installed`/`audited` = installation rows. One consequence: `recced`
+   * can EXCEED `totalSites` (which stays an outlet count) at outlets with multiple recces — that is
+   * the intended "recce events" reading, not a bug. `byRecceMode` splits the recce total app vs
+   * manual so the two paths are visible without changing the funnel. vendorScorecards counts the
+   * same way (per-site groupBy summed over all recces → events), so the two views stay consistent.
+   */
   async summary(user: JwtPayload) {
     const s = this.resolveScope(user);
 
@@ -130,15 +142,20 @@ export class AnalyticsService {
       pendingInstallAudit,
       openTasks,
       manualPendingReview,
+      recceManual,
     ] = await Promise.all([
       this.prisma.site.count({ where: s.site }),
       this.prisma.recce.count({ where: s.recce }),
-      // ASM-approved: status APPROVED (regardless of HO).
+      // ASM-approved: status APPROVED (regardless of HO). Includes HO-approved manual recces, whose
+      // approve sets status APPROVED as well — so the funnel never undercounts manual progress.
       this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED' } }),
       // HO-approved / installable: status APPROVED AND hoReviewStatus APPROVED.
       this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
       this.prisma.recce.count({ where: { ...s.recce, status: 'REJECTED' } }),
-      this.prisma.recce.count({ where: { ...s.recce, status: 'SUBMITTED' } }),
+      // Pending ASM review = SUBMITTED *app* recces only. A manual recce is also SUBMITTED but skips
+      // ASM (it sits in the HO queue), so counting it here would mislabel it as an ASM backlog and
+      // double-count it against the HO-pending lines (adversarial audit F4; matches the digest).
+      this.prisma.recce.count({ where: { ...s.recce, status: 'SUBMITTED', recceMode: 'APP' } }),
       this.prisma.recce.count({ where: { ...s.recce, geoFenceOk: true } }),
       this.prisma.recce.count({ where: { ...s.recce, geoFenceOk: { not: null } } }),
       this.prisma.installation.count({ where: s.install }),
@@ -147,6 +164,10 @@ export class AnalyticsService {
       this.prisma.installation.count({ where: { ...s.install, status: 'SUBMITTED' } }),
       this.prisma.manualTask.count({ where: { ...s.manualTask, status: 'OPEN' } }),
       this.prisma.manualTaskSubmission.count({ where: { ...s.manualSub, status: 'SUBMITTED' } }),
+      // Manual recce events (cheap app-vs-manual split; app = recced − manual). Kept LAST so the
+      // funnel's recce-count ordering above is unchanged. recceMode is NOT filtered anywhere else,
+      // so the funnel stages already include manual recces — this only splits the recce total.
+      this.prisma.recce.count({ where: { ...s.recce, recceMode: 'MANUAL' } }),
     ]);
 
     const avgTurnaroundDays = await this.avgTurnaround(s.install);
@@ -169,6 +190,9 @@ export class AnalyticsService {
     return {
       // `approved` = ASM-approved; `hoApproved` = HO-approved / installable (subset of approved).
       waterfall: { totalSites, recced, approved, hoApproved, installed, audited },
+      // Recce-event split by entry path (app = total − manual). `manualTasks` below is the unrelated
+      // generic manual-task lane; this is the APP-vs-MANUAL recce classification.
+      byRecceMode: { app: recced - recceManual, manual: recceManual },
       kpis,
       manual: { openTasks, pendingReview: manualPendingReview },
     };
@@ -395,7 +419,9 @@ export class AnalyticsService {
         // A site can now carry MANY recces (1 app + N manual), so this is N rows, not 0-or-1. The
         // furthest-stage reducer below folds across all of them (no [0] single-recce assumption).
         recces: { select: { status: true, hoReviewStatus: true } },
-        installs: { select: { status: true } }, // 0 or 1 (one install per recce; report rework = Wave B)
+        // A site can now carry MANY installs too (one per installed recce — app and/or manual). The
+        // furthest-stage reducer below folds across all of them (AUDITED if ANY is audit-approved).
+        installs: { select: { status: true }, orderBy: { receivedAt: 'desc' } },
       },
       take: AnalyticsService.GEO_CAP + 1, // +1 to detect truncation
       orderBy: { code: 'asc' },
@@ -416,7 +442,10 @@ export class AnalyticsService {
     const RECCE_RANK: Record<string, number> = { RECCED: 1, ASM_APPROVED: 2, HO_APPROVED: 3 };
 
     const points = page.map((site) => {
-      const install = site.installs[0];
+      // Fold across ALL of the site's installs (not installs[0]) → a site with multiple installed
+      // recces (app and/or manual) is AUDITED if ANY install is audit-approved, else INSTALLED.
+      const hasInstall = site.installs.length > 0;
+      const hasAudited = site.installs.some((i) => i.status === 'AUDIT_APPROVED');
       // Fold across ALL of the site's recces (not recces[0]) → the single furthest-stage recce, so a
       // site with 1 app + N manual recces is classified by its best stage, deterministically.
       let furthestStage:
@@ -429,8 +458,8 @@ export class AnalyticsService {
           furthestStage = stage;
         }
       }
-      if (install) furthestStage = install.status === 'AUDIT_APPROVED' ? 'AUDITED' : 'INSTALLED';
-      const latestStatus = install?.status ?? bestRecce?.status ?? 'NONE';
+      if (hasInstall) furthestStage = hasAudited ? 'AUDITED' : 'INSTALLED';
+      const latestStatus = (hasAudited ? 'AUDIT_APPROVED' : site.installs[0]?.status) ?? bestRecce?.status ?? 'NONE';
       return {
         siteId: site.id,
         code: site.code,

@@ -1,13 +1,25 @@
 /**
  * outlet-execution.helper.ts — the PURE column contract + row builder for the Outlet Execution
- * Report (owner spec, 2026-09-30). One report row per outlet (Site). No Nest/Prisma imports so it
- * is trivially unit-testable; the service loads the Sites with the right includes and hands each
- * one here. Column ORDER is the insertion order of the returned object (jsonToSheetSafe derives
- * the header row from the first row's keys), so it matches the owner's column list exactly.
+ * Report (owner spec, 2026-09-30; Manual-Recce Wave B rework 2026-10-09). No Nest/Prisma imports
+ * so it is trivially unit-testable; the service loads the Sites with the right includes and hands
+ * each one here. Column ORDER is the insertion order of the returned object (jsonToSheetSafe
+ * derives the header row from the first row's keys), so it matches the owner's column list exactly.
  *
- * See docs/plans/OUTLET-EXECUTION-REPORT-PLAN.md for the column → source map and the modelling
- * decisions (per-element time/status is at the recce/installation level; HO status is orthogonal
- * to Audit status; Direct Installation is a forward-looking flag).
+ * ROW GRAIN (Wave B): ONE ROW PER RECCE, not per outlet. An outlet can now carry one APP recce AND
+ * unlimited MANUAL recces (manual recces skip ASM and go straight to HO). So:
+ *   - an app-only outlet (1 app recce)            → 1 row (unchanged from the pre-Wave-B report);
+ *   - an outlet with 1 app + N manual recces      → 1 + N rows (outlet-identity columns repeat;
+ *                                                     each row's element + status columns are THAT
+ *                                                     recce's own facts, never recces[0]'s);
+ *   - an outlet with NO recce yet                 → still 1 "Not started" row.
+ * A new "Recce Mode" column (App / Manual; blank for a no-recce row) classifies each row. Every
+ * per-recce column — recce status, ASM/HO approval, installation facts, rejection reasons — reflects
+ * the row's OWN recce and its OWN installation (via Recce.installation), so a multi-recce outlet is
+ * represented faithfully rather than collapsed onto the first recce.
+ *
+ * See docs/plans/OUTLET-EXECUTION-REPORT-PLAN.md + MANUAL-RECCE-BUILD-PLAN.md §7 for the column →
+ * source map and the modelling decisions (per-element time/status is at the recce/installation
+ * level; HO status is orthogonal to Audit status; Direct Installation is a separate dormant flag).
  */
 
 // ── Minimal source shapes (a subset of the Prisma includes the service passes) ────────────────
@@ -25,7 +37,18 @@ export interface RepInstallPosm {
   distanceFromRecce: unknown;
 }
 export interface RepUser { name: string | null; promoterCode: string | null }
+export interface RepInstallation {
+  status: string;
+  hoReviewStatus: string;
+  isDirect: boolean;
+  capturedAt: Date | string | null;
+  submittedBy: RepUser | null;
+  posms: RepInstallPosm[];
+}
 export interface RepRecce {
+  id: string;
+  /** APP = the one in-app recce; MANUAL = a field-typed recce (skips ASM → HO). Drives "Recce Mode". */
+  recceMode: string;
   status: string;
   // Rejection reasons carried for the report: `rejectionReason*` is the ASM's verdict, the
   // `ho*` fields are the recce-side HO-approval stage (ASM approve → PENDING → HO approve/reject).
@@ -40,14 +63,8 @@ export interface RepRecce {
   captureLng: unknown;
   submittedBy: RepUser | null;
   posms: (RepReccePosm & { id: string })[];
-}
-export interface RepInstallation {
-  status: string;
-  hoReviewStatus: string;
-  isDirect: boolean;
-  capturedAt: Date | string | null;
-  submittedBy: RepUser | null;
-  posms: RepInstallPosm[];
+  /** This recce's own installation (0-or-1 via Installation.recceId @unique), or null. */
+  installation: RepInstallation | null;
 }
 export interface RepSite {
   code: string;
@@ -63,8 +80,8 @@ export interface RepSite {
   channel: string | null;
   address: string | null;
   vendor: { name: string | null } | null;
+  /** All recces for the outlet (1 app + N manual). Each becomes one report row. */
   recces: RepRecce[];
-  installs: RepInstallation[];
 }
 
 /** The ordered column headers (exactly the owner's spec), reused for the xlsx and the UI. */
@@ -84,6 +101,7 @@ export const OUTLET_REPORT_COLUMNS = [
   'Address',
   'Lat Long',
   'Direct Installation',
+  'Recce Mode',
   'Element 1',
   'Element 1 Recce Status',
   'Element 1 Recce Time and Date',
@@ -170,6 +188,9 @@ export function recceStatusLabel(recce: RepRecce | null): string {
 /** ASM decision on the recce (Approved / Rejected / Pending), "" when no recce. */
 export function asmApprovalLabel(recce: RepRecce | null): string {
   if (!recce) return '';
+  // A MANUAL recce skips ASM entirely (field → HO), so there is NO ASM decision. Showing
+  // "Pending"/"Approved" here would read as an ASM stage that never happened (UI/UX audit F3).
+  if (recce.recceMode === 'MANUAL') return 'N/A';
   if (recce.status === 'APPROVED') return 'Approved';
   if (recce.status === 'REJECTED') return 'Rejected';
   return 'Pending';
@@ -233,6 +254,11 @@ export function hoRejectionReasonLabel(recce: RepRecce | null): string {
   if (recce.hoReviewStatus !== 'REJECTED') return '';
   return rejectReasonText(recce.hoRejectionReasonCode, recce.hoRejectionReason);
 }
+/** "App" / "Manual" for the row's recce; "" for a no-recce row. Derived from recce.recceMode. */
+export function recceModeLabel(recce: RepRecce | null): string {
+  if (!recce) return '';
+  return recce.recceMode === 'MANUAL' ? 'Manual' : 'App';
+}
 /** Auditor verdict on the installation, "" when not installed. */
 export function auditStatusLabel(install: RepInstallation | null): string {
   if (!install) return '';
@@ -246,13 +272,40 @@ export function auditStatusLabel(install: RepInstallation | null): string {
 // ── The row builder ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Build one report row (ordered per OUTLET_REPORT_COLUMNS) for a loaded Site. `recces[0]` is the
- * one live recce (unique per site); `installs[0]` is its installation, if any. Element 1/2 map to
- * recce POSM slots 1/2; per-element installation facts come from the matching InstallPosm.
+ * Deterministic row order within an outlet: the APP recce first (so an app-only outlet renders the
+ * exact same single row as before), then MANUAL recces oldest-first by `receivedAt` (server time,
+ * always present), with `id` as the final tiebreaker so paging can never skip or duplicate a row.
  */
-export function buildOutletExecutionRow(site: RepSite): Record<string, string> {
-  const recce = site.recces[0] ?? null;
-  const install = site.installs[0] ?? null;
+function recceSortKey(r: RepRecce): [number, number, string] {
+  const modeRank = r.recceMode === 'MANUAL' ? 1 : 0; // APP before MANUAL
+  const t = r.receivedAt ? new Date(r.receivedAt).getTime() : 0;
+  return [modeRank, Number.isFinite(t) ? t : 0, r.id];
+}
+
+/**
+ * Build ALL report rows for a loaded Site — one row per recce (see the file header for the grain).
+ * An outlet with no recce still yields one "Not started" row. Rows are ordered by {@link recceSortKey}.
+ */
+export function buildOutletExecutionRows(site: RepSite): Record<string, string>[] {
+  const recces = [...site.recces].sort((a, b) => {
+    const [am, at, ai] = recceSortKey(a);
+    const [bm, bt, bi] = recceSortKey(b);
+    if (am !== bm) return am - bm;
+    if (at !== bt) return at - bt;
+    return ai < bi ? -1 : ai > bi ? 1 : 0;
+  });
+  if (recces.length === 0) return [buildRecceRow(site, null)];
+  return recces.map((r) => buildRecceRow(site, r));
+}
+
+/**
+ * Build one report row (ordered per OUTLET_REPORT_COLUMNS) for a single recce of a site (or `null`
+ * for a no-recce outlet). The installation is THIS recce's own (Recce.installation), so every
+ * per-recce column reflects the row's own recce — never a sibling's. Element 1/2 map to recce POSM
+ * slots 1/2; per-element installation facts come from the matching InstallPosm.
+ */
+export function buildRecceRow(site: RepSite, recce: RepRecce | null): Record<string, string> {
+  const install = recce?.installation ?? null;
 
   // Recce POSMs indexed by slot; InstallPosms indexed by the reccePosm they fulfil.
   const bySlot = new Map<number, RepReccePosm & { id: string }>();
@@ -276,6 +329,7 @@ export function buildOutletExecutionRow(site: RepSite): Record<string, string> {
     'Address': site.address ?? '',
     'Lat Long': latLng(site.lat, site.lng),
     'Direct Installation': install ? (install.isDirect ? 'Yes' : 'No') : '',
+    'Recce Mode': recceModeLabel(recce),
   };
 
   // Per-element (slot 1 and slot 2) columns.

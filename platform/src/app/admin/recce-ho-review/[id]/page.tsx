@@ -281,6 +281,13 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
                 Required to approve a manual recce. It must be unique — it becomes this outlet’s
                 Outlet ID in the master.
               </p>
+              {/* D6: HO can only assign a free Outlet ID here, not merge into an existing outlet.
+                  Attach-to-existing happens at capture, so say so plainly rather than leave the
+                  reviewer wondering why a colliding ID just blocks. */}
+              <p className="mt-1 text-xs text-gray-400">
+                To attach this recce to an existing outlet, that outlet’s exact Outlet ID must be
+                entered at capture — Head-Office can’t merge outlets here.
+              </p>
               <input
                 id="ho-outlet-id"
                 value={outletId}
@@ -290,25 +297,28 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
                 data-testid="recce-ho-review-outlet-id"
                 className="mt-2 w-full rounded-xl border-2 border-gray-200 px-3 py-2.5 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
               />
-              {/* Backend-authoritative collision (409) — names the other outlet. */}
-              {collisionMsg ? (
-                <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700" data-testid="recce-ho-review-outlet-id-collision">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>{collisionMsg} Enter a different Outlet ID, or reject this recce.</span>
-                </p>
-              ) : idInUseName ? (
-                /* Advisory pre-flight warning (before approve) — this id is already another outlet's. */
-                <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
-                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    Outlet ID already exists — Outlet:{' '}
-                    <span className="font-semibold">{idInUseName}</span>. Approving with this ID will
-                    be blocked; enter a different Outlet ID.
-                  </span>
-                </p>
-              ) : outletIdMissing ? (
-                <p className="mt-2 text-xs text-gray-400">Enter an Outlet ID to enable Approve.</p>
-              ) : null}
+              {/* Backend-authoritative collision (409) — names the other outlet. Wrapped in an
+                  aria-live region so the async collision/advisory result is announced. */}
+              <div role="status" aria-live="polite">
+                {collisionMsg ? (
+                  <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700" data-testid="recce-ho-review-outlet-id-collision">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{collisionMsg} Enter a different Outlet ID, or reject this recce.</span>
+                  </p>
+                ) : idInUseName ? (
+                  /* Advisory pre-flight warning (before approve) — this id is already another outlet's. */
+                  <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Outlet ID already exists — Outlet:{' '}
+                      <span className="font-semibold">{idInUseName}</span>. Approving with this ID will
+                      be blocked; enter a different Outlet ID.
+                    </span>
+                  </p>
+                ) : outletIdMissing ? (
+                  <p className="mt-2 text-xs text-gray-400">Enter an Outlet ID to enable Approve.</p>
+                ) : null}
+              </div>
             </div>
           )}
 

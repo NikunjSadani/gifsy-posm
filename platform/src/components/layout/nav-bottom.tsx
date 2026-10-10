@@ -40,7 +40,12 @@ export function NavBottom({ items }: NavBottomProps) {
               <Icon
                 className={cn('h-5 w-5', isActive ? 'stroke-[2.5]' : 'stroke-[1.5]')}
               />
-              <span className={cn('text-[10px]', isActive ? 'font-semibold' : 'font-normal')}>
+              <span
+                className={cn(
+                  'w-full truncate text-center text-[10px] whitespace-nowrap',
+                  isActive ? 'font-semibold' : 'font-normal',
+                )}
+              >
                 {item.label}
               </span>
             </Link>

@@ -126,10 +126,10 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
     const { prisma, fns } = makePrisma();
     // Order of the Promise.all in summary(): [totalSites(site), recced, approved(ASM), hoApproved,
     // rejectedRecce, pendingRecceReview, geoTrue, geoDecided](recce ×7), then installation ×4,
-    // then manual ×2.
+    // then manual ×2, then recceManual(recce, LAST) for the app-vs-manual split.
     fns.site.count.mockResolvedValueOnce(10); // totalSites
-    // recced, approved(ASM), hoApproved, rejectedRecce, pending, geoTrue, geoDecided
-    const recceCounts = [8, 6, 4, 2, 0, 9, 10];
+    // recced, approved(ASM), hoApproved, rejectedRecce, pending, geoTrue, geoDecided, …, recceManual
+    const recceCounts = [8, 6, 4, 2, 0, 9, 10, /* recceManual (last recce.count) */ 3];
     let ri = 0;
     fns.recce.count.mockImplementation(() => Promise.resolve(recceCounts[ri++]));
     const installCounts = [5, 3, 1, 1]; // installed, audited, rejectedInstall, pending
@@ -146,6 +146,12 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
     // approved = ASM-approved (6); hoApproved = installable (4), a strict subset.
     expect(res.waterfall).toEqual({ totalSites: 10, recced: 8, approved: 6, hoApproved: 4, installed: 5, audited: 3 });
     expect(res.waterfall.hoApproved).toBeLessThanOrEqual(res.waterfall.approved);
+    // App-vs-manual recce split: manual = 3 (last recce.count), app = recced − manual = 5. The
+    // funnel total (recced=8) still COUNTS the manual recces — the split only breaks them out.
+    expect(res.byRecceMode).toEqual({ app: 5, manual: 3 });
+    expect(res.byRecceMode.app + res.byRecceMode.manual).toBe(res.waterfall.recced);
+    // The manual-split count (LAST recce.count) pins recceMode MANUAL within the same scope.
+    expect(fns.recce.count.mock.calls[7][0].where).toEqual({ clientId: 'c1', recceMode: 'MANUAL' });
     // The hoApproved count (3rd recce.count) pins status APPROVED && hoReviewStatus APPROVED.
     expect(fns.recce.count.mock.calls[2][0].where).toEqual({
       clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED',

@@ -124,12 +124,18 @@ export default function ManualReccePage() {
   }, [outletId]);
 
   // When attached, mirror the master's fields into the (read-only) inputs so the submitted body
-  // and the on-screen values agree.
+  // and the on-screen values agree. When the attach is cleared (the exec edits/empties the Outlet
+  // ID, so `attached` returns to null), clear those three fields again — otherwise a NEW outlet
+  // would silently carry the previously-attached outlet's name/address/phone.
   useEffect(() => {
     if (attached) {
       setOutletName(attached.name ?? '');
       setOutletAddress(attached.address ?? '');
       setOutletPhone(attached.phone ?? '');
+    } else {
+      setOutletName('');
+      setOutletAddress('');
+      setOutletPhone('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attached?.id]);
@@ -227,8 +233,7 @@ export default function ManualReccePage() {
 
       <h1 className="text-lg font-bold text-gray-900">Manual recce</h1>
       <p className="mt-1 text-sm text-gray-500">
-        For an outlet that isn’t in your list. Enter the outlet, capture the Element(s), and it goes
-        to Head Office for approval.
+        For an outlet not in your list — capture it and send to Head Office for approval.
       </p>
 
       {typesError && (
@@ -272,7 +277,7 @@ export default function ManualReccePage() {
                 autoComplete="off"
                 className={`${FIELD_CLASS} mb-1.5`}
               />
-              <div className="mb-3 min-h-[1rem] text-xs">
+              <div className="mb-3 min-h-[1rem] text-xs" role="status" aria-live="polite">
                 {lookupLoading && (
                   <span className="inline-flex items-center gap-1.5 text-gray-400">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -354,33 +359,42 @@ export default function ManualReccePage() {
             />
           )}
 
-          {/* ── Element cards (accordion sections) ── */}
-          {Array.from({ length: count }).map((_, i) => (
-            <PosmCaptureCard
-              key={i}
-              slot={i + 1}
-              posmTypes={posmTypes}
-              onChange={(s) => setStateAt(i, s)}
-              onRemove={i === 1 ? removeSecond : undefined}
-              collapsed={expanded !== i}
-              onExpand={() => setExpanded(i as Expanded)}
-            />
-          ))}
+          {/* ── Element cards (accordion sections) ──
+              D3 (one screen, no scroll): while the outlet form is EXPANDED, the element section
+              (collapsed card summaries + "Add second Element") is hidden with `display:none` so the
+              tallest outlet-entry state fits a 360×640 phone without page scroll. We hide rather
+              than unmount so each PosmCaptureCard keeps its captured photo/markup state. It reappears
+              the moment the exec taps "Next: capture Element" (expanded ≠ 'outlet'). */}
+          <div className={expanded === 'outlet' ? 'hidden' : 'space-y-4'}>
+            {Array.from({ length: count }).map((_, i) => (
+              <PosmCaptureCard
+                key={i}
+                slot={i + 1}
+                posmTypes={posmTypes}
+                onChange={(s) => setStateAt(i, s)}
+                onRemove={i === 1 ? removeSecond : undefined}
+                collapsed={expanded !== i}
+                onExpand={() => setExpanded(i as Expanded)}
+              />
+            ))}
 
-          {count < 2 && (
-            <button
-              type="button"
-              onClick={addSecond}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-gray-300 py-3.5 text-sm font-semibold text-gray-500 active:scale-[0.99] transition-transform"
-            >
-              <Plus className="h-4 w-4" />
-              Add second Element
-            </button>
-          )}
+            {count < 2 && (
+              <button
+                type="button"
+                onClick={addSecond}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-gray-300 py-3.5 text-sm font-semibold text-gray-500 active:scale-[0.99] transition-transform"
+              >
+                <Plus className="h-4 w-4" />
+                Add second Element
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {!typesError && !typesLoading && (
+      {/* Sticky submit bar — suppressed during outlet entry (D3): the outlet form's own
+          "Next: capture Element" is the only action then, so the bar doesn't add height/overlap. */}
+      {!typesError && !typesLoading && expanded !== 'outlet' && (
         <div className="sticky bottom-0 -mx-4 mt-6 border-t border-gray-100 bg-gray-50/95 px-4 py-3 backdrop-blur">
           <button
             onClick={submit}

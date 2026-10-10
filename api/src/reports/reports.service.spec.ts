@@ -244,15 +244,26 @@ describe('ReportsService.computeCounts', () => {
     });
   });
 
-  it('counts pendingHoReview as APPROVED recces awaiting HO, and renders the digest line', async () => {
+  it('counts pendingHoReview across BOTH the app and manual HO queue (widened per Manual-Recce R4), and renders the digest line', async () => {
     const { service, fns } = makeService();
     await service.computeCounts('c1', fullConfig() as never, new Date());
-    // The new count pins the tenant + status APPROVED + hoReviewStatus PENDING.
+    // The HO-queue count pins the tenant + hoReviewStatus PENDING, then ORs the two entry paths:
+    //   APP    — status APPROVED (ASM-approved, awaiting HO);
+    //   MANUAL — recceMode MANUAL + status SUBMITTED (skips ASM, straight to HO).
     const hoCall = fns.recce.count.mock.calls.find(
-      (c: any[]) => c[0].where.status === 'APPROVED' && c[0].where.hoReviewStatus === 'PENDING',
+      (c: any[]) => c[0].where.hoReviewStatus === 'PENDING' && Array.isArray(c[0].where.OR),
     );
     expect(hoCall).toBeDefined();
     expect(hoCall[0].where.clientId).toBe('c1');
+    // The OR must include the APP clause and the MANUAL clause (manual recces now counted here too).
+    expect(hoCall[0].where.OR).toEqual(
+      expect.arrayContaining([
+        { status: 'APPROVED' },
+        { recceMode: 'MANUAL', status: 'SUBMITTED' },
+      ]),
+    );
+    // And it must NOT pin a top-level status (that would drop the manual SUBMITTED rows).
+    expect(hoCall[0].where.status).toBeUndefined();
 
     // And it surfaces as a dedicated line in the rendered digest (mirrors the pending-recce line).
     const html = service.buildDigestHtml('Acme', {

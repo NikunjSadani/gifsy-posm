@@ -67,7 +67,7 @@ export default function RecceHoReviewQueuePage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">HO recce review</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            ASM-approved recces awaiting Head-Office sign-off before installation.
+            Recces awaiting Head-Office sign-off before installation.
             {!loading && !error && (
               <> {' · '}{total} pending{totalPages > 1 && ` · page ${page} of ${totalPages}`}</>
             )}
@@ -153,7 +153,7 @@ export default function RecceHoReviewQueuePage() {
           </div>
           <p className="text-sm font-medium text-gray-700">Nothing awaiting HO review</p>
           <p className="text-xs text-gray-500 mt-1">
-            {activeFilterCount ? 'No recces match your filters.' : 'Every ASM-approved recce has been reviewed — you’re all caught up.'}
+            {activeFilterCount ? 'No recces match your filters.' : 'Every recce awaiting Head-Office review has been cleared — you’re all caught up.'}
           </p>
         </div>
       ) : (

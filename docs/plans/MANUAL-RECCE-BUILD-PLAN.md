@@ -1,6 +1,9 @@
 # Manual Recce — Build Plan (Wave A + Wave B, phased)
 
-**Status:** PLANNED — not started. Owner-approved to build, phased, held on `develop`.
+**Status:** Wave A ✅ DONE — committed `8fb4751` on `develop`, deployed to STAGING (all 3 Cloud Run
+services serving `8fb4751` @ 100% traffic; `add_manual_recce` migration applied via the traffic-gated
+migrate job; local runtime matrix 20/20). ▶ NEXT: Wave B (report rework + E2E + dual/UI audits).
+Owner-approved to build, phased, held on `develop`.
 **Owner:** Nikunj. **Orchestrator:** Claude (runs gates, integrates, owns the verified result).
 **Created:** 2026-10-09.
 **Related:** `OUTLET-EXECUTION-REPORT-PLAN.md` (the report this extends), the recce→ASM→HO→install→audit pipeline (LIVE), `recce-ho-review` module (LIVE).

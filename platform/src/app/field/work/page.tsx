@@ -80,14 +80,28 @@ export default function MyWorkPage() {
   const load = useCallback(async (f: OutletFilter) => {
     setLoading(true);
     setError(null);
-    const res = await fetchMyRecces({ rsCode: f.rsCode, beatName: f.beatName });
-    if (res.success) {
-      setRecces(res.data.recces ?? []);
+    // Two fetches: the APP recces for the chosen RS/Beat (the beat chip governs these), PLUS the
+    // exec's own MANUAL recces regardless of beat — a manual outlet has a null RS/Beat, so without
+    // this a manual submission (including a rejected one awaiting re-capture) would never show.
+    const [appRes, manualRes] = await Promise.all([
+      fetchMyRecces({ rsCode: f.rsCode, beatName: f.beatName }),
+      fetchMyRecces({ recceMode: 'MANUAL' }),
+    ]);
+    if (appRes.success) {
+      // Merge + dedupe by id (a manual recce could in principle surface in both lists), then sort
+      // newest-first so the two sources interleave by capture/receive time, not by source.
+      const byId = new Map<string, RecceListRow>();
+      for (const r of appRes.data.recces ?? []) byId.set(r.id, r);
+      if (manualRes.success) {
+        for (const r of manualRes.data.recces ?? []) byId.set(r.id, r);
+      }
+      const merged = [...byId.values()].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+      setRecces(merged);
     } else {
       setError(
-        res.status === 403
+        appRes.status === 403
           ? 'Installation is not available for your account. Please ask your admin to grant access.'
-          : res.error || 'Could not load your work. Please try again.',
+          : appRes.error || 'Could not load your work. Please try again.',
       );
       setRecces(null);
     }
@@ -272,11 +286,14 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: RecceGr
         </p>
       )}
 
-      {/* ASM-approved, awaiting Head-Office sign-off — read-only, no install action yet. */}
+      {/* Awaiting Head-Office sign-off — read-only, no install action yet. A manual recce lands
+          here straight from submit (it never passes through the ASM), so don't claim ASM approval. */}
       {key === 'AWAITING_HO' && (
         <p className="mt-3 flex items-center gap-1.5 text-xs text-sky-700">
           <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-          Approved by ASM — awaiting Head-Office approval before installation.
+          {recce.recceMode === 'MANUAL'
+            ? 'Manual recce — awaiting Head-Office approval before installation.'
+            : 'Approved by ASM — awaiting Head-Office approval before installation.'}
         </p>
       )}
 

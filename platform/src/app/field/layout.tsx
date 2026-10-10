@@ -17,6 +17,9 @@ import { FieldHeader } from '@/components/field/field-header';
 import { InstallPrompt } from '@/components/pwa/install-prompt';
 import { FIELD_ROLES } from '@/lib/field/config';
 
+// The 6-item bar no longer wraps/crowds at ~360px because nav-bottom truncates (ellipsis) with
+// whitespace-nowrap; labels keep their full, established wording (CSS truncation leaves the
+// accessible name intact, so a long label clips visually but stays "Recce to do" in the DOM).
 const NAV: NavItem[] = [
   { href: '/field/sites', label: 'Recce to do', icon: MapPin },
   { href: '/field/manual', label: 'Manual', icon: ClipboardPlus },

@@ -1,5 +1,6 @@
 import {
-  buildOutletExecutionRow,
+  buildOutletExecutionRows,
+  buildRecceRow,
   OUTLET_REPORT_COLUMNS,
   latLng,
   photoLatLng,
@@ -10,8 +11,16 @@ import {
   hoRejectionReasonLabel,
   auditStatusLabel,
   asmApprovalLabel,
+  recceModeLabel,
   type RepSite,
+  type RepRecce,
+  type RepInstallation,
 } from './outlet-execution.helper';
+
+// Durable rule: NEVER hardcode a fixed date in a test. All timestamps are derived from `now` so the
+// suite is stable whatever day it runs (fmtDateTime just formats; no assertion pins a calendar date).
+const now = new Date();
+const daysAgo = (d: number): Date => new Date(now.getTime() - d * 86_400_000);
 
 describe('outlet-execution helpers', () => {
   it('latLng / photoLatLng / distanceLabel format defensively', () => {
@@ -29,12 +38,21 @@ describe('outlet-execution helpers', () => {
     expect(asmApprovalLabel(null)).toBe('');
     expect(asmApprovalLabel({ status: 'SUBMITTED' } as any)).toBe('Pending');
     expect(asmApprovalLabel({ status: 'APPROVED' } as any)).toBe('Approved');
+    // A MANUAL recce never had an ASM stage → "N/A" regardless of status (audit F3).
+    expect(asmApprovalLabel({ status: 'APPROVED', recceMode: 'MANUAL' } as any)).toBe('N/A');
+    expect(asmApprovalLabel({ status: 'SUBMITTED', recceMode: 'MANUAL' } as any)).toBe('N/A');
     expect(hoApprovalLabel(null)).toBe('');
     expect(hoApprovalLabel({ hoReviewStatus: 'NONE' } as any)).toBe('N/A');
     expect(hoApprovalLabel({ hoReviewStatus: 'PENDING' } as any)).toBe('Pending');
     expect(auditStatusLabel(null)).toBe('');
     expect(auditStatusLabel({ status: 'AUDIT_REJECTED' } as any)).toBe('Rejected');
     expect(auditStatusLabel({ status: 'SUBMITTED' } as any)).toBe('Pending audit');
+  });
+
+  it('recceModeLabel maps the recce entry path (App / Manual; empty for a no-recce row)', () => {
+    expect(recceModeLabel(null)).toBe('');
+    expect(recceModeLabel({ recceMode: 'APP' } as any)).toBe('App');
+    expect(recceModeLabel({ recceMode: 'MANUAL' } as any)).toBe('Manual');
   });
 
   it('hoRecceApprovalLabel maps the recce-side HO stage (N/A for NONE, empty for no recce)', () => {
@@ -92,52 +110,60 @@ describe('outlet-execution helpers', () => {
   });
 });
 
-describe('buildOutletExecutionRow', () => {
+// The APP recce + its installation used by the single-row (app-only outlet) tests. One APP recce
+// with an installation nested under it (Recce.installation), so each row's install facts are its own.
+const appInstall = (): RepInstallation => ({
+  status: 'AUDIT_REJECTED',
+  hoReviewStatus: 'APPROVED',
+  isDirect: false,
+  capturedAt: daysAgo(1),
+  submittedBy: { name: 'Rep Two', promoterCode: 'P200' },
+  posms: [
+    { reccePosmId: 'rp1', captureLat: 19.2402, captureLng: 73.1302, distanceFromRecce: 3.2 },
+    // rp2 has no install → element 2 shows "Not installed"
+  ],
+});
+
+const appRecce = (): RepRecce => ({
+  id: 'recA',
+  recceMode: 'APP',
+  status: 'APPROVED',
+  rejectionReasonCode: null,
+  rejectionReason: null,
+  hoReviewStatus: 'APPROVED',
+  hoRejectionReasonCode: null,
+  hoRejectionReason: null,
+  capturedAt: daysAgo(2),
+  receivedAt: daysAgo(2),
+  captureLat: 19.24, captureLng: 73.13,
+  submittedBy: { name: 'Rep One', promoterCode: 'P100' },
+  posms: [
+    { id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' }, photo: { key: 'r1', geo: { lat: 19.2401, lng: 73.1301 } } },
+    { id: 'rp2', slotNo: 2, posmType: { name: 'Danglers' }, photo: { key: 'r2' } },
+  ],
+  installation: appInstall(),
+});
+
+describe('buildOutletExecutionRows — app-only outlet (one recce → one row)', () => {
   const fullSite = (): RepSite => ({
     code: 'A8', name: 'Kalyan Mega Mart', lat: 19.24, lng: 73.13,
     region: 'West', state: 'MH', cluster: 'Thane', town: 'Kalyan', rsCode: 'RS9',
     beatName: 'Beat-3', channel: 'GT', address: '12 Main Rd',
     vendor: { name: 'FleetCo' },
-    recces: [
-      {
-        status: 'APPROVED',
-        rejectionReasonCode: null,
-        rejectionReason: null,
-        hoReviewStatus: 'APPROVED',
-        hoRejectionReasonCode: null,
-        hoRejectionReason: null,
-        capturedAt: new Date('2026-09-28T06:00:00Z'),
-        receivedAt: new Date('2026-09-28T06:01:00Z'),
-        captureLat: 19.24, captureLng: 73.13,
-        submittedBy: { name: 'Rep One', promoterCode: 'P100' },
-        posms: [
-          { id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' }, photo: { key: 'r1', geo: { lat: 19.2401, lng: 73.1301 } } },
-          { id: 'rp2', slotNo: 2, posmType: { name: 'Danglers' }, photo: { key: 'r2' } },
-        ],
-      },
-    ],
-    installs: [
-      {
-        status: 'AUDIT_REJECTED',
-        hoReviewStatus: 'APPROVED',
-        isDirect: false,
-        capturedAt: new Date('2026-09-29T09:30:00Z'),
-        submittedBy: { name: 'Rep Two', promoterCode: 'P200' },
-        posms: [
-          { reccePosmId: 'rp1', captureLat: 19.2402, captureLng: 73.1302, distanceFromRecce: 3.2 },
-          // rp2 has no install → element 2 shows "Not installed"
-        ],
-      },
-    ],
+    recces: [appRecce()],
+  });
+
+  it('an app-only outlet yields exactly one row', () => {
+    expect(buildOutletExecutionRows(fullSite())).toHaveLength(1);
   });
 
   it('produces every spec column, in order', () => {
-    const row = buildOutletExecutionRow(fullSite());
+    const row = buildOutletExecutionRows(fullSite())[0];
     expect(Object.keys(row)).toEqual([...OUTLET_REPORT_COLUMNS]);
   });
 
-  it('maps the leading outlet-master + promoter + direct columns', () => {
-    const row = buildOutletExecutionRow(fullSite());
+  it('maps the leading outlet-master + promoter + direct + recce-mode columns', () => {
+    const row = buildOutletExecutionRows(fullSite())[0];
     expect(row['Vendor Name']).toBe('FleetCo');
     expect(row['Recce Promoter ID']).toBe('P100');
     expect(row['Install Promoter ID']).toBe('P200');
@@ -150,10 +176,11 @@ describe('buildOutletExecutionRow', () => {
     expect(row['Outlet Code']).toBe('A8');
     expect(row['Lat Long']).toBe('19.24000, 73.13000');
     expect(row['Direct Installation']).toBe('No');
+    expect(row['Recce Mode']).toBe('App');
   });
 
   it('maps per-element recce/install facts (element 1 installed, element 2 not)', () => {
-    const row = buildOutletExecutionRow(fullSite());
+    const row = buildOutletExecutionRows(fullSite())[0];
     expect(row['Element 1']).toBe('Standard Board');
     expect(row['Element 1 Recce Status']).toBe('Approved');
     expect(row['Element 1 Recce Location']).toBe('19.24010, 73.13010'); // per-photo geo
@@ -169,7 +196,7 @@ describe('buildOutletExecutionRow', () => {
   });
 
   it('maps the trailing workflow-status columns (HO override kept independent of audit)', () => {
-    const row = buildOutletExecutionRow(fullSite());
+    const row = buildOutletExecutionRows(fullSite())[0];
     expect(row['Outlet Recce Status']).toBe('Approved');
     expect(row['ASM Approval Status']).toBe('Approved');
     // Auditor rejected, but HO overrode → the two columns tell the truth independently.
@@ -190,9 +217,9 @@ describe('buildOutletExecutionRow', () => {
       hoReviewStatus: 'NONE',
       rejectionReasonCode: 'POSM_NOT_VISIBLE',
       rejectionReason: 'board hidden behind shutter',
+      installation: null,
     };
-    site.installs = [];
-    const row = buildOutletExecutionRow(site);
+    const row = buildOutletExecutionRows(site)[0];
     expect(row['ASM Approval Status']).toBe('Rejected');
     expect(row['HO Recce Approval']).toBe('N/A');
     expect(row['ASM Rejection Reason']).toBe('Element not visible — board hidden behind shutter');
@@ -209,23 +236,26 @@ describe('buildOutletExecutionRow', () => {
       rejectionReason: null,
       hoRejectionReasonCode: 'WRONG_POSM',
       hoRejectionReason: null,
+      installation: null,
     };
-    site.installs = [];
-    const row = buildOutletExecutionRow(site);
+    const row = buildOutletExecutionRows(site)[0];
     expect(row['HO Recce Approval']).toBe('Rejected');
     expect(row['ASM Rejection Reason']).toBe('');
     expect(row['HO Rejection Reason']).toBe('Wrong Element');
   });
 
-  it('a bare outlet with no recce → "Not started" and empty downstream stages', () => {
+  it('a bare outlet with no recce → one "Not started" row with empty downstream stages', () => {
     const bare: RepSite = {
       code: 'B1', name: 'New Outlet', lat: null, lng: null,
       region: null, state: null, cluster: null, town: 'Pune', rsCode: null,
       beatName: null, channel: null, address: null,
-      vendor: null, recces: [], installs: [],
+      vendor: null, recces: [],
     };
-    const row = buildOutletExecutionRow(bare);
+    const rows = buildOutletExecutionRows(bare);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
     expect(row['Outlet Recce Status']).toBe('Not started');
+    expect(row['Recce Mode']).toBe(''); // no recce → blank mode
     expect(row['ASM Approval Status']).toBe('');
     expect(row['HO Approval Status']).toBe('');
     expect(row['Installation Status']).toBe('');
@@ -234,5 +264,128 @@ describe('buildOutletExecutionRow', () => {
     expect(row['Element 1 Recce Status']).toBe('');
     expect(row['Lat Long']).toBe('');
     expect(row['Direct Installation']).toBe('');
+  });
+});
+
+describe('buildOutletExecutionRows — mixed outlet (1 app + 2 manual recces → 3 rows)', () => {
+  // A manual recce: field-typed, skips ASM, approved by HO (HO sets BOTH status + hoReviewStatus
+  // APPROVED), optionally installed. Different element from the app recce.
+  const manualRecce = (
+    id: string,
+    receivedAt: Date,
+    opts: { posmName: string; promoter: string; installed: boolean },
+  ): RepRecce => ({
+    id,
+    recceMode: 'MANUAL',
+    status: 'APPROVED',
+    rejectionReasonCode: null,
+    rejectionReason: null,
+    hoReviewStatus: 'APPROVED',
+    hoRejectionReasonCode: null,
+    hoRejectionReason: null,
+    capturedAt: receivedAt,
+    receivedAt,
+    captureLat: 19.25, captureLng: 73.14,
+    submittedBy: { name: 'Field Exec', promoterCode: opts.promoter },
+    posms: [
+      { id: `${id}-p1`, slotNo: 1, posmType: { name: opts.posmName }, photo: { key: `${id}k`, geo: { lat: 19.2501, lng: 73.1401 } } },
+    ],
+    installation: opts.installed
+      ? {
+          status: 'AUDIT_APPROVED',
+          hoReviewStatus: 'NONE',
+          isDirect: false,
+          capturedAt: new Date(receivedAt.getTime() + 3_600_000),
+          submittedBy: { name: 'Installer', promoterCode: `${opts.promoter}-I` },
+          posms: [{ reccePosmId: `${id}-p1`, captureLat: 19.2502, captureLng: 73.1402, distanceFromRecce: 5 }],
+        }
+      : null,
+  });
+
+  // Deliberately out of order in the array (manual-newer BEFORE manual-older, app last) to prove the
+  // builder sorts: APP first, then MANUAL oldest-first.
+  const mixedSite = (): RepSite => ({
+    code: 'M9', name: 'Multi Outlet', lat: 19.25, lng: 73.14,
+    region: 'West', state: 'MH', cluster: 'Thane', town: 'Kalyan', rsCode: 'RS9',
+    beatName: 'Beat-3', channel: 'GT', address: '7 Market Rd',
+    vendor: { name: 'FleetCo' },
+    recces: [
+      manualRecce('recMnew', daysAgo(1), { posmName: 'Wobbler', promoter: 'PM2', installed: false }),
+      appRecce(),
+      manualRecce('recMold', daysAgo(5), { posmName: 'Shelf Strip', promoter: 'PM1', installed: true }),
+    ],
+  });
+
+  it('yields exactly 3 rows (1 per recce)', () => {
+    expect(buildOutletExecutionRows(mixedSite())).toHaveLength(3);
+  });
+
+  it('orders rows APP first, then MANUAL oldest-first (by receivedAt)', () => {
+    const rows = buildOutletExecutionRows(mixedSite());
+    expect(rows.map((r) => r['Recce Mode'])).toEqual(['App', 'Manual', 'Manual']);
+    // The app row carries the app recce's element; the two manual rows carry THEIR own elements in
+    // oldest-first order (Shelf Strip @ 5d, then Wobbler @ 1d).
+    expect(rows.map((r) => r['Element 1'])).toEqual(['Standard Board', 'Shelf Strip', 'Wobbler']);
+  });
+
+  it('repeats the outlet-identity columns on every row', () => {
+    const rows = buildOutletExecutionRows(mixedSite());
+    for (const r of rows) {
+      expect(r['Outlet Code']).toBe('M9');
+      expect(r['Outlet Name']).toBe('Multi Outlet');
+      expect(r['Vendor Name']).toBe('FleetCo');
+      expect(r['Beat Name']).toBe('Beat-3');
+      expect(r['Lat Long']).toBe('19.25000, 73.14000');
+    }
+  });
+
+  it('each row reflects ITS OWN recce + install, not a sibling recce', () => {
+    const [appRow, manualOld, manualNew] = buildOutletExecutionRows(mixedSite());
+
+    // App row: its own promoter + its own (audit-rejected, HO-approved) install.
+    expect(appRow['Recce Promoter ID']).toBe('P100');
+    expect(appRow['Install Promoter ID']).toBe('P200');
+    expect(appRow['Audit Status']).toBe('Rejected');
+    expect(appRow['HO Approval Status']).toBe('Approved');
+
+    // Oldest manual row: installed + audit-approved, its own promoter codes.
+    expect(manualOld['Recce Mode']).toBe('Manual');
+    expect(manualOld['Recce Promoter ID']).toBe('PM1');
+    expect(manualOld['Install Promoter ID']).toBe('PM1-I');
+    expect(manualOld['Element 1']).toBe('Shelf Strip');
+    expect(manualOld['Element 1 Installation Status']).toBe('Installed');
+    expect(manualOld['Installation Status']).toBe('Submitted');
+    expect(manualOld['Audit Status']).toBe('Approved');
+    // Manual recces skip ASM → the ASM approval column reads Approved (status APPROVED set by HO).
+    expect(manualOld['Outlet Recce Status']).toBe('Approved');
+
+    // Newest manual row: NOT installed → no install facts leak from the installed sibling.
+    expect(manualNew['Recce Mode']).toBe('Manual');
+    expect(manualNew['Recce Promoter ID']).toBe('PM2');
+    expect(manualNew['Install Promoter ID']).toBe('');
+    expect(manualNew['Element 1']).toBe('Wobbler');
+    expect(manualNew['Element 1 Installation Status']).toBe('Not installed');
+    expect(manualNew['Installation Status']).toBe('Not installed');
+    expect(manualNew['Audit Status']).toBe('');
+  });
+
+  it('every row carries the full ordered column set', () => {
+    for (const r of buildOutletExecutionRows(mixedSite())) {
+      expect(Object.keys(r)).toEqual([...OUTLET_REPORT_COLUMNS]);
+    }
+  });
+});
+
+describe('buildRecceRow — single-row builder (used by buildOutletExecutionRows)', () => {
+  it('builds one row for a given recce (null recce → blank Recce Mode + "Not started")', () => {
+    const site: RepSite = {
+      code: 'Z1', name: 'Solo', lat: null, lng: null,
+      region: null, state: null, cluster: null, town: null, rsCode: null,
+      beatName: null, channel: null, address: null, vendor: null, recces: [],
+    };
+    const row = buildRecceRow(site, null);
+    expect(row['Recce Mode']).toBe('');
+    expect(row['Outlet Recce Status']).toBe('Not started');
+    expect(Object.keys(row)).toEqual([...OUTLET_REPORT_COLUMNS]);
   });
 });
