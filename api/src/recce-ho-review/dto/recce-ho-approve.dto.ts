@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /**
  * Body for POST /v1/recce-ho-review/recces/:id/approve.
@@ -17,4 +17,13 @@ export class RecceHoApproveDto {
   @IsString()
   @MaxLength(100)
   outletId?: string;
+
+  /**
+   * When `outletId` collides with an EXISTING outlet, `true` ATTACHES this manual recce to that
+   * outlet (re-parents it, no duplicate, no rename) instead of returning a 409. Only within the same
+   * fleet (vendor). Default/omitted = the safe "pick a different ID" behaviour.
+   */
+  @IsOptional()
+  @IsBoolean()
+  attachToExisting?: boolean;
 }

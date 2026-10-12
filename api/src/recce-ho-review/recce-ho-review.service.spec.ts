@@ -33,6 +33,8 @@ function makePrisma() {
     imageHash: { findMany: jest.fn().mockResolvedValue([]) },
     // Site used by the manual-recce Outlet-ID exists-check + code write at approve.
     site: { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn().mockResolvedValue({}) },
+    // Installation count backs the attach orphan-cleanup guard (0 = source outlet now empty).
+    installation: { count: jest.fn().mockResolvedValue(0) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
   fns.$transaction = jest.fn((arg: unknown) =>
@@ -260,7 +262,7 @@ describe('RecceHoReviewService.approve/reject — transitions', () => {
 describe('RecceHoReviewService.approve — MANUAL recces (Outlet-ID gate)', () => {
   const manualRecce = (over: Record<string, unknown> = {}) => ({
     id: 'rM', clientId: 'c1', status: 'SUBMITTED', hoReviewStatus: 'PENDING', recceMode: 'MANUAL',
-    site: { id: 's1', code: 'MAN-abc', name: 'Prov Shop' },
+    site: { id: 's1', code: 'MAN-abc', name: 'Prov Shop', vendorId: 'V1' },
     ...over,
   });
 
@@ -335,6 +337,71 @@ describe('RecceHoReviewService.approve — MANUAL recces (Outlet-ID gate)', () =
       svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'MAN-xyz' }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(fns.site.update).not.toHaveBeenCalled();
+    expect(fns.recce.update).not.toHaveBeenCalled();
+  });
+
+  it('ATTACH on collision (attachToExisting) — re-parents onto the existing outlet, approves, deactivates + audits the orphan provisional', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce()); // provisional MAN-abc, vendor V1
+    // Target: active, same fleet, NO lat/lng → geo re-fence is skipped (returns {}).
+    fns.site.findFirst.mockResolvedValue({ id: 's2', code: 'OUT-9', name: 'Shah Stores', vendorId: 'V1', status: 'ACTIVE' });
+    fns.recce.update.mockResolvedValue({ id: 'rM', status: 'APPROVED', hoReviewStatus: 'APPROVED', siteId: 's2' });
+    fns.recce.count.mockResolvedValue(0); // source now empty
+    fns.installation.count.mockResolvedValue(0);
+    const svc = new RecceHoReviewService(prisma);
+    await svc.approve(user({ role: 'CLIENT_ADMIN', sub: 'ho-1', clientId: 'c1' }), 'rM', { outletId: 'OUT-9', attachToExisting: true });
+    const upd = fns.recce.update.mock.calls[0][0];
+    expect(upd.where).toEqual({ id: 'rM', hoReviewStatus: 'PENDING' });
+    expect(upd.data).toMatchObject({ siteId: 's2', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
+    // the orphaned provisional source outlet is deactivated AND the Site change is audited (F4)
+    expect(fns.site.update.mock.calls[0][0]).toMatchObject({ where: { id: 's1' }, data: { status: 'INACTIVE' } });
+    expect(fns.auditLog.create.mock.calls.some((c: any[]) => c[0].data.entityType === 'SITE' && c[0].data.entityId === 's1')).toBe(true);
+  });
+
+  it('ATTACH blocked across fleets — target serviced by a different vendor → 409, no write', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce()); // vendor V1
+    fns.site.findFirst.mockResolvedValue({ id: 's2', code: 'OUT-9', name: 'Other Fleet Shop', vendorId: 'V2', status: 'ACTIVE' });
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-9', attachToExisting: true }),
+    ).rejects.toThrow(/different fleet/i);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+    expect(fns.site.update).not.toHaveBeenCalled();
+  });
+
+  it('ATTACH blocked onto a DEACTIVATED target outlet → 409, no write (audit F2)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce()); // provisional, vendor V1
+    fns.site.findFirst.mockResolvedValue({ id: 's2', code: 'OUT-9', name: 'Dead Outlet', vendorId: 'V1', status: 'INACTIVE' });
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-9', attachToExisting: true }),
+    ).rejects.toThrow(/deactivated/i);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+    expect(fns.site.update).not.toHaveBeenCalled();
+  });
+
+  it('ATTACH refused from a REAL (non-provisional) source — can\'t MOVE an established-outlet recce (audit F3)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce({ site: { id: 's1', code: 'OUT1', name: 'Real Source', vendorId: 'V1' } }));
+    fns.site.findFirst.mockResolvedValue({ id: 's2', code: 'OUT-9', name: 'Target', vendorId: 'V1', status: 'ACTIVE' });
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-9', attachToExisting: true }),
+    ).rejects.toThrow(/can't be moved to another outlet/i);
+    expect(fns.recce.update).not.toHaveBeenCalled();
+    expect(fns.site.update).not.toHaveBeenCalled();
+  });
+
+  it('without attachToExisting a colliding Outlet ID still 409s (default stays "pick another ID")', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce());
+    fns.site.findFirst.mockResolvedValue({ id: 's2', code: 'OUT-9', name: 'Shah Stores', vendorId: 'V1' });
+    const svc = new RecceHoReviewService(prisma);
+    await expect(
+      svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-9' }),
+    ).rejects.toThrow(/already belongs to another outlet/i);
     expect(fns.recce.update).not.toHaveBeenCalled();
   });
 });

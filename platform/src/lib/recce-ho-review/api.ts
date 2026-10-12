@@ -79,13 +79,22 @@ export function fetchHoRecce(id: string): Promise<ApiResponse<HoRecceItem>> {
 export interface ApproveHoRecceBody {
   /** The Outlet ID to write onto the outlet. Required for a manual recce without a real code. */
   outletId?: string;
+  /**
+   * When the `outletId` collides with an EXISTING outlet (the plain approve returns 409), re-send
+   * with this flag to ATTACH this recce onto that existing outlet instead of blocking: the recce
+   * is re-parented onto it (no duplicate, no rename), approved, and the walk-in's provisional
+   * outlet is cleaned up. Attach is allowed only within the SAME fleet — a cross-vendor target
+   * still returns 409 ("serviced by a different fleet").
+   */
+  attachToExisting?: boolean;
 }
 
 /**
  * HO approve — the recce clears HO and installation unlocks (PENDING → APPROVED). For a manual
  * recce the body MUST carry a real `outletId` (the backend returns 400 otherwise, and 409 when the
- * Outlet ID collides with a DIFFERENT existing outlet — the message names that outlet). For an app
- * recce the body is empty (unchanged behaviour).
+ * Outlet ID collides with a DIFFERENT existing outlet — the message names that outlet). Re-call
+ * with `{ outletId, attachToExisting: true }` to attach onto that existing outlet instead. For an
+ * app recce the body is empty (unchanged behaviour).
  */
 export function approveHoRecce(
   id: string,

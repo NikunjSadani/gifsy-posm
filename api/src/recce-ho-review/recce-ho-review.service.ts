@@ -5,6 +5,8 @@ import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope } from '../common/tenant-scope';
 import { isProvisionalCode, PROVISIONAL_CODE_PREFIX } from '../common/provisional-code';
 import { readMediaValue } from '../capture/visibility-types';
+import { aggregatePhotoFence } from '../capture-integrity/photo-geo.helper';
+import { readPosmCaptureConfig, readGpsAccuracyCapMeters } from '../capture-integrity/posm-config.helper';
 import { ListRecceHoQueueDto } from './dto/list-recce-ho-queue.dto';
 import { RecceHoRejectDto } from './dto/recce-ho-reject.dto';
 import { RecceHoApproveDto } from './dto/recce-ho-approve.dto';
@@ -244,7 +246,7 @@ export class RecceHoReviewService {
     user: JwtPayload,
     recce: {
       id: string; clientId: string; status: string; hoReviewStatus: string;
-      site: { id: string; code: string; name: string };
+      site: { id: string; code: string; name: string; vendorId: string | null };
     },
     dto: RecceHoApproveDto,
   ) {
@@ -256,21 +258,6 @@ export class RecceHoReviewService {
       throw new BadRequestException('An Outlet ID is required to approve a manual recce.');
     }
 
-    // D6 exists-check — a supplied Outlet ID that belongs to a DIFFERENT outlet is a 409. When
-    // `provided` equals the attached outlet's own code the self-row is excluded (so re-confirming
-    // the same Outlet ID is allowed). Scoped to the recce's tenant.
-    if (provided) {
-      const other = await this.prisma.site.findFirst({
-        where: { clientId: recce.clientId, code: provided, id: { not: recce.site.id } },
-        select: { name: true },
-      });
-      if (other) {
-        throw new ConflictException(
-          `Outlet ID "${provided}" already belongs to another outlet: ${other.name}.`,
-        );
-      }
-    }
-
     // A supplied Outlet ID may not use the reserved provisional prefix — otherwise it would be
     // stored as a "real" code yet read back as provisional (adversarial audit F2).
     if (provided && isProvisionalCode(provided)) {
@@ -278,10 +265,56 @@ export class RecceHoReviewService {
         `Outlet ID cannot start with the reserved prefix "${PROVISIONAL_CODE_PREFIX}".`,
       );
     }
-    // Only FINALIZE a provisional outlet's code. An ESTABLISHED outlet's code (one this manual
-    // recce merely ATTACHED to) is a shared master identity — approving a recce must NOT rename it
-    // and orphan its history (adversarial audit F1). Renaming a real outlet belongs in the Sites
-    // master, not as a side effect of recce approval.
+
+    // Collision (D6): the supplied Outlet ID already belongs to a DIFFERENT outlet. Either ATTACH
+    // this recce to that outlet (dto.attachToExisting — re-parent, no duplicate, no rename) or 409 so
+    // HO picks another ID. Self-row excluded so re-confirming the recce's own code is allowed.
+    // Scoped to the recce's tenant.
+    if (provided) {
+      const other = await this.prisma.site.findFirst({
+        where: { clientId: recce.clientId, code: provided, id: { not: recce.site.id } },
+        select: { id: true, code: true, name: true, vendorId: true, status: true, lat: true, lng: true },
+      });
+      if (other) {
+        if (!dto.attachToExisting) {
+          throw new ConflictException(
+            `Outlet ID "${provided}" already belongs to another outlet: ${other.name}.`,
+          );
+        }
+        // Attach only re-parents a provisional WALK-IN recce. A recce already recorded against a real
+        // outlet must NOT be moved to a different outlet here (adversarial audit F3) — that is a Sites-
+        // master edit, not a recce approval.
+        if (currentCodeReal) {
+          throw new ConflictException(
+            `This recce is already recorded against outlet "${recce.site.code}" and can't be moved to another outlet here. Edit it in the Sites master.`,
+          );
+        }
+        // The target must be ACTIVE — never attach onto a deactivated outlet, which would strand the
+        // recce (install requires an active site) and resurrect a dead outlet in reports (audit F2).
+        if (other.status !== 'ACTIVE') {
+          throw new ConflictException(
+            `"${other.name}" is deactivated — reactivate it in the Sites master or use a different Outlet ID.`,
+          );
+        }
+        // Attach only within the SAME fleet — a field exec's capture must not be moved onto another
+        // vendor's outlet (preserves the vendor boundary the field-side attach also enforces).
+        if (other.vendorId !== recce.site.vendorId) {
+          throw new ConflictException(
+            `"${other.name}" is serviced by a different fleet — this recce can't be attached to it.`,
+          );
+        }
+        // Re-validate the capture geo against the target's authoritative coordinates — a manual recce is
+        // only fenced once we learn the real outlet (adversarial audit F1). A photo demonstrably OUTSIDE
+        // the fence blocks the attach; an unverifiable fix is flagged (stored), matching the field path.
+        const geoUpdate = await this.refenceAgainstTarget(recce.clientId, recce.id, other);
+        return this.attachAndApprove(user, recce, other, geoUpdate);
+      }
+    }
+
+    // No collision → finalize this recce's OWN outlet. An ESTABLISHED outlet's code is a shared master
+    // identity — approving a recce must NOT rename it and orphan its history (adversarial audit F1);
+    // such edits belong in the Sites master. (To MOVE the recce onto another existing outlet, HO uses
+    // attach above.)
     if (provided && currentCodeReal && provided !== recce.site.code) {
       throw new ConflictException(
         `This outlet already has Outlet ID "${recce.site.code}"; approving a manual recce can't rename an existing outlet. Edit it from the Sites master instead.`,
@@ -328,6 +361,120 @@ export class RecceHoReviewService {
     });
   }
 
+  /**
+   * Attach a manual recce to an EXISTING outlet (HO confirmed the walk-in is an outlet already in the
+   * master): re-point the recce onto `other`, approve it (status + hoReviewStatus APPROVED), and — if
+   * the recce's OWN outlet was a provisional `MAN-` walk-in now left empty — deactivate that orphan.
+   * No duplicate outlet, no rename. The caller has already enforced same-tenant + same-fleet.
+   */
+  private attachAndApprove(
+    user: JwtPayload,
+    recce: {
+      id: string; clientId: string; status: string; hoReviewStatus: string;
+      site: { id: string; code: string; name: string; vendorId: string | null };
+    },
+    other: { id: string; code: string; name: string; vendorId: string | null },
+    geoUpdate: {
+      captureLat?: number | null; captureLng?: number | null; captureAccuracy?: number | null;
+      distanceMeters?: number | null; geoFenceOk?: boolean | null;
+    } = {},
+  ) {
+    const id = recce.id;
+    const sourceSiteId = recce.site.id;
+    const sourceProvisional = isProvisionalCode(recce.site.code);
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.recce
+        .update({
+          // Same load→write race guard as approve: only the row STILL PENDING transitions.
+          where: { id, hoReviewStatus: 'PENDING' },
+          data: {
+            siteId: other.id, // re-parent onto the existing outlet
+            status: 'APPROVED',
+            hoReviewStatus: 'APPROVED',
+            hoReviewedById: user.sub,
+            hoReviewedAt: new Date(),
+            hoRejectionReasonCode: null,
+            hoRejectionReason: null,
+            // Geo re-validated against the target outlet (audit F1) — null-safe: an empty geoUpdate
+            // (target has no coordinates) leaves the recce's existing geo fields untouched.
+            ...geoUpdate,
+          },
+        })
+        .catch((e) => this.conflictOnLostRace(e));
+
+      // Clean up the orphaned provisional walk-in outlet — ONLY when it was provisional AND nothing
+      // else now references it (never deactivate an established outlet the recce merely came from).
+      if (sourceProvisional) {
+        const [recces, installs] = await Promise.all([
+          tx.recce.count({ where: { siteId: sourceSiteId } }),
+          tx.installation.count({ where: { siteId: sourceSiteId } }),
+        ]);
+        if (recces === 0 && installs === 0) {
+          await tx.site.update({ where: { id: sourceSiteId }, data: { status: 'INACTIVE' } });
+          // Audit the Site side-effect on the SITE entity (audit F4) — the recce audit below records
+          // the re-parent, but the master-outlet deactivation is a distinct, traceable state change.
+          await tx.auditLog.create({
+            data: {
+              actorId: user.sub,
+              action: 'UPDATE',
+              entityType: 'SITE',
+              entityId: sourceSiteId,
+              oldValues: toJson({ status: 'ACTIVE' }),
+              newValues: toJson({ status: 'INACTIVE', reason: 'orphaned by manual-recce attach', recceId: id, attachedTo: other.id }),
+              metadata: { clientId: user.clientId } as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
+
+      await this.audit(
+        tx,
+        user,
+        'APPROVE',
+        id,
+        { status: recce.status, hoReviewStatus: recce.hoReviewStatus, siteId: sourceSiteId, outletId: recce.site.code },
+        { status: 'APPROVED', hoReviewStatus: 'APPROVED', siteId: other.id, outletId: other.code, attachedToExisting: true },
+      );
+      return updated;
+    });
+  }
+
+  /**
+   * Re-evaluate a manual recce's capture photos against a TARGET outlet's authoritative coordinates
+   * (used at attach, when we finally learn the real outlet). Returns the geo fields to persist. A photo
+   * demonstrably OUTSIDE the fence (when the tenant fence is enabled) throws — the attach is refused; an
+   * unverifiable fix stays a soft flag (stored, same posture as the field path). A target with no
+   * coordinates returns {} (the recce's existing geo is left untouched).
+   */
+  private async refenceAgainstTarget(
+    clientId: string,
+    recceId: string,
+    target: { name: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null },
+  ) {
+    if (target.lat == null || target.lng == null) return {};
+    const [posms, client] = await Promise.all([
+      this.prisma.reccePosm.findMany({ where: { recceId }, select: { photo: true } }),
+      this.prisma.client.findUnique({ where: { id: clientId }, select: { settings: true } }),
+    ]);
+    const photos = posms.map((p) => ({ geo: readMediaValue(p.photo).geo }));
+    const config = readPosmCaptureConfig(client?.settings);
+    const accuracyCapMeters = readGpsAccuracyCapMeters(client?.settings);
+    const reference = { lat: Number(target.lat), lng: Number(target.lng) };
+    const agg = aggregatePhotoFence(photos, reference, config.geoFence.radiusMeters, { accuracyCapMeters });
+    if (config.geoFence.enabled && agg.anyOutside) {
+      throw new ConflictException(
+        `This recce's photo was captured outside "${target.name}"'s geo-fence — it can't be attached to that outlet.`,
+      );
+    }
+    return {
+      captureLat: agg.worst?.lat ?? null,
+      captureLng: agg.worst?.lng ?? null,
+      captureAccuracy: agg.worst?.accuracy ?? null,
+      distanceMeters: agg.worst?.distanceMeters ?? null,
+      geoFenceOk: agg.geoFenceOk,
+    };
+  }
+
   /** HO reject: hoReviewStatus PENDING → REJECTED AND status → REJECTED (back to the field). */
   async reject(user: JwtPayload, id: string, dto: RecceHoRejectDto) {
     const recce = await this.loadForMutation(user, id);
@@ -371,7 +518,9 @@ export class RecceHoReviewService {
       // write + exists-check at approve; clientId scopes that exists-check to the recce's tenant.
       select: {
         id: true, clientId: true, status: true, hoReviewStatus: true, recceMode: true,
-        site: { select: { id: true, code: true, name: true } },
+        // vendorId: the re-parent attach (approveManual) may only move a recce onto an outlet of the
+        // SAME fleet, so we compare the source outlet's vendor to the attach target's.
+        site: { select: { id: true, code: true, name: true, vendorId: true } },
       },
     });
     if (!recce) throw new NotFoundException('Recce not found');

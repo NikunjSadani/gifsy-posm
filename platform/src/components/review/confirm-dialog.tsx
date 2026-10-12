@@ -16,6 +16,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = 'Confirm',
   confirmVariant = 'primary',
+  confirmTestId,
   loading = false,
   onConfirm,
   onCancel,
@@ -25,6 +26,8 @@ export function ConfirmDialog({
   message: React.ReactNode;
   confirmLabel?: string;
   confirmVariant?: 'primary' | 'destructive';
+  /** Optional data-testid for the confirm button so a spec can target it unambiguously. */
+  confirmTestId?: string;
   loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -64,7 +67,7 @@ export function ConfirmDialog({
           <Button variant="outline" onClick={onCancel} disabled={loading}>
             Cancel
           </Button>
-          <Button variant={confirmVariant} onClick={onConfirm} loading={loading}>
+          <Button variant={confirmVariant} onClick={onConfirm} loading={loading} data-testid={confirmTestId}>
             {confirmLabel}
           </Button>
         </div>

@@ -17,7 +17,7 @@ import Link from 'next/link';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, CheckCircle2, XCircle, MapPin, User, Clock, ShieldCheck, ShieldAlert,
-  ShieldQuestion, AlertTriangle, ClipboardPen, Info,
+  ShieldQuestion, AlertTriangle, ClipboardPen, Info, Link2,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { PhotoViewer } from '@/components/review/photo-viewer';
@@ -43,6 +43,7 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
   const [gone, setGone] = useState(false); // no longer PENDING HO review
 
   const [confirmApprove, setConfirmApprove] = useState(false);
+  const [confirmAttach, setConfirmAttach] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -51,6 +52,10 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
   const [outletId, setOutletId] = useState('');
   // The backend's authoritative collision message (409) — names the other outlet; cleared on edit.
   const [collisionMsg, setCollisionMsg] = useState<string | null>(null);
+  // When the 409 is a genuine Outlet-ID collision (not the cross-vendor guard), the existing outlet
+  // we CAN attach onto — its name labels the "Attach to <name>" action and its id is sent on attach.
+  // Null for a cross-vendor 409 (attach impossible there — the HO must pick another Outlet ID).
+  const [attachTarget, setAttachTarget] = useState<{ id: string; name: string } | null>(null);
   // Advisory pre-flight lookup: the typed Outlet ID resolves to a DIFFERENT existing outlet.
   const [idInUseName, setIdInUseName] = useState<string | null>(null);
 
@@ -117,13 +122,15 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
       return;
     }
     // A 409 on a MANUAL approve is an Outlet ID collision (the message names the other outlet) —
-    // keep the admin on the page to change the Outlet ID. A 409 on an APP approve is the
-    // already-decided race, which still resolves to the "no longer awaiting HO" state.
+    // keep the admin on the page to EITHER change the Outlet ID OR attach onto that existing outlet.
+    // A 409 on an APP approve is the already-decided race, which still resolves to "no longer
+    // awaiting HO".
     if (res.status === 409) {
       setConfirmApprove(false);
       if (isManual) {
-        setCollisionMsg(res.error || 'That Outlet ID already belongs to another outlet. Enter a different Outlet ID.');
-        toast.error(res.error || 'Outlet ID already in use by another outlet.');
+        const msg = res.error || 'That Outlet ID already belongs to another outlet. Enter a different Outlet ID.';
+        surfaceManual409(msg, trimmedOutletId);
+        toast.error(msg);
         return;
       }
       setGone(true);
@@ -131,6 +138,40 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
       return;
     }
     toast.error(res.error || 'Could not approve. Please try again.');
+  };
+
+  // Record a manual 409: a genuine collision (the message names the outlet) offers Attach; the
+  // cross-vendor guard ("serviced by a different fleet") does NOT — only "change the ID".
+  const surfaceManual409 = (msg: string, attemptedOutletId: string) => {
+    setCollisionMsg(msg);
+    const name = parseCollisionOutletName(msg);
+    setAttachTarget(name ? { id: attemptedOutletId, name } : null);
+  };
+
+  // HO attach — re-send the colliding approve with `attachToExisting` so the recce is re-parented
+  // onto that existing outlet (it IS an approval: same success redirect/toast as doApprove). A 409
+  // here is the cross-vendor guard — surface it and drop the attach affordance (attach impossible).
+  const doAttach = async () => {
+    if (!attachTarget) return;
+    setSubmitting(true);
+    const res = await approveHoRecce(id, { outletId: attachTarget.id, attachToExisting: true });
+    setSubmitting(false);
+    if (res.success) {
+      setConfirmAttach(false);
+      toast.success('Attached — recorded against the existing outlet; installation is unlocked.');
+      router.push('/admin/recce-ho-review');
+      return;
+    }
+    if (res.status === 409) {
+      // Most likely the cross-vendor guard: this outlet is a different fleet's, so attach can't
+      // happen here. Show the message and remove Attach — the HO must pick another Outlet ID.
+      setConfirmAttach(false);
+      const msg = res.error || 'This recce can’t be attached to that outlet.';
+      surfaceManual409(msg, attachTarget.id);
+      toast.error(msg);
+      return;
+    }
+    toast.error(res.error || 'Could not attach. Please try again.');
   };
 
   const doReject = async (body: RejectBody) => {
@@ -281,17 +322,17 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
                 Required to approve a manual recce. It must be unique — it becomes this outlet’s
                 Outlet ID in the master.
               </p>
-              {/* D6: HO can only assign a free Outlet ID here, not merge into an existing outlet.
-                  Attach-to-existing happens at capture, so say so plainly rather than leave the
-                  reviewer wondering why a colliding ID just blocks. */}
+              {/* Enter a free Outlet ID to register a NEW outlet. If the ID already belongs to an
+                  existing outlet in this fleet, the approve returns a collision and Head-Office can
+                  then ATTACH this recce onto that outlet instead (see the collision prompt below). */}
               <p className="mt-1 text-xs text-gray-400">
-                To attach this recce to an existing outlet, that outlet’s exact Outlet ID must be
-                entered at capture — Head-Office can’t merge outlets here.
+                Enter a free Outlet ID to register this as a new outlet. If the ID already belongs to
+                an existing outlet in this fleet, you can attach this recce to that outlet instead.
               </p>
               <input
                 id="ho-outlet-id"
                 value={outletId}
-                onChange={(e) => { setOutletId(e.target.value); setCollisionMsg(null); }}
+                onChange={(e) => { setOutletId(e.target.value); setCollisionMsg(null); setAttachTarget(null); }}
                 placeholder="Enter the Outlet ID"
                 autoComplete="off"
                 data-testid="recce-ho-review-outlet-id"
@@ -301,18 +342,37 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
                   aria-live region so the async collision/advisory result is announced. */}
               <div role="status" aria-live="polite">
                 {collisionMsg ? (
-                  <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700" data-testid="recce-ho-review-outlet-id-collision">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span>{collisionMsg} Enter a different Outlet ID, or reject this recce.</span>
-                  </p>
+                  <>
+                    <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700" data-testid="recce-ho-review-outlet-id-collision">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        {collisionMsg}{' '}
+                        {attachTarget
+                          ? 'Attach this recce to that outlet, enter a different Outlet ID, or reject this recce.'
+                          : 'Enter a different Outlet ID, or reject this recce.'}
+                      </span>
+                    </p>
+                    {attachTarget && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAttach(true)}
+                        disabled={submitting}
+                        data-testid="recce-ho-review-attach"
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-[var(--brand-primary)] bg-[var(--brand-primary)]/5 px-3 py-2 text-xs font-semibold text-[var(--brand-primary)] hover:bg-[var(--brand-primary)]/10 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Link2 className="h-3.5 w-3.5 shrink-0" /> Attach to {attachTarget.name}
+                      </button>
+                    )}
+                  </>
                 ) : idInUseName ? (
                   /* Advisory pre-flight warning (before approve) — this id is already another outlet's. */
                   <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
                     <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>
                       Outlet ID already exists — Outlet:{' '}
-                      <span className="font-semibold">{idInUseName}</span>. Approving with this ID will
-                      be blocked; enter a different Outlet ID.
+                      <span className="font-semibold">{idInUseName}</span>. Approving with this ID is
+                      blocked, but you can then attach this recce to that outlet (or enter a different
+                      Outlet ID).
                     </span>
                   </p>
                 ) : outletIdMissing ? (
@@ -391,6 +451,27 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
             onCancel={() => !submitting && setConfirmApprove(false)}
           />
 
+          <ConfirmDialog
+            open={confirmAttach}
+            title="Attach to this outlet?"
+            message={
+              attachTarget ? (
+                <>
+                  Attach this recce to <span className="font-semibold">{attachTarget.name}</span>{' '}
+                  (Outlet ID <span className="font-semibold">{attachTarget.id}</span>)? It will be
+                  recorded against that existing outlet — the walk-in details you entered won&apos;t
+                  create a new outlet. This can&apos;t be undone from here.
+                </>
+              ) : null
+            }
+            confirmLabel="Attach"
+            confirmVariant="primary"
+            confirmTestId="recce-ho-review-attach-confirm"
+            loading={submitting}
+            onConfirm={() => void doAttach()}
+            onCancel={() => !submitting && setConfirmAttach(false)}
+          />
+
           <RejectDialog
             open={rejectOpen}
             siteLabel={siteLabel}
@@ -402,6 +483,22 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
       )}
     </div>
   );
+}
+
+/**
+ * Pull the colliding outlet's NAME out of the backend collision 409, whose message is shaped
+ * `Outlet ID "X" already belongs to another outlet: <name>.` Returns the name (trailing period
+ * stripped) when the message is that collision, or null for any other 409 (notably the cross-vendor
+ * guard `"<name>" is serviced by a different fleet …`, where attach is impossible). The name is
+ * only used to LABEL the Attach action; the attach call itself keys off the typed Outlet ID.
+ */
+function parseCollisionOutletName(msg: string): string | null {
+  const marker = 'already belongs to another outlet:';
+  const i = msg.indexOf(marker);
+  if (i < 0) return null;
+  let name = msg.slice(i + marker.length).trim();
+  if (name.endsWith('.')) name = name.slice(0, -1).trim();
+  return name || null;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

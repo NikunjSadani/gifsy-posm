@@ -7,8 +7,14 @@
   vitest). HIGH audit bugs fixed + tested: HO can't rename an established outlet's Outlet ID (provisional-only
   finalize); manual recces now visible + re-capturable in field My Work. D3 no-scroll verified @360/375.
 - ⏳ Staging deploy of `246137d` in flight at write time — confirm all 3 Cloud Run services serve it @100%.
-- 🔸 Owner decisions still open: HO duplicate-Outlet-ID resolution is "change the ID" only (no attach-to-
-  existing branch — plan open-confirmation #3); report layout defaulted to row-per-recce (confirm at UAT).
+- ✅ **HO ATTACH-TO-EXISTING (follow-up, owner-requested)** — on an Outlet-ID collision HO can now ATTACH the
+  manual recce to the existing outlet (re-parent, no duplicate/rename) instead of only "change the ID". Guards
+  from the dual adversarial audit: F1 re-fence the capture geo against the target (out-of-fence blocks when the
+  tenant fence is on, else flagged); F2 target must be ACTIVE; F3 only a provisional walk-in can attach (never
+  MOVE an established-outlet recce); F4 the orphan-outlet deactivation is audited; same-fleet only. Gate-green
+  (api 492 jest / FE 323 vitest), attach runtime 12/12 + e2e step 9. F5 (null-vendor false-block) left as a
+  documented conservative limitation.
+- 🔸 Owner decision still open: report layout defaulted to row-per-recce (confirm at UAT).
 - 🔸 Pre-existing (NOT this feature): `field-filter.spec` false-fails on a non-fresh local DB (Site A1 already
   has a recce → correctly hidden from "recce to do"); tracked as a separate task. Prod deploy = owner-gated.
 **Owner:** Nikunj. **Orchestrator:** Claude (runs gates, integrates, owns the verified result).

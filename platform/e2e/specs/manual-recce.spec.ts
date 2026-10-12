@@ -304,4 +304,59 @@ test.describe.serial('manual recce pipeline (field manual → HO approve → ins
     expect(second.ok(), 'a 2nd app recce on the same outlet must be rejected').toBeFalsy();
     expect(second.status()).toBe(409);
   });
+
+  test('9 · HO attach-to-existing — collision → "Attach to <name>" re-parents the recce onto that outlet', async ({ page }) => {
+    // A dedicated EXISTING outlet serviced by the field exec's vendor (E2E_VENDOR_ID), with a known
+    // unique Outlet ID (code) + the now-required rsCode/beatName. Attach is same-fleet only, so the
+    // target MUST be on VENDOR_ID (fielda's vendor) for the attach to be allowed.
+    const existingCode = `E2E-MR-ATTACH-${RUN}`;
+    const existingName = `E2E Manual Attach ${RUN}`;
+    const existRes = await api.post('/v1/sites', {
+      headers: { Authorization: `Bearer ${adminTok}` },
+      data: {
+        code: existingCode, name: existingName, vendorId: VENDOR_ID, asmUserId: ASM_ID,
+        lat: LAT, lng: LNG, rsCode: 'RS001', beatName: 'Beat 1',
+      },
+    });
+    expect(existRes.ok(), `create attach-target outlet: ${await existRes.text()}`).toBeTruthy();
+    const existingSiteId = (await existRes.json()).data.id as string;
+    createdSiteIds.add(existingSiteId);
+
+    // A fresh provisional MANUAL recce (field, no outletId) → its own provisional (MAN-) outlet.
+    const data = await submitManualRecce(
+      api, fieldTok, posmTypeId,
+      { outletName: `E2E Manual ${RUN} attach` },
+      `${RUN}-manual-attach`,
+    );
+    const provisionalCode = data.site.code; // the MAN- provisional code we must NOT end up on
+    createdSiteIds.add(data.site.id);
+
+    await login(page, ROLES.admin);
+    await page.goto(`/admin/recce-ho-review/${data.id}`);
+    await expect(page.getByTestId('recce-ho-review-outlet-id')).toBeVisible();
+
+    // Enter the EXISTING outlet's Outlet ID → the plain approve collides (409) and the console
+    // surfaces the collision banner naming the existing outlet.
+    await hoApproveManual(page, existingCode);
+    const collision = page.getByTestId('recce-ho-review-outlet-id-collision');
+    await expect(collision).toBeVisible();
+    await expect(collision).toContainText(existingName);
+
+    // Click "Attach to <name>" → confirm the attach dialog. Attach IS an approval → same success
+    // redirect back to the HO queue.
+    await page.getByTestId('recce-ho-review-attach').click();
+    await page.getByTestId('recce-ho-review-attach-confirm').click();
+    await page.waitForURL(queueRegex, { timeout: 20_000 });
+
+    // The recce is now APPROVED + HO APPROVED AND re-parented onto the EXISTING outlet (its code,
+    // NOT the provisional MAN- outlet it was captured on — no duplicate, no rename).
+    const res = await api.get(`/v1/recce-ho-review/recces/${data.id}`, { headers: { Authorization: `Bearer ${adminTok}` } });
+    expect(res.ok()).toBeTruthy();
+    const d = (await res.json()).data;
+    expect(d.status).toBe('APPROVED');
+    expect(d.hoReviewStatus).toBe('APPROVED');
+    expect(d.site.id).toBe(existingSiteId);        // re-parented onto the existing outlet
+    expect(d.site.code).toBe(existingCode);        // its master Outlet ID, not a new one
+    expect(d.site.code).not.toBe(provisionalCode); // NOT the provisional MAN- outlet
+  });
 });
