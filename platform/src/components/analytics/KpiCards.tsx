@@ -15,9 +15,12 @@ import {
   ClipboardCheck,
   XCircle,
   AlertTriangle,
+  UserCheck,
+  Smartphone,
+  PencilLine,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
-import { formatPct, formatDays, type SummaryKpis } from '@/lib/analytics/api';
+import { formatPct, formatDays, type SummaryKpis, type SummaryByRecceMode } from '@/lib/analytics/api';
 
 interface Tile {
   label: string;
@@ -34,26 +37,37 @@ const TONE: Record<Tile['tone'], string> = {
   neutral: 'text-gray-600 bg-gray-100',
 };
 
-function tilesFor(k: SummaryKpis): Tile[] {
-  return [
+function tilesFor(k: SummaryKpis, byRecceMode?: SummaryByRecceMode | null): Tile[] {
+  const tiles: Tile[] = [
     { label: 'ASM approval rate', value: formatPct(k.recceApprovalRatePct), icon: CheckCircle2, tone: 'good' },
     { label: 'Install audit pass rate', value: formatPct(k.installAuditApprovalRatePct), icon: ShieldCheck, tone: 'good' },
     { label: 'Geo-fence pass rate', value: formatPct(k.geoFencePassRatePct), icon: MapPin, tone: 'good' },
     { label: 'Avg turnaround', value: formatDays(k.avgTurnaroundDays), icon: Clock, tone: 'neutral' },
-    { label: 'Pending recce review', value: String(k.pendingRecceReview), icon: Hourglass, tone: k.pendingRecceReview > 0 ? 'warn' : 'neutral' },
+    { label: 'Pending ASM review', value: String(k.pendingRecceReview), icon: Hourglass, tone: k.pendingRecceReview > 0 ? 'warn' : 'neutral' },
+    { label: 'Pending HO approval', value: String(k.pendingHoReview ?? 0), icon: UserCheck, tone: (k.pendingHoReview ?? 0) > 0 ? 'warn' : 'neutral' },
     { label: 'Pending install audit', value: String(k.pendingInstallAudit), icon: ClipboardCheck, tone: k.pendingInstallAudit > 0 ? 'warn' : 'neutral' },
     { label: 'Rejected recces', value: String(k.rejectedRecce), icon: XCircle, tone: k.rejectedRecce > 0 ? 'bad' : 'neutral' },
     { label: 'Rejected installs', value: String(k.rejectedInstall), icon: XCircle, tone: k.rejectedInstall > 0 ? 'bad' : 'neutral' },
   ];
+  // Recce entry-path split (App vs Manual) — the owner's "how was the recce done" classification.
+  if (byRecceMode) {
+    tiles.push(
+      { label: 'Recces via app', value: String(byRecceMode.app ?? 0), icon: Smartphone, tone: 'neutral' },
+      { label: 'Recces via manual', value: String(byRecceMode.manual ?? 0), icon: PencilLine, tone: 'neutral' },
+    );
+  }
+  return tiles;
 }
 
 export function KpiCards({
   kpis,
+  byRecceMode,
   loading,
   error,
   onRetry,
 }: {
   kpis: SummaryKpis | null;
+  byRecceMode?: SummaryByRecceMode | null;
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
@@ -90,7 +104,7 @@ export function KpiCards({
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {tilesFor(kpis).map((t) => {
+      {tilesFor(kpis, byRecceMode).map((t) => {
         const Icon = t.icon;
         return (
           <div key={t.label} className="rounded-2xl border border-gray-200 bg-white p-4">

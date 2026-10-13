@@ -31,9 +31,17 @@ export interface SummaryKpis {
   geoFencePassRatePct: number | null;
   avgTurnaroundDays: number | null;
   pendingRecceReview: number;
+  /** Recces awaiting Head-Office sign-off (app ASM-approved-awaiting-HO + manual awaiting-HO). */
+  pendingHoReview: number;
   pendingInstallAudit: number;
   rejectedRecce: number;
   rejectedInstall: number;
+}
+
+/** Recce-event split by entry path (app = recce total − manual). */
+export interface SummaryByRecceMode {
+  app: number;
+  manual: number;
 }
 
 export interface SummaryManual {
@@ -44,6 +52,7 @@ export interface SummaryManual {
 export interface AnalyticsSummary {
   waterfall: SummaryWaterfall;
   kpis: SummaryKpis;
+  byRecceMode: SummaryByRecceMode;
   manual: SummaryManual;
 }
 

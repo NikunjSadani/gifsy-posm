@@ -143,6 +143,7 @@ export class AnalyticsService {
       openTasks,
       manualPendingReview,
       recceManual,
+      pendingHoReview,
     ] = await Promise.all([
       this.prisma.site.count({ where: s.site }),
       this.prisma.recce.count({ where: s.recce }),
@@ -168,6 +169,16 @@ export class AnalyticsService {
       // funnel's recce-count ordering above is unchanged. recceMode is NOT filtered anywhere else,
       // so the funnel stages already include manual recces — this only splits the recce total.
       this.prisma.recce.count({ where: { ...s.recce, recceMode: 'MANUAL' } }),
+      // Recces awaiting Head-Office sign-off (the HO queue): APP (ASM-approved, hoReviewStatus
+      // PENDING) OR MANUAL (skips ASM — status SUBMITTED, hoReviewStatus PENDING). Mirrors the
+      // recce-ho-review queue + the digest; invisible to pendingRecceReview (SUBMITTED app-only).
+      this.prisma.recce.count({
+        where: {
+          ...s.recce,
+          hoReviewStatus: 'PENDING',
+          OR: [{ status: 'APPROVED' }, { recceMode: 'MANUAL', status: 'SUBMITTED' }],
+        },
+      }),
     ]);
 
     const avgTurnaroundDays = await this.avgTurnaround(s.install);
@@ -180,6 +191,7 @@ export class AnalyticsService {
       // Geo pass rate = among recces with a verifiable fix (geoFenceOk not null).
       geoFencePassRatePct: this.pct(geoTrue, geoDecided),
       pendingRecceReview,
+      pendingHoReview,
       pendingInstallAudit,
       rejectedRecce,
       rejectedInstall,

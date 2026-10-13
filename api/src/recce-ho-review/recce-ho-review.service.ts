@@ -296,9 +296,11 @@ export class RecceHoReviewService {
             `"${other.name}" is deactivated — reactivate it in the Sites master or use a different Outlet ID.`,
           );
         }
-        // Attach only within the SAME fleet — a field exec's capture must not be moved onto another
-        // vendor's outlet (preserves the vendor boundary the field-side attach also enforces).
-        if (other.vendorId !== recce.site.vendorId) {
+        // Block only a DIFFERENT fleet — a field exec's capture must not be moved onto another
+        // vendor's outlet. A fleet-LESS target (vendorId null) is NOT "another fleet": it is adopted
+        // into the recce's fleet on attach (attachAndApprove), which also keeps it installable (install
+        // is vendor-scoped) and the master consistent. (Resolves audit F5.)
+        if (other.vendorId != null && other.vendorId !== recce.site.vendorId) {
           throw new ConflictException(
             `"${other.name}" is serviced by a different fleet — this recce can't be attached to it.`,
           );
@@ -401,6 +403,24 @@ export class RecceHoReviewService {
           },
         })
         .catch((e) => this.conflictOnLostRace(e));
+
+      // Adopt a fleet-LESS target into the recce's fleet (audit F5) — a different fleet was already
+      // rejected upstream. Keeps the attached recce installable (install is vendor-scoped) + the master
+      // consistent; audited as a Site change.
+      if (other.vendorId == null && recce.site.vendorId != null) {
+        await tx.site.update({ where: { id: other.id }, data: { vendorId: recce.site.vendorId } });
+        await tx.auditLog.create({
+          data: {
+            actorId: user.sub,
+            action: 'UPDATE',
+            entityType: 'SITE',
+            entityId: other.id,
+            oldValues: toJson({ vendorId: null }),
+            newValues: toJson({ vendorId: recce.site.vendorId, reason: 'fleet adopted on manual-recce attach', recceId: id }),
+            metadata: { clientId: user.clientId } as Prisma.InputJsonValue,
+          },
+        });
+      }
 
       // Clean up the orphaned provisional walk-in outlet — ONLY when it was provisional AND nothing
       // else now references it (never deactivate an established outlet the recce merely came from).

@@ -91,7 +91,7 @@ export default function AdminAnalyticsPage() {
         </div>
       </div>
 
-      <KpiCards kpis={summary.data?.kpis ?? null} loading={summary.loading} error={summary.error} onRetry={loadSummary} />
+      <KpiCards kpis={summary.data?.kpis ?? null} byRecceMode={summary.data?.byRecceMode ?? null} loading={summary.loading} error={summary.error} onRetry={loadSummary} />
 
       <div className="grid lg:grid-cols-2 gap-4">
         <WaterfallFunnel

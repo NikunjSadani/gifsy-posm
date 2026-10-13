@@ -370,6 +370,20 @@ describe('RecceHoReviewService.approve — MANUAL recces (Outlet-ID gate)', () =
     expect(fns.site.update).not.toHaveBeenCalled();
   });
 
+  it('ATTACH onto a FLEET-LESS target → succeeds + the outlet adopts the recce\'s fleet (audit F5)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(manualRecce()); // provisional, vendor V1
+    fns.site.findFirst.mockResolvedValue({ id: 's2', code: 'OUT-9', name: 'Unassigned Outlet', vendorId: null, status: 'ACTIVE' });
+    fns.recce.update.mockResolvedValue({ id: 'rM', siteId: 's2' });
+    fns.recce.count.mockResolvedValue(0);
+    fns.installation.count.mockResolvedValue(0);
+    const svc = new RecceHoReviewService(prisma);
+    await svc.approve(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), 'rM', { outletId: 'OUT-9', attachToExisting: true });
+    expect(fns.recce.update.mock.calls[0][0].data.siteId).toBe('s2'); // re-parented
+    // the fleet-less target adopts the recce's fleet (V1)
+    expect(fns.site.update.mock.calls.some((c: any[]) => c[0].where.id === 's2' && c[0].data.vendorId === 'V1')).toBe(true);
+  });
+
   it('ATTACH blocked onto a DEACTIVATED target outlet → 409, no write (audit F2)', async () => {
     const { prisma, fns } = makePrisma();
     fns.recce.findFirst.mockResolvedValue(manualRecce()); // provisional, vendor V1

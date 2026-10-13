@@ -11,9 +11,14 @@
   manual recce to the existing outlet (re-parent, no duplicate/rename) instead of only "change the ID". Guards
   from the dual adversarial audit: F1 re-fence the capture geo against the target (out-of-fence blocks when the
   tenant fence is on, else flagged); F2 target must be ACTIVE; F3 only a provisional walk-in can attach (never
-  MOVE an established-outlet recce); F4 the orphan-outlet deactivation is audited; same-fleet only. Gate-green
-  (api 492 jest / FE 323 vitest), attach runtime 12/12 + e2e step 9. F5 (null-vendor false-block) left as a
-  documented conservative limitation.
+  MOVE an established-outlet recce); F4 the orphan-outlet deactivation is audited; same-fleet only. F5 RESOLVED
+  (attaching onto a FLEET-LESS target now succeeds and the outlet ADOPTS the recce's fleet — a different fleet
+  is still blocked; keeps the attached recce installable + the master consistent; audited). Attach runtime 12/12
+  + e2e step 9.
+- ✅ **ANALYTICS DASHBOARD TILES** (owner-requested): the admin analytics summary now exposes `kpis.pendingHoReview`
+  (the HO queue count — app ASM-approved-awaiting-HO + manual awaiting-HO) and `byRecceMode {app, manual}`; the
+  dashboard KPI grid renders "Pending HO approval" + "Recces via app" + "Recces via manual" tiles ("Pending recce
+  review" relabeled "Pending ASM review"). Runtime-verified (app+manual == recced).
 - 🔸 Owner decision still open: report layout defaulted to row-per-recce (confirm at UAT).
 - 🔸 Pre-existing (NOT this feature): `field-filter.spec` false-fails on a non-fresh local DB (Site A1 already
   has a recce → correctly hidden from "recce to do"); tracked as a separate task. Prod deploy = owner-gated.
