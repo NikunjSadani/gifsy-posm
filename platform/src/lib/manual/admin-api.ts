@@ -127,6 +127,8 @@ export interface SubmissionDetail {
   version: number;
   reviewedAt: string | null;
   rejectionReason: string | null;
+  /** Advisory anti-fraud flag: a photo here is byte-identical to one used on another submission. */
+  duplicatePhoto: boolean;
   createdAt: string;
   values: SubmissionValueRow[];
 }

@@ -171,6 +171,16 @@ export default function SubmissionReviewPage() {
         </div>
       )}
 
+      {/* Advisory: a photo here is byte-identical to one on another submission (possible reuse). */}
+      {detail.duplicatePhoto && (
+        <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3" role="status">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Duplicate photo</p>
+          <p className="mt-1 text-sm text-amber-800">
+            A photo on this submission matches one already used on another submission — review the images before approving.
+          </p>
+        </div>
+      )}
+
       {/* Answers */}
       <div className="rounded-2xl border border-gray-200 bg-white p-5">
         <h2 className="mb-2 text-base font-semibold text-gray-900">Answers</h2>

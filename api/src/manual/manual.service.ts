@@ -16,6 +16,8 @@ import {
   FormField,
   VisibilityFormSchema,
 } from '../capture/visibility-form.helper';
+import { PosmMediaService } from '../capture/posm-media.service';
+import { CaptureIntegrityService } from '../capture-integrity/capture-integrity.service';
 import { CreateManualTaskDto } from './dto/create-manual-task.dto';
 import { UpdateManualTaskDto } from './dto/update-manual-task.dto';
 import { ListManualTasksDto } from './dto/list-manual-tasks.dto';
@@ -47,7 +49,11 @@ const toJson = (v: unknown): Prisma.InputJsonValue =>
  */
 @Injectable()
 export class ManualService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly media: PosmMediaService,
+    private readonly integrity: CaptureIntegrityService,
+  ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Scoping helpers
@@ -313,6 +319,9 @@ export class ManualService {
     fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
     const answers = fields.map((field) => this.answerFor(field, values[field.id]));
+    // Advisory anti-fraud flag: a photo on this submission is byte-identical to one used on ANOTHER
+    // submission (same-owner hashes ignored). Flag only — manual tasks are not a payout path.
+    const duplicatePhoto = await this.submissionHasDuplicatePhoto(sub.clientId, sub.id, schema, values);
 
     return {
       id: sub.id,
@@ -324,6 +333,7 @@ export class ManualService {
       reviewedAt: sub.reviewedAt,
       rejectionReason: sub.rejectionReason,
       createdAt: sub.createdAt,
+      duplicatePhoto,
       values: answers,
     };
   }
@@ -454,6 +464,8 @@ export class ManualService {
         })
         .catch((e) => this.conflictOnLostRace(e));
 
+      // Re-hash the re-captured photos (advisory duplicate signal; same-owner hashes are ignored).
+      await this.recordSubmissionHashes(user.clientId, existing.id, schema, values);
       await this.audit(
         user,
         'UPDATE',
@@ -479,6 +491,9 @@ export class ManualService {
           version: 1,
         },
       });
+      // Record photo content-hashes (ownerKind MANUAL) for cross-submission duplicate detection —
+      // surfaced as an ADVISORY flag at review; never blocks (manual tasks are not a payout path).
+      await this.recordSubmissionHashes(user.clientId, created.id, schema, values);
       await this.audit(user, 'CREATE', 'MANUAL_SUBMISSION', created.id, null, {
         status: 'SUBMITTED',
         version: 1,
@@ -522,6 +537,84 @@ export class ManualService {
       );
     }
     throw e;
+  }
+
+  /** The photo keys stored across a submission's media (CAMERA/…) fields. */
+  private collectMediaKeys(schema: VisibilityFormSchema, values: Record<string, unknown>): string[] {
+    const keys: string[] = [];
+    const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+    for (const f of fields) {
+      if (!MEDIA_FIELD_TYPES.has(f.type)) continue;
+      const raw = values[f.id];
+      if (raw == null) continue;
+      const { key } = readMediaValue(raw);
+      if (key) keys.push(key);
+    }
+    return keys;
+  }
+
+  /**
+   * Record a submission's photo content-hashes under `ownerKind:'MANUAL'` so the SAME photo reused
+   * across manual submissions is detectable. Best-effort + NON-blocking: a missing object contributes
+   * no hash, and any hashing/record error is swallowed (the submission must still succeed — manual
+   * tasks are not a payout path, so this is an advisory signal, never a hard block).
+   */
+  private async recordSubmissionHashes(
+    clientId: string,
+    submissionId: string,
+    schema: VisibilityFormSchema,
+    values: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const keys = this.collectMediaKeys(schema, values);
+      if (keys.length === 0) return;
+      const hashes: string[] = [];
+      for (const key of keys) {
+        const bytes = await this.integrity.fetchImageBytes(key);
+        if (bytes) hashes.push(this.integrity.hash(bytes));
+      }
+      if (hashes.length === 0) return;
+      await this.media.recordImageHashes(
+        this.prisma,
+        clientId,
+        { ownerKind: 'MANUAL', ownerId: submissionId },
+        hashes,
+      );
+    } catch {
+      // Advisory only — never fail a submission because hashing/recording hiccupped.
+    }
+  }
+
+  /**
+   * Advisory duplicate signal: recompute THIS submission's photo content-hashes and check whether any
+   * appears in the shared ImageHash store under a DIFFERENT owner (another submission / recce / install).
+   * Recomputed rather than read from this submission's own rows because the `(clientId, hash)` unique
+   * only persists the FIRST occurrence — so this flags the REUSE (the fraud signal), exactly as the
+   * recce lane does. Never blocks.
+   */
+  private async submissionHasDuplicatePhoto(
+    clientId: string,
+    submissionId: string,
+    schema: VisibilityFormSchema,
+    values: Record<string, unknown>,
+  ): Promise<boolean> {
+    const keys = this.collectMediaKeys(schema, values);
+    if (keys.length === 0) return false;
+    const hashes: string[] = [];
+    for (const key of keys) {
+      const bytes = await this.integrity.fetchImageBytes(key);
+      if (bytes) hashes.push(this.integrity.hash(bytes));
+    }
+    if (hashes.length === 0) return false;
+    const other = await this.prisma.imageHash.findFirst({
+      where: {
+        clientId,
+        hash: { in: [...new Set(hashes)] },
+        NOT: { ownerKind: 'MANUAL', ownerId: submissionId },
+      },
+      select: { id: true },
+    });
+    return other != null;
   }
 
   /** Assert a vendorId is an existing vendor in this tenant (no foreign-fleet targeting). */
