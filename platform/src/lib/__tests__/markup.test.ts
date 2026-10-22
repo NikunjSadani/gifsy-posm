@@ -6,10 +6,19 @@ import {
   normalizePath,
   rectToPercentStyle,
   pathToSvgPoints,
+  normAspectFor,
+  defaultElementBox,
+  moveElementBox,
+  resizeElementBox,
+  ELEMENT_BOX_MIN_W,
   MARKUP_MAX_SHAPES,
   MARKUP_MAX_POINTS,
+  type MarkupRect,
   type MarkupShape,
 } from '../markup';
+
+/** On-screen aspect (w:h in px) a normalised rect renders at over an imgW×imgH image. */
+const onScreenAspect = (r: MarkupRect, imgW: number, imgH: number) => (r.w * imgW) / (r.h * imgH);
 
 describe('markup — buildMarkup (rects + paths)', () => {
   it('builds normalised rects, dropping stray taps', () => {
@@ -120,5 +129,64 @@ describe('markup — render helpers', () => {
 
   it('pathToSvgPoints maps to a 0..100 points string', () => {
     expect(pathToSvgPoints({ type: 'path', points: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }] })).toBe('0.00,0.00 50.00,100.00');
+  });
+});
+
+describe('markup — Element aspect-box helpers', () => {
+  it('normAspectFor folds in the image pixel aspect (w/h norm = realAspect·imgH/imgW)', () => {
+    expect(normAspectFor(2, 100, 100)).toBe(2); // square image → norm aspect == real aspect
+    expect(normAspectFor(1, 400, 300)).toBeCloseTo(0.75, 6); // 1:1 element on 4:3 image
+    expect(normAspectFor(0, 400, 300)).toBeCloseTo(0.75, 6); // degenerate real → fallback a=1
+    expect(normAspectFor(2, 0, 0)).toBe(2); // unmeasurable image → fall back to real aspect
+  });
+
+  it('defaultElementBox renders at the real-world aspect, centered, ~half the frame', () => {
+    // 2:1 element on a square image.
+    const r = defaultElementBox(2, 200, 200);
+    expect(onScreenAspect(r, 200, 200)).toBeCloseTo(2, 6); // shape matches the element
+    expect(r.w).toBeCloseTo(0.5, 6); // constraining dim ~= fit (0.5)
+    expect(r.h).toBeCloseTo(0.25, 6);
+    expect(r.x).toBeCloseTo(0.25, 6); // centered
+    expect(r.y).toBeCloseTo(0.375, 6);
+  });
+
+  it('defaultElementBox corrects for a non-square image (1:1 element on 4:3 reads square)', () => {
+    const r = defaultElementBox(1, 400, 300);
+    expect(onScreenAspect(r, 400, 300)).toBeCloseTo(1, 6);
+    // Fits within half of each dimension and stays fully in-frame.
+    expect(r.x + r.w).toBeLessThanOrEqual(1);
+    expect(r.y + r.h).toBeLessThanOrEqual(1);
+  });
+
+  it('moveElementBox translates and clamps the box fully in-frame (size preserved)', () => {
+    const r: MarkupRect = { type: 'rect', x: 0.5, y: 0.5, w: 0.3, h: 0.3 };
+    expect(moveElementBox(r, 0.4, 0.4)).toEqual({ type: 'rect', x: 0.7, y: 0.7, w: 0.3, h: 0.3 });
+    expect(moveElementBox(r, -1, -1)).toEqual({ type: 'rect', x: 0, y: 0, w: 0.3, h: 0.3 });
+  });
+
+  it('resizeElementBox keeps the aspect locked and the box in-frame', () => {
+    const r: MarkupRect = { type: 'rect', x: 0.2, y: 0.2, w: 0.3, h: 0.3 };
+    const out = resizeElementBox(r, 1, 0.7, 0.9); // drag BR; aspect 1:1
+    // (0.7 - 0.2 is 0.4999…996 in float, so assert component-wise, not strict-equal.)
+    expect(out.type).toBe('rect');
+    expect(out.x).toBeCloseTo(0.2, 6);
+    expect(out.y).toBeCloseTo(0.2, 6);
+    expect(out.w).toBeCloseTo(0.5, 6);
+    expect(out.h).toBeCloseTo(0.5, 6);
+    expect(onScreenAspect(out, 100, 100)).toBeCloseTo(1, 6);
+  });
+
+  it('resizeElementBox backs width off (preserving aspect) when the height would overflow', () => {
+    const r: MarkupRect = { type: 'rect', x: 0.1, y: 0.6, w: 0.2, h: 0.1 };
+    const out = resizeElementBox(r, 2, 0.95, 0.95); // na=2 (wide); bottom edge limits it
+    expect(out.y + out.h).toBeLessThanOrEqual(1 + 1e-9);
+    expect(out.x + out.w).toBeLessThanOrEqual(1 + 1e-9);
+    expect(out.w / out.h).toBeCloseTo(2, 6); // aspect preserved despite the clamp
+  });
+
+  it('resizeElementBox floors at the minimum width (never an un-tappable speck)', () => {
+    const r: MarkupRect = { type: 'rect', x: 0.1, y: 0.1, w: 0.3, h: 0.3 };
+    const out = resizeElementBox(r, 1, 0.105, 0.105); // drag grip almost onto the anchor
+    expect(out.w).toBeCloseTo(ELEMENT_BOX_MIN_W, 6);
   });
 });

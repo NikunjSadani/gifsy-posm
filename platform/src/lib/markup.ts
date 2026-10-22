@@ -154,6 +154,89 @@ export function parseMarkup(v: unknown): RecceMarkup | null {
   return out.length ? { version: MARKUP_VERSION, shapes: out } : null;
 }
 
+// ── Element aspect-box (recce) ─────────────────────────────────────────────────────────────
+/**
+ * Minimum normalised width for the draggable Element box — keeps the box (and its resize grip)
+ * big enough to grab on a phone, never shrinking to an un-tappable speck.
+ */
+export const ELEMENT_BOX_MIN_W = 0.08;
+/** Default Element box size as a fraction of the photo's constraining dimension (centered). */
+export const ELEMENT_BOX_DEFAULT_FIT = 0.5;
+
+/**
+ * The normalised width:height ratio a box must have so it RENDERS with real-world aspect
+ * `realAspect` (= element width ÷ height, in feet) over an image displayed at `imgW`×`imgH` px
+ * with `preserveAspectRatio: none`. Because normalised space is square (x,y each 0..1) but the
+ * image is not, the on-screen aspect folds in the image's own pixel aspect: w/h (norm) =
+ * realAspect · imgH/imgW. Falls back to the image's aspect (a visual square-ish default) when
+ * inputs are degenerate.
+ */
+export function normAspectFor(realAspect: number, imgW: number, imgH: number): number {
+  const a = Number.isFinite(realAspect) && realAspect > 0 ? realAspect : 1;
+  if (!(imgW > 0) || !(imgH > 0)) return a;
+  return a * (imgH / imgW);
+}
+
+/**
+ * A centered, aspect-correct default Element box, normalised 0..1 to the image content box.
+ * Sized to the largest rectangle of on-screen aspect `realAspect` that fits within `fit` of EACH
+ * image dimension — so it reads clearly as the element's footprint yet leaves room to drag.
+ */
+export function defaultElementBox(
+  realAspect: number,
+  imgW: number,
+  imgH: number,
+  fit: number = ELEMENT_BOX_DEFAULT_FIT,
+): MarkupRect {
+  const na = normAspectFor(realAspect, imgW, imgH); // normalised w/h
+  // Largest (w,h) with w = na·h that fits in fit×fit of normalised space.
+  const h = Math.min(fit, fit / na);
+  const w = na * h;
+  const x = (1 - w) / 2;
+  const y = (1 - h) / 2;
+  return normalizeRect({ x, y, w, h });
+}
+
+/**
+ * Translate an Element box by (dx,dy) in normalised space, clamped so it stays fully in-frame
+ * (size preserved). Used for drag-to-move.
+ */
+export function moveElementBox(r: MarkupRect, dx: number, dy: number): MarkupRect {
+  const x = Math.min(Math.max(0, r.x + dx), 1 - r.w);
+  const y = Math.min(Math.max(0, r.y + dy), 1 - r.h);
+  return { type: 'rect', x, y, w: r.w, h: r.h };
+}
+
+/**
+ * Resize an Element box by dragging its bottom-right grip to (px,py), anchored at its top-left
+ * corner, with the on-screen aspect LOCKED to `normAspect` (= {@link normAspectFor}). The width
+ * follows the pointer (floored at `minW`), the height is derived from the locked aspect, and the
+ * box is capped so it never spills past the right/bottom edge — preserving aspect by backing the
+ * width off when the height would overflow. This is what keeps a "resize" from silently becoming
+ * a free-form (aspect-breaking) rectangle.
+ */
+export function resizeElementBox(
+  r: MarkupRect,
+  normAspect: number,
+  px: number,
+  py: number,
+  minW: number = ELEMENT_BOX_MIN_W,
+): MarkupRect {
+  const na = normAspect > 0 ? normAspect : 1;
+  const maxW = 1 - r.x;
+  const maxH = 1 - r.y;
+  // Candidate width from the pointer, floored at the min and capped at the right edge.
+  let w = Math.min(Math.max(px - r.x, minW), maxW);
+  let h = w / na;
+  // If the aspect-derived height overflows the bottom edge, back the width off to restore aspect.
+  if (h > maxH) {
+    h = maxH;
+    w = Math.min(Math.max(h * na, minW), maxW);
+    h = w / na; // re-derive so aspect holds even after the min-width floor
+  }
+  return normalizeRect({ x: r.x, y: r.y, w, h });
+}
+
 /** A normalised rect → CSS percentage strings for absolute positioning over an <img>. */
 export function rectToPercentStyle(r: { x: number; y: number; w: number; h: number }): {
   left: string;

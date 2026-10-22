@@ -32,6 +32,7 @@ import {
 } from '@/components/field/capture/PosmCaptureCard';
 import { submitManualRecce } from '@/lib/field/recce-api';
 import { lookupSiteByOutletId, type SiteLookupMatch } from '@/lib/field/sites';
+import { gatePosmTypesByGsb, isGsbHiddenForOutlet } from '@/lib/field/posm-gate';
 
 interface PosmTypeApi {
   id: string;
@@ -158,6 +159,17 @@ export default function ManualReccePage() {
   const nameOk = outletName.trim() !== '';
   const canSubmit =
     nameOk && readyLines.length >= 1 && !hasIncompleteStarted && !submitting && !typesError;
+
+  // GSB gate: a provisional (not-attached) walk-in outlet is gsbAllowed=false, so GSB is hidden.
+  // When the Outlet ID attaches to an existing outlet, honour that outlet's real permission so the
+  // picker stays consistent with what the backend will accept. The backend hard-rejects a GSB
+  // submission on a disallowed outlet regardless — this only hides the option.
+  const gsbAllowed = attached?.gsbAllowed === true;
+  const visiblePosmTypes = useMemo(
+    () => gatePosmTypesByGsb(posmTypes, gsbAllowed),
+    [posmTypes, gsbAllowed],
+  );
+  const gsbHidden = isGsbHiddenForOutlet(posmTypes, gsbAllowed);
 
   const addSecond = () => {
     setCount(2);
@@ -366,11 +378,16 @@ export default function ManualReccePage() {
               than unmount so each PosmCaptureCard keeps its captured photo/markup state. It reappears
               the moment the exec taps "Next: capture Element" (expanded ≠ 'outlet'). */}
           <div className={expanded === 'outlet' ? 'hidden' : 'space-y-4'}>
+            {gsbHidden && (
+              <p className="rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                GSB is not approved for this outlet.
+              </p>
+            )}
             {Array.from({ length: count }).map((_, i) => (
               <PosmCaptureCard
                 key={i}
                 slot={i + 1}
-                posmTypes={posmTypes}
+                posmTypes={visiblePosmTypes}
                 onChange={(s) => setStateAt(i, s)}
                 onRemove={i === 1 ? removeSecond : undefined}
                 collapsed={expanded !== i}

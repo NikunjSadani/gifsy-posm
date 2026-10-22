@@ -92,8 +92,14 @@ export class SitesController {
     return this.sites.lookup(user, outletId);
   }
 
-  /** GET /v1/sites/:id — scoped single fetch. */
-  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
+  /**
+   * GET /v1/sites/:id — scoped single fetch. VENDOR_FIELD is included so the field recce page can
+   * resolve ONE outlet authoritatively (e.g. its `gsbAllowed` gate) instead of scanning a capped
+   * list: `SitesService.get` pins the vendor (and tenant) in `scopedWhere`, so a field login can
+   * only ever read an outlet its own vendor services (404 otherwise) — the same confinement, and
+   * the same row shape, as the list it already consumes.
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN', 'VENDOR_FIELD')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.sites.get(user, id);

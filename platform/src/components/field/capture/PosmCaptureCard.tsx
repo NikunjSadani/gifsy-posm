@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw, PenSquare, X, ChevronRight } from 'lucide-react';
 import { CameraCapture } from './CameraCapture';
-import { PhotoMarkup } from './PhotoMarkup';
+import { ElementBoxPlacer } from './ElementBoxPlacer';
 import { useGeo, formatFix, type GeoFix } from '@/lib/field/geo';
 import { uploadMedia, type MediaQuality } from '@/lib/field/media-upload';
 import type { RecceMarkup } from '@/lib/markup';
@@ -45,7 +45,8 @@ export interface PosmCaptureState {
   error?: string;
 }
 
-const UNITS = ['cm', 'in', 'ft', 'mm'] as const;
+// Recce dimensions are captured in feet (the only unit the field uses); no in-form unit picker.
+const DIMENSION_UNIT = 'ft';
 
 /**
  * Compose a plain-language advisory sentence from the set quality flags, or `null` when the
@@ -80,7 +81,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
   const [posmTypeId, setPosmTypeId] = useState('');
   const [width, setWidth] = useState('');
   const [height, setHeight] = useState('');
-  const [unit, setUnit] = useState<string>('cm');
+  const unit = DIMENSION_UNIT;
 
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -166,10 +167,11 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
     setMarkup(null);
   };
 
-  // ── POSM-area markup lifecycle ──────────────────────────────────────────────
-  /** Open the annotator over an object-URL of the captured photo. */
+  // ── Element-box placement lifecycle ─────────────────────────────────────────
+  /** Open the aspect-box placer over an object-URL of the captured photo. Needs valid dimensions
+   *  (the box is shaped from them), so this is gated on `dimsValid` by its trigger below. */
   const openMarkup = () => {
-    if (!file) return;
+    if (!file || !dimsValid) return;
     const url = URL.createObjectURL(file);
     setMarkupUrl(url);
     setMarkupOpen(true);
@@ -201,9 +203,9 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
     const typeName = posmTypes.find((t) => t.id === posmTypeId)?.name ?? null;
     const bits = [
       typeName ?? 'No Element type',
-      dimsValid ? `${w}×${h} ${unit}` : null,
+      dimsValid ? `${w}×${h} ft` : null,
       uploaded ? 'Photo ✓' : null,
-      markup && markup.shapes.length > 0 ? 'Marked' : null,
+      markup && markup.shapes.length > 0 ? 'Box placed' : null,
     ].filter(Boolean) as string[];
     const status = line
       ? { label: 'Ready', cls: 'bg-emerald-50 text-emerald-700' }
@@ -263,9 +265,9 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
         ))}
       </select>
 
-      {/* Dimensions */}
-      <label className="mb-1.5 block text-xs font-medium text-gray-600">Dimensions</label>
-      <div className="mb-4 grid grid-cols-[1fr_1fr_auto] gap-2">
+      {/* Dimensions — captured in feet */}
+      <label className="mb-1.5 block text-xs font-medium text-gray-600">Dimension (in Ft.)</label>
+      <div className="mb-4 grid grid-cols-2 gap-2">
         <input
           type="number"
           inputMode="decimal"
@@ -284,17 +286,6 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
           placeholder="Height"
           className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
         />
-        <select
-          value={unit}
-          onChange={(e) => setUnit(e.target.value)}
-          className="rounded-xl border-2 border-gray-200 bg-white px-2 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
-        >
-          {UNITS.map((u) => (
-            <option key={u} value={u}>
-              {u}
-            </option>
-          ))}
-        </select>
       </div>
 
       {/* Photo */}
@@ -354,15 +345,14 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
         </div>
       )}
 
-      {/* Element-area markup — available once a photo is captured. REQUIRED (gates submit). */}
+      {/* Element box — available once a photo is captured. REQUIRED (gates submit). The box is
+          shaped from the entered dimensions, so it needs valid Width × Height first. */}
       {file && !uploading && (
         <div className="mt-3">
           {markup ? (
             <div className="flex items-center gap-2 rounded-xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
               <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
-              <span className="flex-1 font-medium">
-                Element area marked ({markup.shapes.length})
-              </span>
+              <span className="flex-1 font-medium">Element box placed</span>
               <button
                 type="button"
                 onClick={openMarkup}
@@ -373,7 +363,7 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
               <button
                 type="button"
                 onClick={clearMarkup}
-                aria-label="Clear Element area markup"
+                aria-label="Clear Element box"
                 className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
               >
                 <X className="h-3.5 w-3.5" />
@@ -385,13 +375,16 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
               <button
                 type="button"
                 onClick={openMarkup}
-                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[var(--brand-primary)] px-3 py-2 text-xs font-semibold text-[var(--brand-primary)] active:scale-95 transition-transform"
+                disabled={!dimsValid}
+                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[var(--brand-primary)] px-3 py-2 text-xs font-semibold text-[var(--brand-primary)] active:scale-95 transition-transform disabled:border-gray-200 disabled:text-gray-400"
               >
                 <PenSquare className="h-4 w-4" />
-                Mark Element area
+                Place Element box
               </button>
               <p className="mt-1.5 text-xs text-[var(--brand-primary)]">
-                Required — mark where the Element will go on the photo.
+                {dimsValid
+                  ? 'Required — position the box where the Element will go on the photo.'
+                  : 'Enter the Width × Height above first — the box is shaped from them.'}
               </p>
             </div>
           )}
@@ -399,8 +392,10 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
       )}
 
       {markupOpen && markupUrl && (
-        <PhotoMarkup
+        <ElementBoxPlacer
           imageUrl={markupUrl}
+          width={w}
+          height={h}
           initial={markup}
           onSave={saveMarkup}
           onCancel={closeMarkup}

@@ -1,19 +1,27 @@
 import * as XLSX from 'xlsx';
 import { SitesService } from './sites.service';
+import { SITE_UPLOAD_HEADERS } from './sites.constants';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Wave-1 bulk-upload proof: bad rows are rejected with a correct, CSV-injection-safe
  * error file; good rows are upserted inside a transaction with an ingestion audit entry.
+ *
+ * Rows are built from a partial record keyed by column name (so a template re-order never
+ * breaks a positional array) and emitted in the canonical SITE_UPLOAD_HEADERS order. The
+ * template dropped `phone` + `asm_phone` and gained `rs_name`, `pincode`, `asm_email`,
+ * `gsb_allowed` — the specs below exercise the new contract.
  */
 
-const HEADERS = [
-  'code', 'name', 'phone', 'lat', 'lng', 'town', 'rs_code', 'vendor_code', 'asm_phone', 'status',
-];
+type Row = Record<string, string | number>;
 
-function buildXlsxBuffer(dataRows: unknown[][]): Buffer {
-  const ws = XLSX.utils.aoa_to_sheet([HEADERS, ...dataRows]);
+function buildXlsxBuffer(dataRows: Row[], headers: readonly string[] = SITE_UPLOAD_HEADERS): Buffer {
+  const aoa = [
+    [...headers],
+    ...dataRows.map((r) => headers.map((h) => (r[h] ?? '') as string | number)),
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sites');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
@@ -31,10 +39,10 @@ const admin: JwtPayload = {
 };
 
 /**
- * `existingCodes` controls the create-vs-update classification (the new mandatory-RS/Beat rule
- * only applies to rows whose code does NOT already exist). Default 'all' makes every uploaded
- * code an EXISTING outlet (an UPDATE), so the pre-existing tests exercise the blank-preserve
- * update path unchanged; pass `[]` (or a subset) to treat rows as NEW.
+ * `existingCodes` controls the create-vs-update classification (the mandatory-RS/Beat rule only
+ * applies to rows whose code does NOT already exist). Default 'all' makes every uploaded code an
+ * EXISTING outlet (an UPDATE), so the blank-preserve update path is exercised unchanged; pass `[]`
+ * (or a subset) to treat rows as NEW.
  */
 function makePrisma(opts: { existingCodes?: string[] | 'all' } = {}) {
   const existingCodes = opts.existingCodes ?? 'all';
@@ -50,13 +58,14 @@ function makePrisma(opts: { existingCodes?: string[] | 'all' } = {}) {
   const vendorFindUnique = jest.fn().mockImplementation(({ where }) =>
     where.clientId_code.code === 'VC1' ? Promise.resolve({ id: 'v1' }) : Promise.resolve(null),
   );
-  // Users are stored E.164-normalized (F5); the service normalizes the sheet's asm_phone
-  // cell ('9811111111') to '+919811111111' before this lookup.
-  const userFindUnique = jest.fn().mockImplementation(({ where }) =>
-    where.clientId_phone.phone === '+919811111111'
-      ? Promise.resolve({ id: 'asm1', role: 'ASM' })
-      : Promise.resolve(null),
-  );
+  // Users are stored with a normalized (trim + lower-cased) email; the service normalizes the
+  // sheet's asm_email cell before this lookup. 'asm@kw.in' → an ASM; 'field@kw.in' → a non-ASM.
+  const userFindUnique = jest.fn().mockImplementation(({ where }) => {
+    const email = where.clientId_email.email;
+    if (email === 'asm@kw.in') return Promise.resolve({ id: 'asm1', role: 'ASM' });
+    if (email === 'field@kw.in') return Promise.resolve({ id: 'u2', role: 'VENDOR_FIELD' });
+    return Promise.resolve(null);
+  });
   const prisma = {
     site: { upsert, findMany: siteFindMany },
     vendor: { findUnique: vendorFindUnique },
@@ -64,7 +73,7 @@ function makePrisma(opts: { existingCodes?: string[] | 'all' } = {}) {
     auditLog: { create: auditCreate },
     $transaction,
   } as unknown as PrismaService;
-  return { prisma, upsert, auditCreate, $transaction, siteFindMany };
+  return { prisma, upsert, auditCreate, $transaction, siteFindMany, userFindUnique };
 }
 
 describe('SitesService.bulkUpload', () => {
@@ -73,14 +82,14 @@ describe('SitesService.bulkUpload', () => {
     const svc = new SitesService(prisma);
 
     const buffer = buildXlsxBuffer([
-      // good: resolves vendor VC1 + ASM phone
-      ['A1', 'Alpha', '', 12.9, 77.6, 'Town1', 'RS1', 'VC1', '9811111111', 'ACTIVE'],
+      // good: resolves vendor VC1 + ASM email (an existing code → UPDATE, so RS/Beat not required)
+      { code: 'A1', name: 'Alpha', lat: 12.9, lng: 77.6, town: 'Town1', rs_code: 'RS1', vendor_code: 'VC1', asm_email: 'asm@kw.in', status: 'ACTIVE' },
       // bad: missing code
-      ['', 'NoCode', '', '', '', '', '', '', '', ''],
+      { name: 'NoCode' },
       // bad: lat out of range
-      ['A2', 'Beta', '', 999, 77, '', '', '', '', ''],
+      { code: 'A2', name: 'Beta', lat: 999, lng: 77 },
       // bad: invalid status; malicious name must be neutralised in the error echo
-      ['A3', "=cmd|'/c calc'!A1", '', '', '', '', '', '', '', 'BOGUS'],
+      { code: 'A3', name: "=cmd|'/c calc'!A1", status: 'BOGUS' },
     ]);
 
     const file = { originalname: 'sites.xlsx', buffer } as Express.Multer.File;
@@ -99,12 +108,12 @@ describe('SitesService.bulkUpload', () => {
     expect($transaction.mock.calls[0][0]).toHaveLength(2); // 1 upsert + 1 audit
 
     const rows = readErrorFile(res.errorFileBase64 as string);
-    // header + 3 error rows
+    // header + 3 error rows — mirrors the NEW template columns.
     expect(rows[0]).toEqual([
-      'row_number', 'code', 'name', 'phone', 'lat', 'lng',
-      'region', 'state', 'cluster', 'town', 'rs_code',
-      'beat_name', 'channel', 'address',
-      'vendor_code', 'asm_phone', 'status', 'error_remarks',
+      'row_number', 'code', 'name', 'lat', 'lng',
+      'region', 'state', 'cluster', 'town', 'rs_code', 'rs_name',
+      'beat_name', 'channel', 'address', 'pincode',
+      'vendor_code', 'asm_email', 'gsb_allowed', 'status', 'error_remarks',
     ]);
     const remarks = rows.slice(1).map((r) => r[r.length - 1]);
     expect(remarks[0]).toMatch(/code is required/i);
@@ -123,9 +132,7 @@ describe('SitesService.bulkUpload', () => {
   it('rejects an unknown vendor code with a per-row error', async () => {
     const { prisma } = makePrisma();
     const svc = new SitesService(prisma);
-    const buffer = buildXlsxBuffer([
-      ['B1', 'Beta', '', '', '', '', '', 'NOPE', '', ''],
-    ]);
+    const buffer = buildXlsxBuffer([{ code: 'B1', name: 'Beta', vendor_code: 'NOPE' }]);
     const res = await svc.bulkUpload(
       admin,
       { originalname: 'x.xlsx', buffer } as Express.Multer.File,
@@ -140,8 +147,8 @@ describe('SitesService.bulkUpload', () => {
     const { prisma } = makePrisma();
     const svc = new SitesService(prisma);
     const buffer = buildXlsxBuffer([
-      ['DUP', 'First', '', '', '', '', '', '', '', ''],
-      ['dup', 'Second', '', '', '', '', '', '', '', ''],
+      { code: 'DUP', name: 'First' },
+      { code: 'dup', name: 'Second' },
     ]);
     const res = await svc.bulkUpload(
       admin,
@@ -170,7 +177,7 @@ describe('SitesService.bulkUpload', () => {
   it('F2: rejects an upload exceeding the 5000-row cap (before any per-row work)', async () => {
     const { prisma, upsert } = makePrisma();
     const svc = new SitesService(prisma);
-    const many = Array.from({ length: 5001 }, (_, i) => [`C${i}`, `N${i}`, '', '', '', '', '', '', '', '']);
+    const many = Array.from({ length: 5001 }, (_, i) => ({ code: `C${i}`, name: `N${i}` }));
     const buffer = buildXlsxBuffer(many);
     await expect(
       svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File),
@@ -183,27 +190,35 @@ describe('SitesService.bulkUpload', () => {
     const { prisma, upsert } = makePrisma();
     const svc = new SitesService(prisma);
     // code + name present; every optional cell blank.
-    const buffer = buildXlsxBuffer([['EXIST', 'New Name', '', '', '', '', '', '', '', '']]);
+    const buffer = buildXlsxBuffer([{ code: 'EXIST', name: 'New Name' }]);
     const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
     expect(res.successCount).toBe(1);
-    // UPDATE writes ONLY name — no phone/lat/lng/town/rsCode/vendorId/asmUserId/status keys,
-    // so a blank cell can never null-out an existing value.
+    // UPDATE writes ONLY name — no lat/lng/town/rsCode/rsName/pincode/vendorId/asmUserId/gsbAllowed/
+    // status keys, so a blank cell can never null-out (or flip) an existing value.
     expect(upsert.mock.calls[0][0].update).toEqual({ name: 'New Name' });
-    // CREATE (first-insert branch) still carries the full nullable payload + default status.
+    // CREATE (first-insert branch) carries the full nullable payload + defaults (gsbAllowed false).
     expect(upsert.mock.calls[0][0].create).toMatchObject({
-      code: 'EXIST', name: 'New Name', phone: null, lat: null, lng: null,
-      town: null, rsCode: null, vendorId: null, asmUserId: null, status: 'ACTIVE',
+      code: 'EXIST', name: 'New Name', lat: null, lng: null,
+      town: null, rsCode: null, rsName: null, pincode: null,
+      vendorId: null, asmUserId: null, gsbAllowed: false, status: 'ACTIVE',
     });
+    // `phone` is no longer written by the parser (it is not part of the template).
+    expect(upsert.mock.calls[0][0].create).not.toHaveProperty('phone');
   });
 
-  it('F3: a NON-empty cell IS written on UPDATE', async () => {
+  it('F3: a NON-empty cell IS written on UPDATE (incl. rsName/pincode/gsbAllowed/asmUserId-from-email)', async () => {
     const { prisma, upsert } = makePrisma();
     const svc = new SitesService(prisma);
-    const buffer = buildXlsxBuffer([['EXIST', 'N', '9876500000', 12.9, 77.6, 'T', 'RS', 'VC1', '9811111111', 'INACTIVE']]);
+    const buffer = buildXlsxBuffer([{
+      code: 'EXIST', name: 'N', lat: 12.9, lng: 77.6, town: 'T',
+      rs_code: 'RS', rs_name: 'Distributor X', pincode: '560001',
+      vendor_code: 'VC1', asm_email: 'asm@kw.in', gsb_allowed: 'Yes', status: 'INACTIVE',
+    }]);
     await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
     expect(upsert.mock.calls[0][0].update).toMatchObject({
-      name: 'N', phone: '9876500000', lat: 12.9, lng: 77.6, town: 'T',
-      rsCode: 'RS', vendorId: 'v1', asmUserId: 'asm1', status: 'INACTIVE',
+      name: 'N', lat: 12.9, lng: 77.6, town: 'T',
+      rsCode: 'RS', rsName: 'Distributor X', pincode: '560001',
+      vendorId: 'v1', asmUserId: 'asm1', gsbAllowed: true, status: 'INACTIVE',
     });
   });
 
@@ -212,7 +227,7 @@ describe('SitesService.bulkUpload', () => {
     const { prisma, upsert } = makePrisma();
     const svc = new SitesService(prisma);
     const gifsy = { sub: 'op1', role: 'GIFSY_ADMIN', clientId: 'gifsy', phone: '9', name: 'Op' } as unknown as JwtPayload;
-    const buffer = buildXlsxBuffer([['A1', 'Alpha', '', '', '', '', '', '', '', '']]);
+    const buffer = buildXlsxBuffer([{ code: 'A1', name: 'Alpha' }]);
     await expect(
       svc.bulkUpload(gifsy, { originalname: 'x.xlsx', buffer } as Express.Multer.File),
     ).rejects.toThrow(/Assume a tenant/i);
@@ -224,10 +239,10 @@ describe('SitesService.bulkUpload', () => {
     const { prisma, upsert } = makePrisma({ existingCodes: [] }); // nothing exists → both NEW
     const svc = new SitesService(prisma);
     const buffer = buildXlsxBuffer([
-      // NEW1: has rs_code but blank beat_name (column absent from HEADERS → blank) → rejected
-      ['NEW1', 'New Outlet', '', '', '', '', 'RS1', '', '', ''],
+      // NEW1: has rs_code but blank beat_name → rejected
+      { code: 'NEW1', name: 'New Outlet', rs_code: 'RS1' },
       // NEW2: blank rs_code → rejected
-      ['NEW2', 'New Outlet 2', '', '', '', '', '', '', '', ''],
+      { code: 'NEW2', name: 'New Outlet 2' },
     ]);
     const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
     expect(res.successCount).toBe(0);
@@ -241,14 +256,9 @@ describe('SitesService.bulkUpload', () => {
   it('allows a NEW-site row that carries BOTH rs_code and beat_name', async () => {
     const { prisma, upsert } = makePrisma({ existingCodes: [] });
     const svc = new SitesService(prisma);
-    // Custom sheet with a beat_name column so a new outlet can satisfy the rule.
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['code', 'name', 'rs_code', 'beat_name'],
-      ['NEW3', 'New Outlet 3', 'RS1', 'Beat 1'],
+    const buffer = buildXlsxBuffer([
+      { code: 'NEW3', name: 'New Outlet 3', rs_code: 'RS1', beat_name: 'Beat 1' },
     ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Sites');
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
     const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
     expect(res.successCount).toBe(1);
     expect(res.errorCount).toBe(0);
@@ -258,13 +268,130 @@ describe('SitesService.bulkUpload', () => {
   it('allows an UPDATE row (existing code) with BLANK rs/beat (blank-preserve unchanged)', async () => {
     const { prisma, upsert } = makePrisma({ existingCodes: ['UPD1'] });
     const svc = new SitesService(prisma);
-    const buffer = buildXlsxBuffer([
-      ['UPD1', 'Updated Name', '', '', '', '', '', '', '', ''],
-    ]);
+    const buffer = buildXlsxBuffer([{ code: 'UPD1', name: 'Updated Name' }]);
     const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
     expect(res.successCount).toBe(1);
     expect(res.errorCount).toBe(0);
     // Blank rs/beat on an existing outlet are preserved — only name is written on UPDATE.
     expect(upsert.mock.calls[0][0].update).toEqual({ name: 'Updated Name' });
+  });
+
+  // ── asm_email resolution (replaces the old asm_phone lookup) ─────────────────────
+  it('resolves asm_email → asmUserId for an ASM user in the tenant', async () => {
+    const { prisma, upsert, userFindUnique } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    // Mixed case + surrounding space → still resolves (normalizeEmail trims + lower-cases).
+    const buffer = buildXlsxBuffer([
+      { code: 'N1', name: 'Alpha', rs_code: 'RS1', beat_name: 'B1', asm_email: '  ASM@KW.in ' },
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(1);
+    expect(userFindUnique.mock.calls[0][0].where).toEqual({ clientId_email: { clientId: 'c1', email: 'asm@kw.in' } });
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ asmUserId: 'asm1' });
+  });
+
+  it('rejects an asm_email that belongs to a NON-ASM user (per-row error)', async () => {
+    const { prisma } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'N1', name: 'Alpha', rs_code: 'RS1', beat_name: 'B1', asm_email: 'field@kw.in' },
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(0);
+    expect(res.errorCount).toBe(1);
+    const remarks = readErrorFile(res.errorFileBase64 as string).slice(1).map((r) => r[r.length - 1]);
+    expect(remarks[0]).toMatch(/belongs to a non-ASM user/i);
+  });
+
+  it('rejects an asm_email not found in the tenant (per-row error)', async () => {
+    const { prisma } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'N1', name: 'Alpha', rs_code: 'RS1', beat_name: 'B1', asm_email: 'ghost@kw.in' },
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(0);
+    expect(res.errorCount).toBe(1);
+    const remarks = readErrorFile(res.errorFileBase64 as string).slice(1).map((r) => r[r.length - 1]);
+    expect(remarks[0]).toMatch(/ASM email .* not found/i);
+  });
+
+  // ── gsb_allowed Yes/No parsing ───────────────────────────────────────────────────
+  it('gsb_allowed: Yes/true/1 → gsbAllowed true on CREATE', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'G1', name: 'A', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: 'Yes' },
+      { code: 'G2', name: 'B', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: 'TRUE' },
+      { code: 'G3', name: 'C', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: '1' },
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(3);
+    expect(res.errorCount).toBe(0);
+    for (const call of upsert.mock.calls) expect(call[0].create.gsbAllowed).toBe(true);
+  });
+
+  it('gsb_allowed: No/false/0/blank → gsbAllowed false on CREATE', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'G1', name: 'A', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: 'No' },
+      { code: 'G2', name: 'B', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: 'false' },
+      { code: 'G3', name: 'C', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: '0' },
+      { code: 'G4', name: 'D', rs_code: 'RS1', beat_name: 'B1' }, // blank → false
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(4);
+    expect(res.errorCount).toBe(0);
+    for (const call of upsert.mock.calls) expect(call[0].create.gsbAllowed).toBe(false);
+  });
+
+  it('gsb_allowed: a garbage value is a per-row error (no outlet upserted)', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'G1', name: 'A', rs_code: 'RS1', beat_name: 'B1', gsb_allowed: 'maybe' },
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(0);
+    expect(res.errorCount).toBe(1);
+    expect(upsert).not.toHaveBeenCalled();
+    const remarks = readErrorFile(res.errorFileBase64 as string).slice(1).map((r) => r[r.length - 1]);
+    expect(remarks[0]).toMatch(/invalid gsb allowed value/i);
+  });
+
+  it('gsb_allowed updates on UPDATE only when the cell is non-blank (blank preserves)', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: ['U1', 'U2'] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'U1', name: 'A', gsb_allowed: 'Yes' }, // non-blank → written
+      { code: 'U2', name: 'B' }, // blank → preserved (not written)
+    ]);
+    await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(upsert.mock.calls[0][0].update).toMatchObject({ name: 'A', gsbAllowed: true });
+    expect(upsert.mock.calls[1][0].update).toEqual({ name: 'B' });
+    expect(upsert.mock.calls[1][0].update).not.toHaveProperty('gsbAllowed');
+  });
+
+  // ── Removed columns: a stray phone / asm_phone column is simply ignored ───────────
+  it('ignores stray phone / asm_phone columns (no longer parsed; phone stays unwritten)', async () => {
+    const { prisma, upsert, userFindUnique } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    // A file that still carries the OLD phone + asm_phone columns alongside the required ones.
+    const headers = ['code', 'name', 'rs_code', 'beat_name', 'phone', 'asm_phone'];
+    const ws = XLSX.utils.aoa_to_sheet([
+      headers,
+      ['N1', 'Alpha', 'RS1', 'B1', '9876500000', '9811111111'],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sites');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(1);
+    // phone is NOT written by the parser, and asm_phone is NOT resolved (no user lookup by phone).
+    expect(upsert.mock.calls[0][0].create).not.toHaveProperty('phone');
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ asmUserId: null });
+    expect(userFindUnique).not.toHaveBeenCalled();
   });
 });

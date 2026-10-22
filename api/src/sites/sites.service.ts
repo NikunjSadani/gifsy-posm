@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope, platformWide } from '../common/tenant-scope';
-import { normalizeIndianPhone } from '../common/phone';
+import { normalizeEmail } from '../common/password';
 import { aoaToSheetSafe } from '../common/xlsx';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
@@ -23,7 +23,6 @@ interface SiteErrorRow {
   rowNumber: number;
   code: string;
   name: string;
-  phone: string;
   lat: string;
   lng: string;
   region: string;
@@ -31,11 +30,14 @@ interface SiteErrorRow {
   cluster: string;
   town: string;
   rs_code: string;
+  rs_name: string;
   beat_name: string;
   channel: string;
   address: string;
+  pincode: string;
   vendor_code: string;
-  asm_phone: string;
+  asm_email: string;
+  gsb_allowed: string;
   status: string;
   error_remarks: string;
 }
@@ -45,13 +47,13 @@ interface SiteErrorRow {
  *
  * `present` records which SOURCE CELLS were non-empty (F3). On the upsert UPDATE branch a
  * column is written ONLY when its source cell was non-empty, so a blank cell LEAVES the
- * existing value unchanged (never null-outs vendorId/asmUserId/lat/lng/phone/town/rsCode/
- * status). The CREATE branch always writes the resolved values (blank → null / default).
+ * existing value unchanged (never null-outs vendorId/asmUserId/lat/lng/town/rsCode/rsName/
+ * pincode/gsbAllowed/status). The CREATE branch always writes the resolved values (blank →
+ * null / default; gsbAllowed defaults false). `phone` is no longer part of the upload.
  */
 interface SiteSuccessRow {
   code: string;
   name: string;
-  phone: string | null;
   lat: number | null;
   lng: number | null;
   region: string | null;
@@ -59,25 +61,30 @@ interface SiteSuccessRow {
   cluster: string | null;
   town: string | null;
   rsCode: string | null;
+  rsName: string | null;
   beatName: string | null;
   channel: string | null;
   address: string | null;
+  pincode: string | null;
   vendorId: string | null;
   asmUserId: string | null;
+  gsbAllowed: boolean;
   status: SiteStatus;
   present: {
-    phone: boolean;
     latlng: boolean;
     region: boolean;
     state: boolean;
     cluster: boolean;
     town: boolean;
     rsCode: boolean;
+    rsName: boolean;
     beatName: boolean;
     channel: boolean;
     address: boolean;
+    pincode: boolean;
     vendor: boolean;
     asm: boolean;
+    gsbAllowed: boolean;
     status: boolean;
   };
 }
@@ -250,7 +257,10 @@ export class SitesService {
    */
   async lookup(user: JwtPayload, outletId?: string): Promise<{
     exists: boolean;
-    site?: { id: string; code: string; name: string; address: string | null; phone: string | null };
+    site?: {
+      id: string; code: string; name: string; address: string | null; phone: string | null;
+      pincode: string | null; rsName: string | null; gsbAllowed: boolean;
+    };
   }> {
     const code = (outletId ?? '').trim();
     if (!code) throw new BadRequestException('outletId query parameter is required.');
@@ -258,7 +268,10 @@ export class SitesService {
     if (scope === null) return { exists: false }; // fail-closed: a vendor with no scope sees nothing
     const site = await this.prisma.site.findFirst({
       where: { ...scope, code },
-      select: { id: true, code: true, name: true, address: true, phone: true },
+      select: {
+        id: true, code: true, name: true, address: true, phone: true,
+        pincode: true, rsName: true, gsbAllowed: true,
+      },
     });
     if (!site) return { exists: false };
     return { exists: true, site };
@@ -288,11 +301,14 @@ export class SitesService {
           cluster: dto.cluster ?? null,
           town: dto.town ?? null,
           rsCode: dto.rsCode ?? null,
+          rsName: dto.rsName ?? null,
           beatName: dto.beatName ?? null,
           channel: dto.channel ?? null,
           address: dto.address ?? null,
+          pincode: dto.pincode ?? null,
           vendorId: dto.vendorId ?? null,
           asmUserId: dto.asmUserId ?? null,
+          gsbAllowed: dto.gsbAllowed ?? false,
           status: (dto.status as SiteStatus) ?? SiteStatus.ACTIVE,
         },
       });
@@ -320,9 +336,12 @@ export class SitesService {
     if (dto.cluster !== undefined) data.cluster = dto.cluster;
     if (dto.town !== undefined) data.town = dto.town;
     if (dto.rsCode !== undefined) data.rsCode = dto.rsCode;
+    if (dto.rsName !== undefined) data.rsName = dto.rsName;
     if (dto.beatName !== undefined) data.beatName = dto.beatName;
     if (dto.channel !== undefined) data.channel = dto.channel;
     if (dto.address !== undefined) data.address = dto.address;
+    if (dto.pincode !== undefined) data.pincode = dto.pincode;
+    if (dto.gsbAllowed !== undefined) data.gsbAllowed = dto.gsbAllowed;
     if (dto.vendorId !== undefined) {
       data.vendor = dto.vendorId ? { connect: { id: dto.vendorId } } : { disconnect: true };
     }
@@ -444,7 +463,6 @@ export class SitesService {
 
       const code = get('code');
       const name = get('name');
-      const phone = get('phone');
       const latRaw = get('lat');
       const lngRaw = get('lng');
       const region = get('region');
@@ -452,20 +470,23 @@ export class SitesService {
       const cluster = get('cluster');
       const town = get('town');
       const rsCode = get('rs_code');
+      const rsName = get('rs_name');
       const beatName = get('beat_name');
       const channel = get('channel');
       const address = get('address');
+      const pincode = get('pincode');
       const vendorCode = get('vendor_code');
-      const asmPhone = get('asm_phone');
+      const asmEmail = get('asm_email');
+      const gsbRaw = get('gsb_allowed');
       const statusRaw = get('status');
 
       const addError = (reason: string) =>
         errorRows.push({
-          rowNumber, code, name, phone,
+          rowNumber, code, name,
           lat: latRaw, lng: lngRaw,
-          region, state, cluster, town, rs_code: rsCode,
-          beat_name: beatName, channel, address,
-          vendor_code: vendorCode, asm_phone: asmPhone, status: statusRaw,
+          region, state, cluster, town, rs_code: rsCode, rs_name: rsName,
+          beat_name: beatName, channel, address, pincode,
+          vendor_code: vendorCode, asm_email: asmEmail, gsb_allowed: gsbRaw, status: statusRaw,
           error_remarks: reason,
         });
 
@@ -511,6 +532,20 @@ export class SitesService {
         status = up as SiteStatus;
       }
 
+      // gsb_allowed (optional Yes/No flag; blank → false). Case-insensitive: yes/true/1 → true,
+      // no/false/0/blank → false, anything else is a per-row error (never a silent default).
+      let gsbAllowed = false;
+      if (gsbRaw !== '') {
+        const g = gsbRaw.toLowerCase();
+        if (g === 'yes' || g === 'true' || g === '1') {
+          gsbAllowed = true;
+        } else if (g === 'no' || g === 'false' || g === '0') {
+          gsbAllowed = false;
+        } else {
+          addError('Invalid GSB Allowed value (use Yes or No)'); continue;
+        }
+      }
+
       // Resolve vendor_code → vendorId within the tenant.
       let vendorId: string | null = null;
       if (vendorCode !== '') {
@@ -524,19 +559,20 @@ export class SitesService {
         vendorId = vendor.id;
       }
 
-      // Resolve asm_phone → asmUserId (must be an ASM in the tenant).
+      // Resolve asm_email → asmUserId (must be an ASM in the tenant). Users are stored with a
+      // normalized (trimmed + lower-cased) email — mirror that on lookup so case/whitespace in the
+      // sheet still resolves the same identity the (clientId, email) unique keys on.
       let asmUserId: string | null = null;
-      if (asmPhone !== '') {
-        // Match the ASM User by canonical E.164 (users are stored normalized — F5).
+      if (asmEmail !== '') {
         const asm = await this.prisma.user.findUnique({
-          where: { clientId_phone: { clientId, phone: normalizeIndianPhone(asmPhone) } },
+          where: { clientId_email: { clientId, email: normalizeEmail(asmEmail) } },
           select: { id: true, role: true },
         });
         if (!asm) {
-          addError(`ASM phone "${asmPhone}" not found in this tenant`); continue;
+          addError(`ASM email "${asmEmail}" not found in this tenant`); continue;
         }
         if (asm.role !== 'ASM') {
-          addError(`Phone "${asmPhone}" belongs to a non-ASM user`); continue;
+          addError(`Email "${asmEmail}" belongs to a non-ASM user`); continue;
         }
         asmUserId = asm.id;
       }
@@ -544,32 +580,36 @@ export class SitesService {
       seenCodes.add(codeKey);
       successRows.push({
         code, name,
-        phone: phone || null,
         lat, lng,
         region: region || null,
         state: state || null,
         cluster: cluster || null,
         town: town || null,
         rsCode: rsCode || null,
+        rsName: rsName || null,
         beatName: beatName || null,
         channel: channel || null,
         address: address || null,
-        vendorId, asmUserId, status,
+        pincode: pincode || null,
+        vendorId, asmUserId, gsbAllowed, status,
         // F3: which source cells were non-empty — the UPDATE branch writes ONLY these, so a
-        // blank cell leaves the existing value untouched (lat/lng are a paired unit).
+        // blank cell leaves the existing value untouched (lat/lng are a paired unit; gsbAllowed
+        // updates only when the cell was non-blank so a blank preserves the current allow-list).
         present: {
-          phone: phone !== '',
           latlng: lat !== null && lng !== null,
           region: region !== '',
           state: state !== '',
           cluster: cluster !== '',
           town: town !== '',
           rsCode: rsCode !== '',
+          rsName: rsName !== '',
           beatName: beatName !== '',
           channel: channel !== '',
           address: address !== '',
+          pincode: pincode !== '',
           vendor: vendorCode !== '',
-          asm: asmPhone !== '',
+          asm: asmEmail !== '',
+          gsbAllowed: gsbRaw !== '',
           status: statusRaw !== '',
         },
       });
@@ -583,30 +623,32 @@ export class SitesService {
         this.prisma.site.upsert({
           where: { clientId_code: { clientId, code: r.code } },
           create: {
-            clientId, code: r.code, name: r.name, phone: r.phone,
+            clientId, code: r.code, name: r.name,
             lat: r.lat, lng: r.lng,
             region: r.region, state: r.state, cluster: r.cluster,
-            town: r.town, rsCode: r.rsCode,
-            beatName: r.beatName, channel: r.channel, address: r.address,
-            vendorId: r.vendorId, asmUserId: r.asmUserId, status: r.status,
+            town: r.town, rsCode: r.rsCode, rsName: r.rsName,
+            beatName: r.beatName, channel: r.channel, address: r.address, pincode: r.pincode,
+            vendorId: r.vendorId, asmUserId: r.asmUserId, gsbAllowed: r.gsbAllowed, status: r.status,
           },
           // F3: UPDATE only the columns whose source cell was non-empty. `name` is required
           // (a blank name row is rejected upstream) so it is always written; every other
           // column is gated on `present.*` so a blank cell preserves the existing value.
           update: {
             name: r.name,
-            ...(r.present.phone ? { phone: r.phone } : {}),
             ...(r.present.latlng ? { lat: r.lat, lng: r.lng } : {}),
             ...(r.present.region ? { region: r.region } : {}),
             ...(r.present.state ? { state: r.state } : {}),
             ...(r.present.cluster ? { cluster: r.cluster } : {}),
             ...(r.present.town ? { town: r.town } : {}),
             ...(r.present.rsCode ? { rsCode: r.rsCode } : {}),
+            ...(r.present.rsName ? { rsName: r.rsName } : {}),
             ...(r.present.beatName ? { beatName: r.beatName } : {}),
             ...(r.present.channel ? { channel: r.channel } : {}),
             ...(r.present.address ? { address: r.address } : {}),
+            ...(r.present.pincode ? { pincode: r.pincode } : {}),
             ...(r.present.vendor ? { vendorId: r.vendorId } : {}),
             ...(r.present.asm ? { asmUserId: r.asmUserId } : {}),
+            ...(r.present.gsbAllowed ? { gsbAllowed: r.gsbAllowed } : {}),
             ...(r.present.status ? { status: r.status } : {}),
           },
         }),
@@ -674,10 +716,10 @@ export class SitesService {
   private buildErrorFile(errorRows: SiteErrorRow[]): string {
     const headers = [...SITE_ERROR_HEADERS];
     const data = errorRows.map((r) => [
-      r.rowNumber, r.code, r.name, r.phone, r.lat, r.lng,
-      r.region, r.state, r.cluster, r.town, r.rs_code,
-      r.beat_name, r.channel, r.address,
-      r.vendor_code, r.asm_phone, r.status, r.error_remarks,
+      r.rowNumber, r.code, r.name, r.lat, r.lng,
+      r.region, r.state, r.cluster, r.town, r.rs_code, r.rs_name,
+      r.beat_name, r.channel, r.address, r.pincode,
+      r.vendor_code, r.asm_email, r.gsb_allowed, r.status, r.error_remarks,
     ]);
     const ws = aoaToSheetSafe([headers, ...data]);
     ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 4 }));
@@ -721,18 +763,22 @@ export class SitesService {
     id: string; code: string; name: string; phone: string | null;
     lat: Prisma.Decimal | null; lng: Prisma.Decimal | null;
     region?: string | null; state?: string | null; cluster?: string | null;
-    town: string | null; rsCode: string | null;
+    town: string | null; rsCode: string | null; rsName?: string | null;
     beatName?: string | null; channel?: string | null; address?: string | null;
-    vendorId: string | null; asmUserId: string | null; status: SiteStatus;
+    pincode?: string | null; vendorId: string | null; asmUserId: string | null;
+    gsbAllowed?: boolean; status: SiteStatus;
   }): Prisma.InputJsonValue {
     return {
       id: site.id, code: site.code, name: site.name, phone: site.phone,
       lat: site.lat != null ? site.lat.toString() : null,
       lng: site.lng != null ? site.lng.toString() : null,
       region: site.region ?? null, state: site.state ?? null, cluster: site.cluster ?? null,
-      town: site.town, rsCode: site.rsCode,
+      town: site.town, rsCode: site.rsCode, rsName: site.rsName ?? null,
       beatName: site.beatName ?? null, channel: site.channel ?? null, address: site.address ?? null,
-      vendorId: site.vendorId, asmUserId: site.asmUserId, status: site.status,
+      pincode: site.pincode ?? null,
+      vendorId: site.vendorId, asmUserId: site.asmUserId,
+      // gsbAllowed governs the GSB recce gate — capture it so toggles are auditable.
+      gsbAllowed: site.gsbAllowed ?? false, status: site.status,
     };
   }
 

@@ -535,4 +535,114 @@ describe('RecceService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.recce.create).not.toHaveBeenCalled();
   });
+
+  // ── GSB element-type gate (recce may include the GSB element only at a gsbAllowed outlet) ──
+  const gsbLine = (geo: { lat: number; lng: number }) => ({ ...line(geo), posmTypeId: 'gsb1' });
+
+  it('GSB (app): a GSB element on a gsbAllowed=false outlet → 400, no write', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('GSB (app): a lower-case "gsb" code is still gated (case-insensitive) on a gsbAllowed=false outlet → 400', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'gsb', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('GSB (app): a GSB element on a gsbAllowed=true outlet → OK (submits)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: true });
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'gsb1', dimensions: {}, photo: { key: KEY }, markup: null, posmType: { id: 'gsb1', code: 'GSB', name: 'GSB' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    const res = await service.create(vendorField, { siteId: 's1', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.status).toBe('SUBMITTED');
+    expect(tx.recce.create).toHaveBeenCalled();
+  });
+
+  it('GSB (app): a NON-GSB element is always allowed, even on a gsbAllowed=false outlet', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'FSU', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, posmType: { id: 'pt1', code: 'FSU', name: 'FSU' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    const res = await service.create(vendorField, { siteId: 's1', posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.status).toBe('SUBMITTED');
+  });
+
+  it('GSB (manual): a GSB element on a provisional walk-in (gsbAllowed=false by default) → 400, no write', async () => {
+    manualPrepMocks();
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    // No outletId → provisional outlet (gsbAllowed false) → GSB blocked before the transaction.
+    await expect(
+      service.createManual(vendorField, { outletName: 'Walk-in Shop', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('GSB (manual): a GSB element on an ATTACHED gsbAllowed=true outlet → OK (submits)', async () => {
+    manualPrepMocks();
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.site.findFirst.mockResolvedValue({ id: 'sExisting', lat: 19.076, lng: 72.877, status: 'ACTIVE', gsbAllowed: true });
+    const tx = {
+      site: { create: jest.fn() },
+      recce: { create: jest.fn().mockResolvedValue(manualRecceRow({ site: { id: 'sExisting', code: 'OUT1', name: 'Existing', town: null, lat: 19.076, lng: 72.877 } })) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const res = await service.createManual(vendorField, { outletId: 'OUT1', outletName: 'Existing', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.recceMode).toBe('MANUAL');
+    expect(tx.recce.create).toHaveBeenCalled();
+    // The attach lookup selected gsbAllowed so the gate can read it.
+    expect(mockPrisma.site.findFirst.mock.calls[0][0].select).toMatchObject({ gsbAllowed: true });
+  });
 });

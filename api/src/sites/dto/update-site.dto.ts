@@ -1,5 +1,5 @@
 import {
-  IsString, IsOptional, IsNumber, Min, Max, IsEnum, MaxLength, IsNotEmpty,
+  IsString, IsOptional, IsNumber, Min, Max, IsEnum, MaxLength, IsNotEmpty, IsBoolean,
 } from 'class-validator';
 import { SiteStatusInput } from './create-site.dto';
 
@@ -72,6 +72,12 @@ export class UpdateSiteDto {
   @MaxLength(120)
   beatName?: string;
 
+  /** Display name for the RS (distributor) — paired with rsCode. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  rsName?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(60)
@@ -81,6 +87,17 @@ export class UpdateSiteDto {
   @IsString()
   @MaxLength(300)
   address?: string;
+
+  /** Outlet postal PIN code. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  pincode?: string;
+
+  /** Per-outlet allow-list for the GSB element type. */
+  @IsOptional()
+  @IsBoolean()
+  gsbAllowed?: boolean;
 
   @IsOptional()
   @IsString()

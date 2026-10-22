@@ -184,11 +184,11 @@ export class RecceService {
     // Resolve an existing outlet to ATTACH to — scoped to the caller's vendor so a foreign /
     // other-vendor outlet is never attached (it is invisible here). A collision with such an outlet
     // falls through to the create branch and surfaces as a P2002 → 409 below (no existence leak).
-    let existingSite: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; status: string } | null = null;
+    let existingSite: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; status: string; gsbAllowed: boolean } | null = null;
     if (outletId) {
       existingSite = await this.prisma.site.findFirst({
         where: { clientId, code: outletId, ...(v ? { vendorId: v } : {}) },
-        select: { id: true, lat: true, lng: true, status: true },
+        select: { id: true, lat: true, lng: true, status: true, gsbAllowed: true },
       });
       if (existingSite && existingSite.status !== 'ACTIVE') {
         throw new BadRequestException('That outlet is not active.');
@@ -197,7 +197,9 @@ export class RecceService {
 
     // Prepare (media + integrity + per-photo fence) against the resolved geo reference. A
     // brand-new manual outlet has no lat/lng → geoFenceOk stays null (flag, not block — R5).
-    const siteForPrepare = existingSite ?? { id: '', lat: null, lng: null };
+    // A brand-new manual outlet has no master row yet → gsbAllowed is false (GSB is blocked for a
+    // walk-in; it becomes available only once HO finalises the outlet and approves it for GSB).
+    const siteForPrepare = existingSite ?? { id: '', lat: null, lng: null, gsbAllowed: false };
     const prepared = await this.prepare(clientId, siteForPrepare, dto.posms);
 
     let duplicate = false;
@@ -481,10 +483,21 @@ export class RecceService {
    */
   private async prepare(
     clientId: string,
-    site: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; settings?: unknown },
+    site: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; gsbAllowed?: boolean; settings?: unknown },
     lines: ReccePosmLineDto[],
   ): Promise<PreparedRecce> {
-    await this.assertPosmTypesInTenant(clientId, lines.map((l) => l.posmTypeId));
+    const posmTypes = await this.assertPosmTypesInTenant(clientId, lines.map((l) => l.posmTypeId));
+
+    // GSB GATE: the GSB element (the PosmType whose code is "GSB", case-insensitive) may be recced
+    // ONLY at an outlet whose master record is approved for GSB (Site.gsbAllowed === true). Enforced
+    // here, the shared choke-point for the APP (create), MANUAL (createManual) and resubmit lanes, so
+    // the gate cannot be bypassed by any submit path — and BEFORE any media/fence/hash/DB write. A
+    // provisional manual walk-in outlet has gsbAllowed=false by default, so GSB is correctly blocked
+    // there until HO finalises + approves the outlet.
+    const hasGsb = posmTypes.some((p) => (p.code ?? '').toUpperCase() === 'GSB');
+    if (hasGsb && site.gsbAllowed !== true) {
+      throw new BadRequestException('The GSB element can only be recced at outlets approved for GSB.');
+    }
 
     // Media keys must belong to THIS tenant's media folder (key-ownership guard), AND no two POSM
     // lines in this ONE submission may reuse the same photo (parity with the installation lane's
@@ -621,7 +634,7 @@ export class RecceService {
     const unique = [...new Set(ids)];
     const found = await this.prisma.posmType.findMany({
       where: { clientId, id: { in: unique } },
-      select: { id: true, isActive: true },
+      select: { id: true, code: true, isActive: true },
     });
     const byId = new Map(found.map((p) => [p.id, p]));
     for (const id of unique) {
@@ -629,6 +642,7 @@ export class RecceService {
       if (!p) throw new BadRequestException('A posmTypeId is not an Element type in this tenant.');
       if (!p.isActive) throw new BadRequestException('A referenced Element type is inactive.');
     }
+    return found;
   }
 
   private detailInclude() {

@@ -208,6 +208,7 @@ model Site {
   lng       Decimal?   @db.Decimal(11, 8)
   town      String?
   rsCode    String? // "RS" filter dimension from the brief
+  rsName    String? // display name for the RS (distributor) — paired with rsCode
   // Outlet-master geography/classification (added for the Outlet Execution Report). All
   // nullable + populated from the outlet upload / create-edit form; report columns.
   region    String?
@@ -216,6 +217,10 @@ model Site {
   beatName  String?
   channel   String? // trade channel (e.g. GT / MT / …)
   address   String?
+  pincode   String? // outlet postal PIN code
+  // Per-outlet allow-list for the GSB element type: a recce may include the GSB PosmType (code
+  // "GSB") only when this is true. Default FALSE — GSB is denied unless the outlet is approved for it.
+  gsbAllowed Boolean @default(false)
   vendorId  String? // the vendor whose fleet services this site
   asmUserId String? // approving ASM
   status    SiteStatus @default(ACTIVE)

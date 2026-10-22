@@ -7,13 +7,14 @@
  * `i + 2` in the rejection report.
  *
  * REQUIRED: `code`, `name`. Everything else is optional; `vendor_code` and
- * `asm_phone` are RESOLVED to a Vendor / ASM User inside the caller's tenant
- * (an unknown value is a per-row error, never a silent null).
+ * `asm_email` are RESOLVED to a Vendor / ASM User inside the caller's tenant
+ * (an unknown value is a per-row error, never a silent null). `gsb_allowed` is a
+ * Yes/No flag (the per-outlet GSB element allow-list). The outlet `phone` field is
+ * NOT part of this template — it stays on the schema / admin form / lookup only.
  */
 export const SITE_UPLOAD_HEADERS = [
   'code',
   'name',
-  'phone',
   'lat',
   'lng',
   'region',
@@ -21,11 +22,14 @@ export const SITE_UPLOAD_HEADERS = [
   'cluster',
   'town',
   'rs_code',
+  'rs_name',
   'beat_name',
   'channel',
   'address',
+  'pincode',
   'vendor_code',
-  'asm_phone',
+  'asm_email',
+  'gsb_allowed',
   'status',
 ] as const;
 
@@ -40,7 +44,6 @@ export const SITE_ERROR_HEADERS = [
   'row_number',
   'code',
   'name',
-  'phone',
   'lat',
   'lng',
   'region',
@@ -48,11 +51,14 @@ export const SITE_ERROR_HEADERS = [
   'cluster',
   'town',
   'rs_code',
+  'rs_name',
   'beat_name',
   'channel',
   'address',
+  'pincode',
   'vendor_code',
-  'asm_phone',
+  'asm_email',
+  'gsb_allowed',
   'status',
   'error_remarks',
 ] as const;

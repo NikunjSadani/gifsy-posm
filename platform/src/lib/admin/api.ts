@@ -117,11 +117,14 @@ export interface SiteCreate {
   cluster?: string;
   town?: string;
   rsCode?: string;
+  rsName?: string;
   beatName?: string;
   channel?: string;
   address?: string;
+  pincode?: string;
   vendorId?: string;
   asmUserId?: string;
+  gsbAllowed?: boolean;
   status?: SiteStatus;
 }
 export interface SiteUpdate {
@@ -135,11 +138,14 @@ export interface SiteUpdate {
   cluster?: string;
   town?: string;
   rsCode?: string;
+  rsName?: string;
   beatName?: string;
   channel?: string;
   address?: string;
+  pincode?: string;
   vendorId?: string;
   asmUserId?: string;
+  gsbAllowed?: boolean;
   status?: SiteStatus;
 }
 

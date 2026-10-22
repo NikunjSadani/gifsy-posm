@@ -187,6 +187,41 @@ describe('SitesService.list — role scoping', () => {
 });
 
 // ── F8 — an un-assumed GIFSY_ADMIN cannot create a site (no tenant context) ────────
+describe('SitesService.get — scoped single fetch (reachable by VENDOR_FIELD)', () => {
+  // GET /v1/sites/:id is exposed to VENDOR_FIELD (recce page resolves one outlet's gsbAllowed),
+  // so get()'s vendor+tenant scoping is a security boundary: a field login must only ever read
+  // an outlet its own vendor services, and a vendor with no scope must fail closed (404).
+  function makeGetPrisma(site: unknown = null) {
+    const findFirst = jest.fn().mockResolvedValue(site);
+    const prisma = { site: { findFirst } } as unknown as PrismaService;
+    return { prisma, findFirst };
+  }
+
+  it('VENDOR_FIELD: findFirst where AND-s vendorId + clientId + id', async () => {
+    const { prisma, findFirst } = makeGetPrisma({ id: 's1', clientId: 'c1', vendorId: 'v9' });
+    const svc = new SitesService(prisma);
+    await svc.get(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }), 's1');
+    expect(findFirst).toHaveBeenCalledWith({ where: { clientId: 'c1', vendorId: 'v9', id: 's1' } });
+  });
+
+  it('VENDOR_FIELD with NO vendorId → FAIL-CLOSED: 404, issues NO query', async () => {
+    const { prisma, findFirst } = makeGetPrisma();
+    const svc = new SitesService(prisma);
+    await expect(
+      svc.get(user({ role: 'VENDOR_FIELD', vendorId: undefined }), 's1'),
+    ).rejects.toThrow('Site not found');
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('a scoped miss (other vendor / wrong id) → 404', async () => {
+    const { prisma } = makeGetPrisma(null);
+    const svc = new SitesService(prisma);
+    await expect(
+      svc.get(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }), 'sX'),
+    ).rejects.toThrow('Site not found');
+  });
+});
+
 describe('SitesService.create — F8 tenant-context write gate', () => {
   it('rejects create from an un-assumed GIFSY_ADMIN (400)', async () => {
     const prisma = { site: { create: jest.fn() } } as unknown as PrismaService;

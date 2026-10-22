@@ -1,5 +1,5 @@
 import {
-  IsString, IsNotEmpty, IsOptional, IsNumber, Min, Max, IsEnum, MaxLength,
+  IsString, IsNotEmpty, IsOptional, IsNumber, Min, Max, IsEnum, MaxLength, IsBoolean,
 } from 'class-validator';
 
 /** Mirrors the Prisma `SiteStatus` enum (avoids importing the generated enum into a DTO). */
@@ -75,6 +75,12 @@ export class CreateSiteDto {
   @MaxLength(120)
   beatName: string;
 
+  /** Display name for the RS (distributor) — paired with rsCode. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  rsName?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(60)
@@ -84,6 +90,17 @@ export class CreateSiteDto {
   @IsString()
   @MaxLength(300)
   address?: string;
+
+  /** Outlet postal PIN code. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  pincode?: string;
+
+  /** Per-outlet allow-list for the GSB element type (default false). */
+  @IsOptional()
+  @IsBoolean()
+  gsbAllowed?: boolean;
 
   /** A Vendor id in THIS tenant (validated server-side); the fleet servicing this site. */
   @IsOptional()

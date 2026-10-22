@@ -89,11 +89,17 @@ export interface Site {
   cluster: string | null;
   town: string | null;
   rsCode: string | null;
+  /** Human RS/distributor name (sits alongside the RS code). */
+  rsName: string | null;
   beatName: string | null;
   channel: string | null;
   address: string | null;
+  /** Postal pincode (sits alongside address). */
+  pincode: string | null;
   vendorId: string | null;
   asmUserId: string | null;
+  /** Whether the GSB element type may be captured at this outlet (default false). */
+  gsbAllowed: boolean;
   status: SiteStatus;
   createdAt?: string;
   updatedAt?: string;

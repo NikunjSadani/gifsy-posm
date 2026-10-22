@@ -25,9 +25,15 @@ export interface Site {
   lng: string | number | null;
   town: string | null;
   rsCode: string | null;
+  /** Human RS/distributor name (alongside the RS code). */
+  rsName: string | null;
   beatName: string | null;
+  /** Postal pincode. */
+  pincode: string | null;
   vendorId: string | null;
   asmUserId: string | null;
+  /** Whether the GSB element type may be captured at this outlet. Gates the recce element picker. */
+  gsbAllowed: boolean;
   status: SiteStatus;
 }
 
@@ -72,6 +78,17 @@ export function fetchSites(filters: SiteFilters = {}) {
 }
 
 /**
+ * Fetch ONE vendor-scoped outlet by id (`GET /v1/sites/:id`). Authoritative per-outlet read —
+ * used by the recce page to resolve an outlet's `gsbAllowed` gate for the exact `siteId` instead
+ * of scanning the capped list (which could miss an outlet beyond the window for a large fleet).
+ * Scoped server-side to the caller's vendor/tenant: a 404 means "not your outlet". Returns the
+ * api-client `ApiResponse` so callers branch on `.success`.
+ */
+export function fetchSite(id: string) {
+  return api.get<Site>(`/api/sites/${encodeURIComponent(id)}`);
+}
+
+/**
  * One outlet matched by `GET /v1/sites/lookup?outletId=…` (the warn-and-prefill contract). Note
  * `address` is carried here (the list `Site` has no address) because the manual-recce form
  * prefills it read-only when an entered Outlet ID already exists.
@@ -82,6 +99,8 @@ export interface SiteLookupMatch {
   name: string;
   address: string | null;
   phone: string | null;
+  /** Whether the GSB element type may be captured at the matched (attached) outlet. */
+  gsbAllowed: boolean;
 }
 
 /** `GET /v1/sites/lookup` payload — `exists` plus the matched outlet when found. */

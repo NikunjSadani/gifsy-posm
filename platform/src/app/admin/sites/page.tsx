@@ -38,11 +38,14 @@ const emptyForm = {
   cluster: '',
   town: '',
   rsCode: '',
+  rsName: '',
   beatName: '',
   channel: '',
   address: '',
+  pincode: '',
   vendorId: '',
   asmUserId: '',
+  gsbAllowed: false,
   status: 'ACTIVE' as SiteStatus,
 };
 
@@ -165,11 +168,14 @@ export default function SitesPage() {
       cluster: s.cluster ?? '',
       town: s.town ?? '',
       rsCode: s.rsCode ?? '',
+      rsName: s.rsName ?? '',
       beatName: s.beatName ?? '',
       channel: s.channel ?? '',
       address: s.address ?? '',
+      pincode: s.pincode ?? '',
       vendorId: s.vendorId ?? '',
       asmUserId: s.asmUserId ?? '',
+      gsbAllowed: s.gsbAllowed ?? false,
       status: s.status,
     });
     setFieldErrors({});
@@ -197,11 +203,14 @@ export default function SitesPage() {
         cluster: form.cluster.trim(),
         town: form.town.trim(),
         rsCode: form.rsCode.trim(),
+        rsName: form.rsName.trim(),
         beatName: form.beatName.trim(),
         channel: form.channel.trim(),
         address: form.address.trim(),
+        pincode: form.pincode.trim(),
         vendorId: form.vendorId,
         asmUserId: form.asmUserId,
+        gsbAllowed: form.gsbAllowed,
         status: form.status,
       };
       if (hasCoords) {
@@ -222,11 +231,15 @@ export default function SitesPage() {
       if (form.cluster.trim()) body.cluster = form.cluster.trim();
       if (form.town.trim()) body.town = form.town.trim();
       if (form.rsCode.trim()) body.rsCode = form.rsCode.trim();
+      if (form.rsName.trim()) body.rsName = form.rsName.trim();
       if (form.beatName.trim()) body.beatName = form.beatName.trim();
       if (form.channel.trim()) body.channel = form.channel.trim();
       if (form.address.trim()) body.address = form.address.trim();
+      if (form.pincode.trim()) body.pincode = form.pincode.trim();
       if (form.vendorId) body.vendorId = form.vendorId;
       if (form.asmUserId) body.asmUserId = form.asmUserId;
+      // gsbAllowed is a boolean toggle (default false) — always send it explicitly.
+      body.gsbAllowed = form.gsbAllowed;
       if (hasCoords) {
         body.lat = Number(form.lat);
         body.lng = Number(form.lng);
@@ -270,7 +283,23 @@ export default function SitesPage() {
 
   const columns: Column<Site>[] = [
     { key: 'code', header: 'Code', render: (s) => <span className="font-mono text-gray-900">{s.code}</span> },
-    { key: 'name', header: 'Name', render: (s) => <span className="font-medium text-gray-900">{s.name}</span> },
+    {
+      key: 'name',
+      header: 'Name',
+      render: (s) => (
+        <span className="flex items-center gap-1.5">
+          <span className="font-medium text-gray-900">{s.name}</span>
+          {s.gsbAllowed && (
+            <span
+              className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-[var(--brand-primary)] bg-[var(--brand-primary-light)]"
+              title="GSB allowed at this outlet"
+            >
+              GSB
+            </span>
+          )}
+        </span>
+      ),
+    },
     { key: 'town', header: 'Town', render: (s) => <span className="text-gray-600">{s.town || '—'}</span> },
     { key: 'vendor', header: 'Vendor', render: (s) => <span className="text-gray-600">{s.vendorId ? vendorName.get(s.vendorId) ?? '—' : '—'}</span> },
     { key: 'asm', header: 'ASM', render: (s) => <span className="text-gray-600">{s.asmUserId ? asmName.get(s.asmUserId) ?? '—' : '—'}</span> },
@@ -489,6 +518,13 @@ export default function SitesPage() {
             maxLength={60}
           />
           <Input
+            label="RS name"
+            placeholder="Retailer/distributor name"
+            value={form.rsName}
+            onChange={(e) => setForm((f) => ({ ...f, rsName: e.target.value }))}
+            maxLength={160}
+          />
+          <Input
             label="Region"
             placeholder="Region"
             value={form.region}
@@ -530,6 +566,22 @@ export default function SitesPage() {
             value={form.address}
             onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
             maxLength={300}
+          />
+          <Input
+            label="Pincode"
+            placeholder="Postal pincode"
+            value={form.pincode}
+            onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value }))}
+            maxLength={20}
+          />
+          <Select
+            label="GSB allowed at this outlet"
+            options={[
+              { value: 'false', label: 'No' },
+              { value: 'true', label: 'Yes' },
+            ]}
+            value={form.gsbAllowed ? 'true' : 'false'}
+            onValueChange={(v) => setForm((f) => ({ ...f, gsbAllowed: v === 'true' }))}
           />
           <Select
             label="Status"

@@ -38,6 +38,8 @@ import {
   rejectionLabel,
   type RecceDetail,
 } from '@/lib/field/recce-api';
+import { fetchSite } from '@/lib/field/sites';
+import { gatePosmTypesByGsb, isGsbHiddenForOutlet } from '@/lib/field/posm-gate';
 
 interface PosmTypeApi {
   id: string;
@@ -78,6 +80,14 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
   const [typesLoading, setTypesLoading] = useState(true);
   const [typesError, setTypesError] = useState<string | null>(null);
 
+  // Per-outlet GSB gate: whether this outlet permits the GSB element type. `null` = not yet
+  // resolved. Resolved by an AUTHORITATIVE per-outlet fetch (`GET /v1/sites/:id`, vendor-scoped)
+  // for this exact siteId — so a large-fleet vendor can't be mis-gated by an outlet falling outside
+  // a capped list window. The backend hard-rejects a GSB submission on a disallowed outlet
+  // regardless — this only hides the option in the picker.
+  const [gsbAllowed, setGsbAllowed] = useState<boolean | null>(null);
+  const [gsbLoading, setGsbLoading] = useState(true);
+
   // Recce context (create vs resubmit vs blocked) resolved on load.
   const [ctxLoading, setCtxLoading] = useState(true);
   const [mode, setMode] = useState<Mode>('create');
@@ -114,6 +124,24 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       alive = false;
     };
   }, []);
+
+  // Resolve the outlet's GSB permission for the picker gate via an authoritative per-outlet fetch
+  // (vendor-scoped `GET /v1/sites/:id`). Fail OPEN only on a transient fetch failure: the backend
+  // still hard-blocks a GSB submission on a disallowed outlet, so the worst case is a 400 we
+  // already surface honestly — never a wrongly-hidden GSB for a legitimately-allowed outlet.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setGsbLoading(true);
+      const res = await fetchSite(siteId);
+      if (!alive) return;
+      setGsbAllowed(res.success ? res.data.gsbAllowed : true);
+      setGsbLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [siteId]);
 
   // Resolve the recce context: an explicit ?recceId (from My Work "Re-capture"), or detect an
   // existing recce for this site. A REJECTED recce → resubmit; SUBMITTED/APPROVED → blocked.
@@ -169,6 +197,16 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
   );
   const hasIncompleteStarted = active.some((s) => s.started && s.line === null);
   const canSubmit = readyLines.length >= 1 && !submitting && !typesError && mode !== 'blocked';
+
+  // GSB gate: hide the GSB element type from the picker when this outlet disallows it. Until the
+  // permission resolves we treat it as allowed, but the render gate waits on `gsbLoading` so the
+  // GSB option never flashes before being removed.
+  const effectiveGsbAllowed = gsbAllowed ?? true;
+  const visiblePosmTypes = useMemo(
+    () => gatePosmTypesByGsb(posmTypes, effectiveGsbAllowed),
+    [posmTypes, effectiveGsbAllowed],
+  );
+  const gsbHidden = isGsbHiddenForOutlet(posmTypes, effectiveGsbAllowed);
 
   const submit = async () => {
     if (inFlight.current || submitting) return; // synchronous double-tap guard
@@ -271,15 +309,20 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
         </div>
       )}
 
-      {typesLoading || ctxLoading ? (
+      {typesLoading || ctxLoading || gsbLoading ? (
         <LoadingScreen />
       ) : typesError || mode === 'blocked' ? null : (
         <div className="mt-4 space-y-4">
+          {gsbHidden && (
+            <p className="rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              GSB is not approved for this outlet.
+            </p>
+          )}
           {Array.from({ length: count }).map((_, i) => (
             <PosmCaptureCard
               key={i}
               slot={i + 1}
-              posmTypes={posmTypes}
+              posmTypes={visiblePosmTypes}
               onChange={(s) => setStateAt(i, s)}
               onRemove={i === 1 ? removeSecond : undefined}
               collapsed={count === 2 && i !== expandedIndex}
