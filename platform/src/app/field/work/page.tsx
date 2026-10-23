@@ -205,14 +205,14 @@ export default function MyWorkPage() {
           </div>
           <h2 className="text-base font-bold text-gray-900">No work yet</h2>
           <p className="mt-1.5 text-sm text-gray-500">
-            Start a recce at one of your sites and it will show up here with its status.
+            Start a recce at one of your outlets and it will show up here with its status.
           </p>
           <Link
             href="/field/sites"
             className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-[var(--brand-primary)] px-5 py-3 font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95"
           >
             <MapPin className="h-4 w-4" />
-            Browse my sites
+            Browse my outlets
           </Link>
         </div>
       )}

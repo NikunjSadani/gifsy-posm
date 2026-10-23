@@ -209,7 +209,7 @@ describe('SitesService.get — scoped single fetch (reachable by VENDOR_FIELD)',
     const svc = new SitesService(prisma);
     await expect(
       svc.get(user({ role: 'VENDOR_FIELD', vendorId: undefined }), 's1'),
-    ).rejects.toThrow('Site not found');
+    ).rejects.toThrow('Outlet not found');
     expect(findFirst).not.toHaveBeenCalled();
   });
 
@@ -218,7 +218,7 @@ describe('SitesService.get — scoped single fetch (reachable by VENDOR_FIELD)',
     const svc = new SitesService(prisma);
     await expect(
       svc.get(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }), 'sX'),
-    ).rejects.toThrow('Site not found');
+    ).rejects.toThrow('Outlet not found');
   });
 });
 

@@ -142,7 +142,7 @@ export type RejectReasonCode = (typeof REJECT_REASON_CODES)[number];
 /** Human labels for the controlled reject-reason vocabulary. */
 export const REJECT_REASON_LABELS: Record<RejectReasonCode, string> = {
   BLURRY: 'Blurry / unclear photo',
-  WRONG_SITE: 'Wrong site',
+  WRONG_SITE: 'Wrong outlet',
   POSM_NOT_VISIBLE: 'Element not visible',
   GEO_MISMATCH: 'Location mismatch',
   DUPLICATE_PHOTO: 'Duplicate photo',

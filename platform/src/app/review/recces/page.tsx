@@ -155,7 +155,7 @@ export default function ReviewQueuePage() {
       {/* Filters */}
       <form onSubmit={applyFilters} className="flex flex-wrap items-end gap-2 rounded-2xl border border-gray-100 bg-white p-3">
         <div className="flex-1 min-w-[8rem]">
-          <label htmlFor="f-site" className="block text-xs font-medium text-gray-600 mb-1">Site code</label>
+          <label htmlFor="f-site" className="block text-xs font-medium text-gray-600 mb-1">Outlet code</label>
           <input
             id="f-site"
             value={siteCodeInput}
@@ -243,7 +243,7 @@ export default function ReviewQueuePage() {
           </h3>
           <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">
             {hasFilters
-              ? 'Try a different site code or town, or clear the filters.'
+              ? 'Try a different outlet code or town, or clear the filters.'
               : 'New field submissions for your territory will appear here for approval.'}
           </p>
           {hasFilters && (
@@ -292,7 +292,7 @@ export default function ReviewQueuePage() {
         message={
           <>
             You&apos;re about to approve <span className="font-semibold">{selected.size}</span> recce
-            {selected.size === 1 ? '' : 's'}. This unlocks installation for those sites. Any recce that
+            {selected.size === 1 ? '' : 's'}. This unlocks installation for those outlets. Any recce that
             was already reviewed or is outside your territory will be skipped.
           </>
         }

@@ -67,7 +67,7 @@ export function base64ToBlob(base64: string, mime: string): Blob {
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** Trigger a browser download of the base64 .xlsx rejection report. */
-export function downloadErrorReport(base64: string, fileName = 'site-upload-errors.xlsx'): void {
+export function downloadErrorReport(base64: string, fileName = 'outlet-upload-errors.xlsx'): void {
   const blob = base64ToBlob(base64, XLSX_MIME);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

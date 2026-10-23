@@ -97,7 +97,7 @@ export default function RecceDetailPage() {
       if (res.status === 409) void load();
       return;
     }
-    toast.success('Recce approved. Installation is unlocked for this site.');
+    toast.success('Recce approved. Installation is unlocked for this outlet.');
     router.push('/review/recces');
   };
 
@@ -269,7 +269,7 @@ export default function RecceDetailPage() {
           (item.integrity.captureLat != null && item.integrity.captureLng != null)) && (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-gray-100">
             {item.integrity.distanceMeters != null && (
-              <Stat label="Distance from site" value={`${Math.round(item.integrity.distanceMeters)} m`} />
+              <Stat label="Distance from outlet" value={`${Math.round(item.integrity.distanceMeters)} m`} />
             )}
             {item.integrity.captureAccuracy != null && (
               <Stat label="GPS accuracy" value={`±${Math.round(item.integrity.captureAccuracy)} m`} />
@@ -334,7 +334,7 @@ export default function RecceDetailPage() {
         message={
           <>
             Approving <span className="font-semibold">{item.site.name}</span> ({item.site.code}) unlocks
-            installation for this site. This can&apos;t be undone from here.
+            installation for this outlet. This can&apos;t be undone from here.
           </>
         }
         confirmLabel="Approve"

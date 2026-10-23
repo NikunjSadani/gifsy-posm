@@ -39,8 +39,8 @@ const COLS: ColDef[] = [
       <span className="ml-1.5 text-xs text-gray-400">{r.vendorCode}</span>
     </span>
   ) },
-  { key: 'sites', header: 'Sites', numeric: true, render: (r) => r.sites.toLocaleString() },
-  { key: 'recced', header: 'Recced', numeric: true, render: (r) => r.recced.toLocaleString() },
+  { key: 'sites', header: 'Outlets', numeric: true, render: (r) => r.sites.toLocaleString() },
+  { key: 'recced', header: 'Recce', numeric: true, render: (r) => r.recced.toLocaleString() },
   { key: 'approved', header: 'ASM approved', numeric: true, render: (r) => r.approved.toLocaleString() },
   { key: 'hoApproved', header: 'HO approved', numeric: true, render: (r) => r.hoApproved.toLocaleString() },
   { key: 'installed', header: 'Installed', numeric: true, render: (r) => r.installed.toLocaleString() },
@@ -124,7 +124,7 @@ export function VendorScorecards({
             <Inbox className="h-6 w-6" />
           </div>
           <p className="text-base font-semibold text-gray-900">No vendors yet</p>
-          <p className="text-sm text-gray-500 mt-1">Scorecards appear once vendors have sites assigned.</p>
+          <p className="text-sm text-gray-500 mt-1">Scorecards appear once vendors have outlets assigned.</p>
         </div>
       ) : (
         <div className="overflow-x-auto">

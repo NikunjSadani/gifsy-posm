@@ -117,7 +117,7 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
     setSubmitting(false);
     if (res.success) {
       setConfirmApprove(false);
-      toast.success('Approved — installation is unlocked for this site.');
+      toast.success('Approved — installation is unlocked for this outlet.');
       router.push('/admin/recce-ho-review');
       return;
     }
@@ -282,7 +282,7 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
               (item.integrity.captureLat != null && item.integrity.captureLng != null)) && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-gray-100">
                 {item.integrity.distanceMeters != null && (
-                  <Stat label="Distance from site" value={`${Math.round(item.integrity.distanceMeters)} m`} />
+                  <Stat label="Distance from outlet" value={`${Math.round(item.integrity.distanceMeters)} m`} />
                 )}
                 {item.integrity.captureAccuracy != null && (
                   <Stat label="GPS accuracy" value={`±${Math.round(item.integrity.captureAccuracy)} m`} />
@@ -306,7 +306,7 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
             <p className="mt-1 text-sm text-emerald-900">
               {isManual
                 ? 'This is a field-entered manual recce (no ASM stage). Set a valid Outlet ID below, then approve to clear Head-Office review and unlock installation — or reject to send it back to the field.'
-                : 'Approve to clear Head-Office review (installation unlocks for this site), or reject to send it back to the field for re-capture.'}
+                : 'Approve to clear Head-Office review (installation unlocks for this outlet), or reject to send it back to the field for re-capture.'}
             </p>
           </div>
 
@@ -440,7 +440,7 @@ export default function RecceHoReviewDetailPage({ params }: { params: Promise<{ 
                 ) : (
                   <> ({item.site.code})</>
                 )}{' '}
-                clears Head-Office review and unlocks installation for this site. This can&apos;t be
+                clears Head-Office review and unlocks installation for this outlet. This can&apos;t be
                 undone from here.
               </>
             }

@@ -153,7 +153,7 @@ export default function VendorsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Vendors</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Fleets that service your sites.</p>
+          <p className="text-sm text-gray-500 mt-0.5">Fleets that service your outlets.</p>
         </div>
         <Button variant="primary" onClick={openCreate}>
           <Plus className="h-4 w-4" />

@@ -200,7 +200,7 @@ export function FieldEditorRow({
               <CheckRow
                 checked={!!field.geoFenceRequired}
                 onChange={(v) => patch({ geoFenceRequired: v })}
-                label="Flag if the photo falls outside the site geo-fence"
+                label="Flag if the photo falls outside the outlet geo-fence"
                 disabled={disabled}
               />
               <CheckRow

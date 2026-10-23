@@ -240,9 +240,9 @@ export class SitesService {
   // ── Get one (scoped) ───────────────────────────────────────────────────────────
   async get(user: JwtPayload, id: string) {
     const scope = this.scopedWhere(user);
-    if (scope === null) throw new NotFoundException('Site not found');
+    if (scope === null) throw new NotFoundException('Outlet not found');
     const site = await this.prisma.site.findFirst({ where: { ...scope, id } });
-    if (!site) throw new NotFoundException('Site not found');
+    if (!site) throw new NotFoundException('Outlet not found');
     return site;
   }
 
@@ -708,7 +708,7 @@ export class SitesService {
     const ws = aoaToSheetSafe([headers]);
     ws['!cols'] = headers.map((h) => ({ wch: h.length + 8 }));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Sites');
+    XLSX.utils.book_append_sheet(wb, ws, 'Outlets');
     return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
@@ -753,7 +753,7 @@ export class SitesService {
   /** Map a Prisma unique-constraint violation on (clientId, code) to a clean 400. */
   private mapUniqueError(e: unknown, code: string): Error {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-      return new BadRequestException(`A site with code "${code}" already exists in this tenant`);
+      return new BadRequestException(`An outlet with code "${code}" already exists in this tenant`);
     }
     return e as Error;
   }

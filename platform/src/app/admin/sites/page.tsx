@@ -97,7 +97,7 @@ export default function SitesPage() {
       setTotal(res.data.total);
       setLoadError(null);
     } else {
-      setLoadError(res.error || 'Could not load sites.');
+      setLoadError(res.error || 'Could not load outlets.');
       setSites([]);
       setTotal(0);
     }
@@ -248,10 +248,10 @@ export default function SitesPage() {
     }
     setSaving(false);
     if (!res.success) {
-      setFormError(res.error || 'Could not save the site.');
+      setFormError(res.error || 'Could not save the outlet.');
       return;
     }
-    toast.success(editing?.mode === 'edit' ? 'Site updated' : 'Site created');
+    toast.success(editing?.mode === 'edit' ? 'Outlet updated' : 'Outlet created');
     setEditing(null);
     void load();
   };
@@ -263,10 +263,10 @@ export default function SitesPage() {
     const res = await sitesApi.deactivate(confirm.id);
     setConfirmBusy(false);
     if (!res.success) {
-      setConfirmError(res.error || 'Could not deactivate the site.');
+      setConfirmError(res.error || 'Could not deactivate the outlet.');
       return;
     }
-    toast.success('Site deactivated');
+    toast.success('Outlet deactivated');
     setConfirm(null);
     void load();
   };
@@ -274,10 +274,10 @@ export default function SitesPage() {
   const reactivate = async (s: Site) => {
     const res = await sitesApi.reactivate(s.id);
     if (!res.success) {
-      toast.error(res.error || 'Could not reactivate the site.');
+      toast.error(res.error || 'Could not reactivate the outlet.');
       return;
     }
-    toast.success('Site reactivated');
+    toast.success('Outlet reactivated');
     void load();
   };
 
@@ -336,7 +336,7 @@ export default function SitesPage() {
       <div>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Sites</h1>
+            <h1 className="text-xl font-bold text-gray-900">Outlets</h1>
             <p className="text-sm text-gray-500 mt-0.5">
               Retail outlets your vendors service.{' '}
               {!loading && !loadError && <span className="text-gray-400">{total} total</span>}
@@ -344,14 +344,14 @@ export default function SitesPage() {
           </div>
           <Button variant="primary" onClick={openCreate}>
             <Plus className="h-4 w-4" />
-            New site
+            New outlet
           </Button>
         </div>
 
         {/* Search + filters */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-200 px-3 py-2 focus-within:border-[var(--brand-primary)] transition-colors flex-1 min-w-[200px] max-w-sm">
-            <label htmlFor={searchId} className="sr-only">Search sites by name</label>
+            <label htmlFor={searchId} className="sr-only">Search outlets by name</label>
             <Search className="h-4 w-4 text-gray-400 shrink-0" aria-hidden="true" />
             <input
               id={searchId}
@@ -391,11 +391,11 @@ export default function SitesPage() {
           rowKey={(s) => s.id}
           loading={loading}
           error={loadError}
-          emptyTitle={search || vendorFilter || statusFilter !== 'ALL' ? 'No matching sites' : 'No sites yet'}
+          emptyTitle={search || vendorFilter || statusFilter !== 'ALL' ? 'No matching outlets' : 'No outlets yet'}
           emptyDescription={
             search || vendorFilter || statusFilter !== 'ALL'
               ? 'Try a different search or filter.'
-              : 'Create a site or bulk-upload from Excel below.'
+              : 'Create an outlet or bulk-upload from Excel below.'
           }
           rowClassName={(s) => (s.status === 'ACTIVE' ? undefined : 'opacity-60')}
         />
@@ -431,9 +431,9 @@ export default function SitesPage() {
       </div>
 
       <UploadPanel
-        title="Bulk upload sites (Excel)"
+        title="Bulk upload outlets (Excel)"
         description={
-          <>Upload an .xlsx / .xls file. Existing sites (matched by <code className="text-xs">code</code>) are
+          <>Upload an .xlsx / .xls file. Existing outlets (matched by <code className="text-xs">code</code>) are
           updated; new codes are created. Max 5 MB / 5000 rows per file.</>
         }
         headers={SITE_UPLOAD_HEADERS}
@@ -446,15 +446,15 @@ export default function SitesPage() {
         }
         upload={sitesApi.bulkUpload}
         templateUrl="/api/sites/bulk-upload/template"
-        templateFileName="site-upload-template.xlsx"
+        templateFileName="outlet-upload-template.xlsx"
         onUploaded={() => void load()}
       />
 
       <FormDialog
         open={editing !== null}
         onOpenChange={(o) => !o && setEditing(null)}
-        title={editing?.mode === 'edit' ? 'Edit site' : 'New site'}
-        submitLabel={editing?.mode === 'edit' ? 'Save changes' : 'Create site'}
+        title={editing?.mode === 'edit' ? 'Edit outlet' : 'New outlet'}
+        submitLabel={editing?.mode === 'edit' ? 'Save changes' : 'Create outlet'}
         loading={saving}
         error={formError}
         onSubmit={submit}
@@ -612,7 +612,7 @@ export default function SitesPage() {
       <ConfirmDialog
         open={confirm !== null}
         onOpenChange={(o) => !o && setConfirm(null)}
-        title="Deactivate site?"
+        title="Deactivate outlet?"
         description={confirm ? `"${confirm.name}" (${confirm.code}) will be set to INACTIVE. You can reactivate it later.` : undefined}
         confirmLabel="Deactivate"
         loading={confirmBusy}

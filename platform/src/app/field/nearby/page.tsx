@@ -79,9 +79,9 @@ export default function NearbyPage() {
       {/* Status banner */}
       <div className="absolute left-4 top-4 z-[500] max-w-[calc(100%-5rem)]">
         <div className="bg-white/95 backdrop-blur rounded-2xl shadow-lg border border-gray-100 px-3 py-2">
-          <p className="text-xs font-semibold text-gray-800">{geoTaggedCount} sites on map</p>
+          <p className="text-xs font-semibold text-gray-800">{geoTaggedCount} outlets on map</p>
           {geoState === 'denied' && (
-            <p className="text-[11px] text-amber-600 mt-0.5">Location off — showing sites only</p>
+            <p className="text-[11px] text-amber-600 mt-0.5">Location off — showing outlets only</p>
           )}
           {geoState === 'unsupported' && (
             <p className="text-[11px] text-amber-600 mt-0.5">Location not supported on this device</p>

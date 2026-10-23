@@ -48,7 +48,7 @@ export function GeoMap({
   onRetry,
   onSelect,
   truncated,
-  title = 'Site execution map',
+  title = 'Outlet execution map',
 }: {
   points: GeoPoint[] | null;
   stage: AnalyticsStage;
@@ -108,9 +108,9 @@ export function GeoMap({
             <div className="p-4 bg-gray-100 rounded-full mb-3 text-gray-400">
               <MapPinOff className="h-6 w-6" />
             </div>
-            <p className="text-base font-semibold text-gray-900">No geotagged sites</p>
+            <p className="text-base font-semibold text-gray-900">No geotagged outlets</p>
             <p className="text-sm text-gray-500 mt-1 max-w-sm">
-              Sites appear here once their captures carry GPS coordinates.
+              Outlets appear here once their captures carry GPS coordinates.
             </p>
           </div>
         ) : (
@@ -120,7 +120,7 @@ export function GeoMap({
 
       {truncated && !loading && !error && (
         <div className="px-4 py-2 border-t border-amber-100 bg-amber-50 text-xs text-amber-800">
-          Showing the first 5,000 sites — refine filters to see the rest.
+          Showing the first 5,000 outlets — refine filters to see the rest.
         </div>
       )}
 

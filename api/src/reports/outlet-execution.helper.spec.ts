@@ -78,7 +78,7 @@ describe('outlet-execution helpers', () => {
         status: 'REJECTED', hoReviewStatus: 'NONE',
         rejectionReasonCode: 'WRONG_SITE', rejectionReason: null,
       } as any),
-    ).toBe('Wrong site');
+    ).toBe('Wrong outlet');
     // an HO rejection (also status REJECTED) is NOT an ASM rejection → empty here
     expect(
       asmRejectionReasonLabel({

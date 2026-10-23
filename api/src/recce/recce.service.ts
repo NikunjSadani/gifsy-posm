@@ -91,11 +91,11 @@ export class RecceService {
     if (existing) {
       if (existing.status === RecceStatus.REJECTED) {
         throw new ConflictException(
-          'This site already has a rejected recce — re-capture it via POST /v1/recce/:id/resubmit.',
+          'This outlet already has a rejected recce — re-capture it via POST /v1/recce/:id/resubmit.',
         );
       }
       throw new ConflictException(
-        `This site already has a ${existing.status} recce (a submitted recce is immutable).`,
+        `This outlet already has a ${existing.status} recce (a submitted recce is immutable).`,
       );
     }
 
@@ -142,7 +142,7 @@ export class RecceService {
       // A4: a concurrent create racing the one-live-recce-per-site unique constraint surfaces a
       // clean 409, not a raw 500.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('This site already has a recce (concurrent submit).');
+        throw new ConflictException('This outlet already has a recce (concurrent submit).');
       }
       throw e;
     }
@@ -171,7 +171,7 @@ export class RecceService {
     // vendor role with no resolvable vendor FAILS CLOSED (404), never an unscoped create.
     const v = vendorScope(user);
     if ((user.role === 'VENDOR_FIELD' || user.role === 'VENDOR_HO') && !v) {
-      throw new NotFoundException('Site not found');
+      throw new NotFoundException('Outlet not found');
     }
 
     // Outlet Name is REQUIRED (also guarded in the DTO) — reject a blank / whitespace-only name.
@@ -300,7 +300,7 @@ export class RecceService {
         `Only a REJECTED recce can be resubmitted (this one is ${recce.status}).`,
       );
     }
-    if (recce.site.status !== 'ACTIVE') throw new BadRequestException('Site is not active');
+    if (recce.site.status !== 'ACTIVE') throw new BadRequestException('Outlet is not active');
 
     const prepared = await this.prepare(clientId, recce.site, dto.posms);
 
@@ -539,8 +539,8 @@ export class RecceService {
     if (config.geoFence.enabled && (agg.anyOutside || agg.anyUnverifiable)) {
       throw new ForbiddenException(
         agg.anyOutside
-          ? 'A photo was captured outside the site geo-fence. Re-capture at the site.'
-          : 'A photo has no verifiable in-fence GPS fix (missing, invalid, or low-accuracy). Re-capture at the site with location enabled.',
+          ? 'A photo was captured outside the outlet geo-fence. Re-capture at the outlet.'
+          : 'A photo has no verifiable in-fence GPS fix (missing, invalid, or low-accuracy). Re-capture at the outlet with location enabled.',
       );
     }
 
@@ -614,13 +614,13 @@ export class RecceService {
   private async loadOwnedActiveSite(user: JwtPayload, siteId: string) {
     const v = vendorScope(user);
     if ((user.role === 'VENDOR_FIELD' || user.role === 'VENDOR_HO') && !v) {
-      throw new NotFoundException('Site not found');
+      throw new NotFoundException('Outlet not found');
     }
     const site = await this.prisma.site.findFirst({
       where: { id: siteId, clientId: user.clientId, ...(v ? { vendorId: v } : {}) },
     });
-    if (!site) throw new NotFoundException('Site not found');
-    if (site.status !== 'ACTIVE') throw new BadRequestException('Site is not active');
+    if (!site) throw new NotFoundException('Outlet not found');
+    if (site.status !== 'ACTIVE') throw new BadRequestException('Outlet is not active');
     return site;
   }
 

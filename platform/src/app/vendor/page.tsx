@@ -110,7 +110,7 @@ export default function VendorDashboardPage() {
           loading={geo.loading}
           error={geo.error}
           onRetry={() => loadGeo(stage)}
-          title="Your sites"
+          title="Your outlets"
         />
       </div>
 

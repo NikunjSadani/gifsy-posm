@@ -187,7 +187,7 @@ export default function AuditDetailPage({ params }: { params: Promise<{ id: stri
             {formatLatLng(item.site.lat, item.site.lng) && (
               <p className="mt-3 inline-flex items-center gap-1 text-[11px] text-gray-500 font-mono">
                 <MapPin className="h-3.5 w-3.5 text-gray-400" />
-                Site: {formatLatLng(item.site.lat, item.site.lng)}
+                Outlet: {formatLatLng(item.site.lat, item.site.lng)}
               </p>
             )}
           </div>

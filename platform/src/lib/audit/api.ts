@@ -141,7 +141,7 @@ export interface RejectBody {
 /** Ordered reason options with human labels for the reject dialog. */
 export const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
   { code: 'BLURRY', label: 'Blurry / poor-quality photo' },
-  { code: 'WRONG_SITE', label: 'Wrong site' },
+  { code: 'WRONG_SITE', label: 'Wrong outlet' },
   { code: 'POSM_NOT_VISIBLE', label: 'Element not visible' },
   { code: 'GEO_MISMATCH', label: 'Geo-location mismatch' },
   { code: 'DUPLICATE_PHOTO', label: 'Duplicate photo' },

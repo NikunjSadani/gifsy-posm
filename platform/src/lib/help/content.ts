@@ -62,7 +62,7 @@ export const ROLE_LABELS: Record<HelpRole, string> = {
 export const FIELD_NOTES: HelpNote = {
   title: 'Photo & location rules — good to know',
   points: [
-    'You must be physically at the site, inside its geo-fence, for the capture to be accepted. If you are too far away the app will block the photo.',
+    'You must be physically at the outlet, inside its geo-fence, for the capture to be accepted. If you are too far away the app will block the photo.',
     'Take one distinct, real photo per Element slot — do not reuse the same shot for two Elements or upload from your gallery.',
     'An installation photo must be a fresh, post-install picture. Re-using the recce photo at the install stage is not allowed.',
     'Keep good lighting and frame the whole Element. Clear photos get approved faster and avoid re-capture.',
@@ -77,22 +77,22 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/field/sites',
     showFieldNotes: true,
     intro:
-      'This is your field app for putting up Elements at your assigned sites. You capture a recce at each site, and once your ASM approves it you go back to install and photograph the finished Element.',
+      'This is your field app for putting up Elements at your assigned outlets. You capture a recce at each outlet, and once your ASM approves it you go back to install and photograph the finished Element.',
     topics: [
       {
-        title: 'Find and open one of my sites',
+        title: 'Find and open one of my outlets',
         steps: [
-          'Tap “Sites” in the bottom menu — it lists every site assigned to you.',
+          'Tap “Outlets” in the bottom menu — it lists every outlet assigned to you.',
           'Search by name, or tap the filter icon to filter by code, town or RS code.',
-          'Tap a site to see its details and directions.',
-          'Prefer to work by distance? Open “Nearby” to see the closest sites to you right now.',
+          'Tap an outlet to see its details and directions.',
+          'Prefer to work by distance? Open “Nearby” to see the closest outlets to you right now.',
         ],
       },
       {
         title: 'Capture a recce',
         steps: [
-          'Open the site and tap “Start recce”.',
-          'Travel to the site — you must be inside its geo-fence for the app to let you capture.',
+          'Open the outlet and tap “Start recce”.',
+          'Travel to the outlet — you must be inside its geo-fence for the app to let you capture.',
           'For each Element slot, take one clear, distinct photo of where the Element will go.',
           'Review your photos, then submit. The recce goes to your ASM for approval.',
           'You can track it under “My Work” — it will sit in “Awaiting approval” until the ASM acts.',
@@ -103,7 +103,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
         steps: [
           'Open “My Work” and look under “Needs re-capture”.',
           'Read the reason the ASM sent it back — it tells you what to fix.',
-          'Tap “Re-capture”, return to the site, and take fresh photos that address the reason.',
+          'Tap “Re-capture”, return to the outlet, and take fresh photos that address the reason.',
           'Submit again. This updates the same recce rather than creating a new one.',
         ],
       },
@@ -112,7 +112,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
         steps: [
           'In “My Work”, find the recce under “Ready to install” (approved by the ASM).',
           'Tap “Start installation” — this is the only way into the install screen.',
-          'Put up each Element at the site, inside the geo-fence.',
+          'Put up each Element at the outlet, inside the geo-fence.',
           'Photograph every installed Element with a fresh post-install photo (not the recce photo).',
           'Submit. Your installation now goes to the Auditor for final review.',
         ],
@@ -134,28 +134,28 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/review',
     showFieldNotes: true,
     intro:
-      'You review the recces captured by field vendors in your territory. Approving a recce unlocks the installation for that site; rejecting it sends the vendor back to re-capture.',
+      'You review the recces captured by field vendors in your territory. Approving a recce unlocks the installation for that outlet; rejecting it sends the vendor back to re-capture.',
     topics: [
       {
         title: 'Work the recce approval queue',
         steps: [
           'Open “Approval Queue” to see the recces waiting for your approval.',
-          'You only see sites in your own territory.',
+          'You only see outlets in your own territory.',
           'Tap a recce to open it and review every Element photo.',
         ],
       },
       {
         title: 'Approve a recce',
         steps: [
-          'Open the recce and check each Element photo against the site and the expected Element slots.',
-          'Confirm the photos are clear, distinct, and taken at the site.',
-          'Tap “Approve”. This unlocks the installation step for the vendor at that site.',
+          'Open the recce and check each Element photo against the outlet and the expected Element slots.',
+          'Confirm the photos are clear, distinct, and taken at the outlet.',
+          'Tap “Approve”. This unlocks the installation step for the vendor at that outlet.',
         ],
       },
       {
         title: 'Reject a recce',
         steps: [
-          'If a photo is unclear, reused, or clearly not at the site, tap “Reject”.',
+          'If a photo is unclear, reused, or clearly not at the outlet, tap “Reject”.',
           'Pick the reason code that best explains the problem — the vendor sees this.',
           'The recce moves to the vendor’s “Needs re-capture” list so they can fix and resubmit.',
         ],
@@ -203,23 +203,23 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/admin',
     showFieldNotes: false,
     intro:
-      'You run the program for your organisation: set up the masters (vendors, users, Element types, sites), configure capture rules, assign ad-hoc tasks, and watch progress through analytics and reports. You can also open the review and audit consoles.',
+      'You run the program for your organisation: set up the masters (vendors, users, Element types, outlets), configure capture rules, assign ad-hoc tasks, and watch progress through analytics and reports. You can also open the review and audit consoles.',
     topics: [
       {
-        title: 'Add sites (bulk Excel upload)',
+        title: 'Add outlets (bulk Excel upload)',
         steps: [
-          'Open “Sites”.',
-          'Sites are added by uploading an Excel file — there is no one-by-one add form.',
-          'Download the template, fill in each site with its location, and upload it.',
+          'Open “Outlets”.',
+          'Outlets are added by uploading an Excel file — there is no one-by-one add form.',
+          'Download the template, fill in each outlet with its location, and upload it.',
           'Review the import summary — any rejected rows come back in an error file to fix and re-upload.',
         ],
       },
       {
         title: 'Manage vendors and users',
         steps: [
-          'Open “Vendors” to add or edit the vendor companies working your sites.',
+          'Open “Vendors” to add or edit the vendor companies working your outlets.',
           'Open “Users” to create field vendors, ASMs, auditors and other logins, and set their role.',
-          'Assign field users to a vendor so their site list and work are scoped correctly.',
+          'Assign field users to a vendor so their outlet list and work are scoped correctly.',
         ],
       },
       {
@@ -262,7 +262,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
     home: '/admin',
     showFieldNotes: false,
     intro:
-      'As Platform Admin you have the same admin screens as a Client Admin — vendors, users, Element types, sites, manual tasks, analytics, reports and settings — but your view spans every tenant on the platform rather than a single organisation.',
+      'As Platform Admin you have the same admin screens as a Client Admin — vendors, users, Element types, outlets, manual tasks, analytics, reports and settings — but your view spans every tenant on the platform rather than a single organisation.',
     topics: [
       {
         title: 'Work across tenants',
@@ -274,8 +274,8 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
       {
         title: 'Manage masters and configuration',
         steps: [
-          'Sites, vendors, users, Element types, settings, manual tasks, analytics and reports all work as they do for a Client Admin.',
-          'Remember sites are always added by bulk Excel upload, never a single-record form.',
+          'Outlets, vendors, users, Element types, settings, manual tasks, analytics and reports all work as they do for a Client Admin.',
+          'Remember outlets are always added by bulk Excel upload, never a single-record form.',
         ],
       },
       {

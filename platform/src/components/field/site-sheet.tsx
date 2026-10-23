@@ -89,7 +89,7 @@ export function SiteSheet({ site, onClose }: { site: Site | null; onClose: () =>
             <button
               disabled
               className="flex items-center justify-center gap-2 bg-gray-50 border-2 border-gray-100 text-gray-400 font-bold py-3.5 rounded-2xl cursor-not-allowed"
-              title="This site has no location on record"
+              title="This outlet has no location on record"
             >
               <Navigation className="h-4 w-4" />
               No location

@@ -273,8 +273,8 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       <h1 className="text-lg font-bold text-gray-900">{mode === 'resubmit' ? 'Re-capture recce' : 'New recce'}</h1>
       <p className="mt-1 text-sm text-gray-500">
         {mode === 'resubmit'
-          ? 'Fix what the reviewer flagged, then re-submit this site’s recce.'
-          : 'Capture 1–2 Element lines for this site.'}
+          ? 'Fix what the reviewer flagged, then re-submit this outlet’s recce.'
+          : 'Capture 1–2 Element lines for this outlet.'}
       </p>
 
       {typesError && (
@@ -300,7 +300,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
         <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            This site already has a <span className="font-semibold">{existing.status.toLowerCase()}</span> recce, which
+            This outlet already has a <span className="font-semibold">{existing.status.toLowerCase()}</span> recce, which
             can’t be re-captured.{' '}
             <button onClick={() => router.push('/field/sites')} className="font-semibold underline">
               Back to Recce to do

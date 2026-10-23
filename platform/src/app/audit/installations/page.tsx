@@ -96,7 +96,7 @@ export default function AuditQueuePage() {
           <input
             value={siteCode}
             onChange={(e) => setSiteCode(e.target.value)}
-            placeholder="Search by site code…"
+            placeholder="Search by outlet code…"
             className="flex-1 text-sm text-gray-900 focus:outline-none bg-transparent"
           />
         </div>
@@ -123,7 +123,7 @@ export default function AuditQueuePage() {
           <input
             value={siteCode}
             onChange={(e) => setSiteCode(e.target.value)}
-            placeholder="Site code"
+            placeholder="Outlet code"
             className="text-sm text-gray-900 bg-white rounded-xl border border-gray-200 px-3 py-2 focus:outline-none focus:border-[var(--brand-primary)]"
           />
           <input

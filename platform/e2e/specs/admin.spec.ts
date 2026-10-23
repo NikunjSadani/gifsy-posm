@@ -5,7 +5,7 @@ test.describe('admin portal', () => {
   test('masters overview renders the four count cards', async ({ page }) => {
     await login(page, ROLES.admin);
     await expect(page.getByRole('heading', { name: 'Masters overview' })).toBeVisible();
-    for (const label of ['Vendors', 'Users', 'Element Types', 'Sites']) {
+    for (const label of ['Vendors', 'Users', 'Element Types', 'Outlets']) {
       await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
     }
   });

@@ -68,7 +68,7 @@ export default function SitesPage() {
         setTotal(res.data.total);
         setError(null);
       } else {
-        setError(res.error || 'Could not load your sites.');
+        setError(res.error || 'Could not load your outlets.');
         setSites([]);
         setTotal(0);
       }

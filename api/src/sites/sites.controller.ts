@@ -39,7 +39,7 @@ export class SitesController {
   template(): StreamableFile {
     return new StreamableFile(this.sites.buildUploadTemplate(), {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: 'attachment; filename="site-upload-template.xlsx"',
+      disposition: 'attachment; filename="outlet-upload-template.xlsx"',
     });
   }
 

@@ -86,7 +86,7 @@ export function RejectDialog({
               The vendor will be asked to re-capture <span className="font-semibold">{siteLabel}</span>.
             </>
           ) : (
-            'The vendor will be asked to re-capture this site.'
+            'The vendor will be asked to re-capture this outlet.'
           )}
         </p>
 

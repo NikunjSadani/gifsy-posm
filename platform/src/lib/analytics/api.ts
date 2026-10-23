@@ -147,7 +147,7 @@ export const STAGE_COLORS: Record<FurthestStage, string> = {
 /** Human labels for the furthest-stage vocabulary (legend + tooltips). */
 export const STAGE_LABELS: Record<FurthestStage, string> = {
   NONE: 'Not started',
-  RECCED: 'Recced',
+  RECCED: 'Recce',
   ASM_APPROVED: 'ASM approved',
   HO_APPROVED: 'HO approved',
   INSTALLED: 'Installed',
@@ -231,7 +231,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
   return [
     {
       key: 'totalSites',
-      label: 'Total sites',
+      label: 'Total outlets',
       count: w.totalSites,
       pctOfTotal: total > 0 ? 100 : null,
       conversionFromPrev: null,
@@ -239,7 +239,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
     },
     {
       key: 'recced',
-      label: 'Recced',
+      label: 'Recce',
       count: w.recced,
       pctOfTotal: pctOfTotal(w.recced),
       conversionFromPrev: conversionPct(w.recced, w.totalSites),

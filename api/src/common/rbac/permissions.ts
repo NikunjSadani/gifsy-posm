@@ -119,7 +119,7 @@ export const PERMISSION_GROUPS: PermissionGroupMeta[] = [
   { key: 'USERS',      label: 'User Management' },
   { key: 'TENANCY',    label: 'Tenancy & Platform Configuration' },
   { key: 'VENDORS',    label: 'Vendors' },
-  { key: 'SITES',      label: 'Sites' },
+  { key: 'SITES',      label: 'Outlets' },
   { key: 'POSM_TYPES', label: 'Element Types' },
   { key: 'RECCE',      label: 'Recce (capture + approval)' },
   { key: 'INSTALL',    label: 'Installation (capture + audit)' },

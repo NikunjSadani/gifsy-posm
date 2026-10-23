@@ -77,11 +77,11 @@ export function WaterfallFunnel({
     <div className="rounded-2xl border border-gray-200 bg-white p-5">
       <div className="flex items-baseline justify-between gap-2 mb-4">
         <h2 className="text-sm font-bold text-gray-900">Execution funnel</h2>
-        <span className="text-xs text-gray-400">width = share of total sites</span>
+        <span className="text-xs text-gray-400">width = share of total outlets</span>
       </div>
 
       {isEmpty ? (
-        <p className="text-sm text-gray-500 py-6 text-center">No sites yet — the funnel will populate as recces come in.</p>
+        <p className="text-sm text-gray-500 py-6 text-center">No outlets yet — the funnel will populate as recces come in.</p>
       ) : (
         <ul className="space-y-3">
           {stages.map((s) => {

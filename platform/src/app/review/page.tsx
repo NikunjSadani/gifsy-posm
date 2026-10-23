@@ -110,8 +110,8 @@ export default function ReviewDashboardPage() {
             <h2 className="text-sm font-semibold text-gray-700 mb-2">Execution funnel</h2>
             {state.waterfall ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <FunnelCard icon={<MapPin className="h-5 w-5" />} label="Sites" value={state.waterfall.totalSites} tone="gray" />
-                <FunnelCard icon={<ClipboardCheck className="h-5 w-5" />} label="Recced" value={state.waterfall.recced} tone="blue" />
+                <FunnelCard icon={<MapPin className="h-5 w-5" />} label="Outlets" value={state.waterfall.totalSites} tone="gray" />
+                <FunnelCard icon={<ClipboardCheck className="h-5 w-5" />} label="Recce" value={state.waterfall.recced} tone="blue" />
                 <FunnelCard icon={<CheckCircle2 className="h-5 w-5" />} label="ASM approved" value={state.waterfall.approved} tone="indigo" />
                 <FunnelCard icon={<ShieldCheck className="h-5 w-5" />} label="HO approved" value={state.waterfall.hoApproved} tone="green" />
                 <FunnelCard icon={<Hammer className="h-5 w-5" />} label="Installed" value={state.waterfall.installed} tone="amber" />

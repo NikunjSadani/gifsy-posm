@@ -223,7 +223,7 @@ export function hoRecceApprovalLabel(recce: RepRecce | null): string {
  */
 const REJECT_REASON_LABELS: Record<string, string> = {
   BLURRY: 'Blurry / unclear photo',
-  WRONG_SITE: 'Wrong site',
+  WRONG_SITE: 'Wrong outlet',
   POSM_NOT_VISIBLE: 'Element not visible',
   GEO_MISMATCH: 'Location mismatch',
   DUPLICATE_PHOTO: 'Duplicate photo',

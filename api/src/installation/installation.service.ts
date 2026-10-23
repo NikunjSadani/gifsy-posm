@@ -98,7 +98,7 @@ export class InstallationService {
       throw new ConflictException(
         dto.recceId
           ? 'The selected recce is not installable (not found on this outlet, or not HO-approved).'
-          : "Installation requires the site's recce to be HO-approved first.",
+          : "Installation requires the outlet's recce to be HO-approved first.",
       );
     }
     if (recce.installation) {
@@ -119,7 +119,7 @@ export class InstallationService {
       throw new ConflictException(
         reused.beforeAfterDiffOk === false
           ? 'An installation photo is identical to its recce photo — capture a real post-installation photo.'
-          : 'An installation photo has already been used on another submission — capture a fresh photo at the site.',
+          : 'An installation photo has already been used on another submission — capture a fresh photo at the outlet.',
       );
     }
 
@@ -180,7 +180,7 @@ export class InstallationService {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         if (this.isImageHashConflict(e)) {
           throw new ConflictException(
-            'An installation photo has already been used on another submission — capture a fresh photo at the site.',
+            'An installation photo has already been used on another submission — capture a fresh photo at the outlet.',
           );
         }
         throw new ConflictException('This recce already has an installation (concurrent submit).');
@@ -387,8 +387,8 @@ export class InstallationService {
     if (hardFail) {
       throw new ForbiddenException(
         hardFailOutside
-          ? 'A photo was captured outside the site geo-fence. Re-capture at the site.'
-          : 'A photo has no verifiable in-fence GPS fix (missing, invalid, or low-accuracy). Re-capture at the site with location enabled.',
+          ? 'A photo was captured outside the outlet geo-fence. Re-capture at the outlet.'
+          : 'A photo has no verifiable in-fence GPS fix (missing, invalid, or low-accuracy). Re-capture at the outlet with location enabled.',
       );
     }
 
@@ -425,13 +425,13 @@ export class InstallationService {
   private async loadOwnedActiveSite(user: JwtPayload, siteId: string) {
     const v = vendorScope(user);
     if ((user.role === 'VENDOR_FIELD' || user.role === 'VENDOR_HO') && !v) {
-      throw new NotFoundException('Site not found');
+      throw new NotFoundException('Outlet not found');
     }
     const site = await this.prisma.site.findFirst({
       where: { id: siteId, clientId: user.clientId, ...(v ? { vendorId: v } : {}) },
     });
-    if (!site) throw new NotFoundException('Site not found');
-    if (site.status !== 'ACTIVE') throw new BadRequestException('Site is not active');
+    if (!site) throw new NotFoundException('Outlet not found');
+    if (site.status !== 'ACTIVE') throw new BadRequestException('Outlet is not active');
     return site;
   }
 
@@ -452,7 +452,7 @@ export class InstallationService {
     const seenKeys = new Set<string>();
     for (const l of lines) {
       if (!recceIds.has(l.reccePosmId)) {
-        throw new BadRequestException('A reccePosmId is not part of this site\'s approved recce.');
+        throw new BadRequestException('A reccePosmId is not part of this outlet\'s approved recce.');
       }
       if (seen.has(l.reccePosmId)) {
         throw new BadRequestException('Two install photos target the same recce Element.');

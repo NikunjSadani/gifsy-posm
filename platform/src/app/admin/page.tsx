@@ -23,7 +23,7 @@ const CARDS: CardDef[] = [
   {
     href: '/admin/vendors',
     label: 'Vendors',
-    description: 'Fleets servicing sites',
+    description: 'Fleets servicing outlets',
     icon: Building2,
     load: async () => {
       const r = await vendorsApi.list();
@@ -52,7 +52,7 @@ const CARDS: CardDef[] = [
   },
   {
     href: '/admin/sites',
-    label: 'Sites',
+    label: 'Outlets',
     description: 'Retail outlets (incl. bulk upload)',
     icon: MapPin,
     load: async () => {

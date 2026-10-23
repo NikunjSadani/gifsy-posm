@@ -592,8 +592,8 @@ export class AnalyticsService {
     ]);
 
     const summaryRows: Record<string, unknown>[] = [
-      { Metric: 'Total sites', Value: summary.waterfall.totalSites },
-      { Metric: 'Recced', Value: summary.waterfall.recced },
+      { Metric: 'Total outlets', Value: summary.waterfall.totalSites },
+      { Metric: 'Recce', Value: summary.waterfall.recced },
       { Metric: 'ASM approved', Value: summary.waterfall.approved },
       { Metric: 'HO approved (installable)', Value: summary.waterfall.hoApproved },
       { Metric: 'Installed', Value: summary.waterfall.installed },
@@ -616,8 +616,8 @@ export class AnalyticsService {
     const scorecardRows: Record<string, unknown>[] = scorecards.items.map((v) => ({
       'Vendor code': v.vendorCode,
       'Vendor name': v.vendorName,
-      Sites: v.sites,
-      Recced: v.recced,
+      Outlets: v.sites,
+      Recce: v.recced,
       'ASM approved': v.approved,
       'HO approved': v.hoApproved,
       Installed: v.installed,

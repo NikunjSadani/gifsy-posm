@@ -148,7 +148,7 @@ describe('findSiteRecce', () => {
 describe('rejectionLabel', () => {
   it('maps known codes to friendly labels', () => {
     expect(rejectionLabel('BLURRY')).toBe('Photo was blurry');
-    expect(rejectionLabel('GEO_MISMATCH')).toBe('Location did not match the site');
+    expect(rejectionLabel('GEO_MISMATCH')).toBe('Location did not match the outlet');
     expect(rejectionLabel('OTHER')).toBe('Other');
   });
 

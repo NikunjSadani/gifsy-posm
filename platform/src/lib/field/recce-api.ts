@@ -342,9 +342,9 @@ export function groupInstallableByOutlet(recces: RecceListRow[]): InstallableOut
 
 const REJECT_LABELS: Record<RejectReasonCode, string> = {
   BLURRY: 'Photo was blurry',
-  WRONG_SITE: 'Wrong site',
+  WRONG_SITE: 'Wrong outlet',
   POSM_NOT_VISIBLE: 'Element not visible in the photo',
-  GEO_MISMATCH: 'Location did not match the site',
+  GEO_MISMATCH: 'Location did not match the outlet',
   DUPLICATE_PHOTO: 'Duplicate photo',
   WRONG_POSM: 'Wrong Element',
   DIMENSIONS_MISMATCH: 'Dimensions did not match',
