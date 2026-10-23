@@ -1,13 +1,15 @@
 'use client';
 
 /**
- * Installation — the vendor field user's own recce/install jobs, grouped by status with the right
- * action per recce:
+ * Installation — the vendor field user's own post-submit recce/install jobs, grouped by status
+ * with the right action per recce:
  *
- *   REJECTED  → the ASM's reason + a "Re-capture" action → /field/recce/[siteId]?recceId=…
- *               (the recce page resubmits, not a fresh POST).
  *   APPROVED  → "Start installation" → /field/install/[recceId] (the ONLY nav path to install).
- *   SUBMITTED → read-only "Awaiting ASM approval".
+ *   SUBMITTED → read-only "Awaiting ASM/HO approval".
+ *
+ * A REJECTED recce is NOT handled here — it is re-captured from "Recce to do" (/field/sites),
+ * whose list now includes rejected outlets; tapping one lands on the recce page in resubmit mode.
+ * So this screen drops the 'Needs re-capture' group entirely and shows only the install pipeline.
  *
  * Data is `GET /api/recce` (vendor + submitter scoped server-side). Note: that list carries no
  * installation linkage, so an APPROVED recce always offers "Start installation"; a recce that
@@ -24,9 +26,7 @@ import {
   AlertCircle,
   Clock,
   CheckCircle2,
-  XCircle,
   ShieldCheck,
-  Camera,
   Hammer,
   RefreshCw,
   SlidersHorizontal,
@@ -37,8 +37,6 @@ import {
   fetchMyRecces,
   groupRecces,
   groupInstallableByOutlet,
-  classifyRecce,
-  rejectionLabel,
   type RecceListRow,
   type RecceGroup,
   type RecceGroupKey,
@@ -46,11 +44,15 @@ import {
 } from '@/lib/field/recce-api';
 import { getOutletFilter, beatSummary, type OutletFilter } from '@/lib/field/outlet-filter';
 
+// The Installation list no longer handles RECCE-rejected ('Needs re-capture') work — a REJECTED
+// recce is re-captured from "Recce to do" (/field/sites), not here. So this screen only renders the
+// post-submit install-pipeline states.
+type InstallGroupKey = Exclude<RecceGroupKey, 'NEEDS_RECAPTURE'>;
+
 const STATUS_META: Record<
-  RecceGroupKey,
+  InstallGroupKey,
   { label: string; icon: typeof Clock; tint: string; dot: string }
 > = {
-  NEEDS_RECAPTURE: { label: 'Needs re-capture', icon: XCircle, tint: 'text-[var(--brand-primary)]', dot: '#dc2626' },
   READY_TO_INSTALL: { label: 'Ready to install', icon: CheckCircle2, tint: 'text-emerald-600', dot: '#16a34a' },
   AWAITING_HO: { label: 'Awaiting HO approval', icon: ShieldCheck, tint: 'text-sky-600', dot: '#0284c7' },
   AWAITING_ASM: { label: 'Awaiting ASM approval', icon: Clock, tint: 'text-amber-600', dot: '#d97706' },
@@ -118,7 +120,11 @@ export default function MyWorkPage() {
   const filtered = recces
     ? recces.filter((r) => !q || r.site.name.toLowerCase().includes(q) || r.site.code.toLowerCase().includes(q))
     : null;
-  const groups: RecceGroup[] = filtered ? groupRecces(filtered) : [];
+  // RECCE-rejected recces are re-captured from "Recce to do", not here, so they're dropped from the
+  // Installation list — it shows only the post-submit install-pipeline states.
+  const groups = (filtered ? groupRecces(filtered) : []).filter(
+    (g): g is RecceGroup & { key: InstallGroupKey } => g.key !== 'NEEDS_RECAPTURE',
+  );
   const hasAnyWork = !!recces && recces.length > 0;
 
   // Until the device filter has been read (and while redirecting when none is set), show a
@@ -255,10 +261,10 @@ export default function MyWorkPage() {
 }
 
 // ── One recce row with its group-specific action ──────────────────────────────
-function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: RecceGroupKey }) {
-  // Defensive: trust the group the parent placed this card in, but fall back to classifying the
-  // row itself so the action/copy can never drift from the recce's real ASM+HO state.
-  const key = groupKey ?? classifyRecce(recce);
+// Only the read-only waiting states + the defensive install fallback reach this card now;
+// RECCE-rejected ('Needs re-capture') work is handled from "Recce to do", not here.
+function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: InstallGroupKey }) {
+  const key = groupKey;
   const meta = STATUS_META[key];
   const posmLabel = `${recce.posmCount} Element${recce.posmCount === 1 ? '' : 's'}`;
 
@@ -295,29 +301,6 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: RecceGr
             ? 'Manual recce — awaiting Head-Office approval before installation.'
             : 'Approved by ASM — awaiting Head-Office approval before installation.'}
         </p>
-      )}
-
-      {key === 'NEEDS_RECAPTURE' && (
-        <div className="mt-3">
-          <div className="flex items-start gap-1.5 rounded-xl bg-red-50 p-2.5 text-xs text-red-700">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              <span className="font-semibold">Sent back:</span>{' '}
-              {/* HO reject clears the ASM `rejectionReasonCode`, so read the HO reason instead when
-                  Head-Office sent it back; otherwise it's the ASM's reason. */}
-              {(recce.hoReviewStatus === 'REJECTED'
-                ? rejectionLabel(recce.hoRejectionReasonCode)
-                : rejectionLabel(recce.rejectionReasonCode)) ?? 'Please re-capture and submit again.'}
-            </span>
-          </div>
-          <Link
-            href={`/field/recce/${recce.site.id}?recceId=${encodeURIComponent(recce.id)}`}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand-primary)] py-3 text-sm font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95"
-          >
-            <Camera className="h-4 w-4" />
-            Re-capture
-          </Link>
-        </div>
       )}
 
       {/* Install is offered ONLY once the recce is fully approved (ASM + HO). READY_TO_INSTALL is

@@ -176,10 +176,31 @@ export class SitesService {
     // Apply the vendorId filter only when the caller is NOT already vendor-pinned —
     // otherwise it could override the security pin and leak a sibling vendor's fleet.
     if (q.vendorId && !this.isVendorRole(user)) where.vendorId = q.vendorId;
-    // "Recce to do": only outlets that still owe a recce — i.e. no recce row exists yet. A site
-    // whose recce is submitted/approved/rejected already has one (rejected re-capture lives in
-    // the Installation screen), so it drops off this list. Applied to both findMany and count.
-    if (q.pendingRecce) where.recces = { none: {} };
+    // "Recce to do": outlets that still owe a recce. An outlet qualifies if it has NO recce at
+    // all, OR its APP recce was REJECTED — a rejected recce is re-captured from this list (the
+    // field "Recce to do" screen), not the Installation screen. Composed as an OR AND-ed onto the
+    // scope. CRITICAL: a multi-beat `beatNames` filter above may already have set `where.OR`;
+    // overwriting it would silently drop the beat filter. So both OR groups are pushed into
+    // `where.AND` as their own `{ OR: [...] }` entries (AND-ed together), preserving the beat +
+    // name + scope filters. Applied to both findMany and count.
+    if (q.pendingRecce) {
+      const pendingRecceOr: Prisma.SiteWhereInput[] = [
+        { recces: { none: {} } },
+        { recces: { some: { recceMode: 'APP', status: 'REJECTED' } } },
+      ];
+      const andClauses: Prisma.SiteWhereInput[] = Array.isArray(where.AND)
+        ? [...where.AND]
+        : where.AND
+          ? [where.AND]
+          : [];
+      // Move an existing beat-OR into AND so the pendingRecce-OR below can't clobber it.
+      if (where.OR) {
+        andClauses.push({ OR: where.OR as Prisma.SiteWhereInput[] });
+        delete where.OR;
+      }
+      andClauses.push({ OR: pendingRecceOr });
+      where.AND = andClauses;
+    }
 
     const [sites, total] = await Promise.all([
       this.prisma.site.findMany({

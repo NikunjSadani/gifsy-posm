@@ -484,25 +484,18 @@ export class ReportsService {
       hoApprovedRecceLast24h,
       rejectedRecceLast24h,
     ] = await Promise.all([
-      // Recces awaiting ASM review — APP-only, mirroring the ASM queue (approval.service: status
-      // SUBMITTED + recceMode APP). A MANUAL recce is ALSO status SUBMITTED but skips ASM entirely,
-      // so excluding it here keeps it out of this line and solely under pendingHoReview below (no
-      // double-count of the same manual recce across the two "pending" lines).
-      this.prisma.recce.count({ where: { clientId, status: 'SUBMITTED', recceMode: 'APP' } }),
-      // Recces sitting in the HO queue — mirrors the recce-ho-review queue filter (R4):
-      //   APP    — ASM-approved, awaiting HO sign-off (status APPROVED, hoReviewStatus PENDING);
-      //   MANUAL — field-typed, skips ASM, arrives straight at HO (status SUBMITTED, hoReviewStatus
-      //            PENDING, recceMode MANUAL).
-      // Counted explicitly because both are invisible to the SUBMITTED-only pendingRecceReview count.
+      // Recces awaiting ASM review — APP recces STILL in the ASM stage, mirroring the ASM queue
+      // (approval.service: status SUBMITTED + recceMode APP + hoReviewStatus NONE). A MANUAL recce
+      // (hoReviewStatus PENDING) and a RESUBMITTED app recce (SUBMITTED + APP but HO-bound,
+      // hoReviewStatus PENDING) are both excluded here, so neither double-counts against the
+      // pendingHoReview line below.
+      this.prisma.recce.count({ where: { clientId, status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE' } }),
+      // Recces sitting in the HO queue — mirrors the recce-ho-review queue filter: ANY recce at
+      // hoReviewStatus PENDING (status-agnostic). Covers APP ASM-approved (status APPROVED), MANUAL
+      // (status SUBMITTED), AND resubmitted APP (status SUBMITTED). Disjoint from pendingRecceReview
+      // (pinned to hoReviewStatus NONE), so no recce is counted on both lines.
       this.prisma.recce.count({
-        where: {
-          clientId,
-          hoReviewStatus: 'PENDING',
-          OR: [
-            { status: 'APPROVED' },
-            { recceMode: 'MANUAL', status: 'SUBMITTED' },
-          ],
-        },
+        where: { clientId, hoReviewStatus: 'PENDING' },
       }),
       this.prisma.installation.count({ where: { clientId, status: 'SUBMITTED' } }),
       this.prisma.manualTask.count({ where: { clientId, status: 'OPEN' } }),

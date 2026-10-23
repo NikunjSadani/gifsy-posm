@@ -321,12 +321,12 @@ export class RecceService {
             reviewedAt: null,
             rejectionReasonCode: null,
             rejectionReason: null,
-            // A re-captured recce re-enters the pipeline from scratch. For an APP recce it returns
-            // to NONE and must be re-approved by the ASM (→ PENDING) then HO. A MANUAL recce has NO
-            // ASM stage, so it re-enters the HO queue directly (→ PENDING) — otherwise a re-captured
-            // manual recce (NONE) would match neither HO-queue clause and silently vanish.
-            hoReviewStatus:
-              recce.recceMode === RecceMode.MANUAL ? HoReviewStatus.PENDING : HoReviewStatus.NONE,
+            // A re-captured recce re-enters the pipeline straight at HO review — for BOTH modes.
+            // A REJECTED recce was already seen once; on resubmit it skips the ASM stage and goes
+            // directly to the HO queue (status SUBMITTED, hoReviewStatus PENDING), so the field's
+            // re-work lands in front of HO, never back in the ASM queue. (Previously only MANUAL
+            // went straight to HO and an APP resubmit returned to NONE / re-entered ASM.)
+            hoReviewStatus: HoReviewStatus.PENDING,
             hoReviewedById: null,
             hoReviewedAt: null,
             hoRejectionReasonCode: null,

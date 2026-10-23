@@ -197,8 +197,8 @@ describe('RecceService', () => {
     expect(mockPrisma.recce.findFirst).not.toHaveBeenCalled();
   });
 
-  // ── Resubmit clears the HO review stage back to NONE ────────────────────────────
-  it('resubmit: a REJECTED recce → SUBMITTED and CLEARS the HO review fields back to NONE', async () => {
+  // ── Resubmit sends the recce straight to HO (hoReviewStatus PENDING for ALL modes) ──────────
+  it('resubmit: a REJECTED recce → SUBMITTED, clears the stale HO reviewer fields, re-enters HO (hoReviewStatus PENDING)', async () => {
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(Buffer.alloc(16, 1));
@@ -216,7 +216,7 @@ describe('RecceService', () => {
       captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
       capturedAt: null, receivedAt: new Date(),
       rejectionReasonCode: null, rejectionReason: null,
-      hoReviewStatus: 'NONE', hoRejectionReasonCode: null, hoRejectionReason: null,
+      hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
       site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
       submittedBy: { id: 'u1', name: 'Field' },
       posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
@@ -238,12 +238,46 @@ describe('RecceService', () => {
     expect(data.reviewedAt).toBeNull();
     expect(data.rejectionReasonCode).toBeNull();
     expect(data.rejectionReason).toBeNull();
-    // ...AND the HO review stage is reset to NONE so the recce re-enters the pipeline from scratch.
-    expect(data.hoReviewStatus).toBe('NONE');
+    // ...AND the recce re-enters the pipeline STRAIGHT at HO (hoReviewStatus PENDING), skipping ASM
+    // — for an APP recce too (previously an app resubmit returned to NONE / re-entered the ASM queue).
+    expect(data.hoReviewStatus).toBe('PENDING');
+    // The stale HO reviewer fields are still cleared so the fresh HO review starts clean.
     expect(data.hoReviewedById).toBeNull();
     expect(data.hoReviewedAt).toBeNull();
     expect(data.hoRejectionReasonCode).toBeNull();
     expect(data.hoRejectionReason).toBeNull();
+  });
+
+  it('resubmit: a MANUAL recce ALSO re-enters at HO (hoReviewStatus PENDING) — unchanged behaviour', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue({
+      id: 'rM', status: 'REJECTED', version: 2, recceMode: 'MANUAL',
+      hoReviewStatus: 'REJECTED', hoReviewedById: 'ho-9', hoReviewedAt: new Date(),
+      hoRejectionReasonCode: 'BLURRY', hoRejectionReason: 'HO said redo',
+      site: { ...activeSite },
+    });
+    const updatedRow = {
+      id: 'rM', status: 'SUBMITTED', recceMode: 'MANUAL', version: 3,
+      captureLat: null, captureLng: null, captureAccuracy: null, distanceMeters: null, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { update: jest.fn().mockResolvedValue(updatedRow) },
+      reccePosm: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    await service.resubmit(vendorField, 'rM', { posms: [line({ lat: 19.0761, lng: 72.8771 })] });
+    expect(tx.recce.update.mock.calls[0][0].data.hoReviewStatus).toBe('PENDING');
   });
 
   // ── A4 clean 409 on a create race ──────────────────────────────────────────────

@@ -172,14 +172,43 @@ describe('SitesService.list — role scoping', () => {
     expect(findMany.mock.calls[0][0].where.beatName).toBeUndefined();
   });
 
-  it('pendingRecce=true filters to outlets with NO recce (recces: none), AND-ed onto scope', async () => {
+  it('pendingRecce=true → OR(no recce, rejected APP recce) AND-ed onto scope', async () => {
     const { prisma, findMany, count } = makePrisma();
     const svc = new SitesService(prisma);
     await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }), { pendingRecce: true });
     const where = findMany.mock.calls[0][0].where;
-    expect(where.recces).toEqual({ none: {} }); // only sites that still owe a recce
+    // Now includes outlets with NO recce OR a REJECTED app recce — pushed into AND as its own OR group.
+    const pendingOr = [
+      { recces: { none: {} } },
+      { recces: { some: { recceMode: 'APP', status: 'REJECTED' } } },
+    ];
+    expect(where.AND).toEqual([{ OR: pendingOr }]);
+    expect(where.OR).toBeUndefined(); // no beat filter, so no top-level OR
     expect(where.vendorId).toBe('v1'); // still hard-pinned to the caller's vendor
-    expect(count.mock.calls[0][0].where.recces).toEqual({ none: {} }); // same filter on the total
+    expect(count.mock.calls[0][0].where.AND).toEqual([{ OR: pendingOr }]); // same filter on the total
+  });
+
+  it('beatNames + pendingRecce → BOTH OR groups AND-ed (the beat-OR is NOT clobbered)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(
+      user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }),
+      { beatNames: ['Beat 1', 'Beat 2'], pendingRecce: true },
+    );
+    const where = findMany.mock.calls[0][0].where;
+    // The beat-OR was moved out of the top-level OR into AND, so the pendingRecce-OR can't overwrite it.
+    expect(where.OR).toBeUndefined();
+    expect(where.AND).toEqual([
+      { OR: [
+        { beatName: { equals: 'Beat 1', mode: 'insensitive' } },
+        { beatName: { equals: 'Beat 2', mode: 'insensitive' } },
+      ] },
+      { OR: [
+        { recces: { none: {} } },
+        { recces: { some: { recceMode: 'APP', status: 'REJECTED' } } },
+      ] },
+    ]);
+    expect(where.vendorId).toBe('v1'); // vendor pin intact
   });
 
   it('pendingRecce absent/false leaves the recce filter off (all reachable sites)', async () => {
@@ -187,6 +216,7 @@ describe('SitesService.list — role scoping', () => {
     const svc = new SitesService(prisma);
     await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }), { pendingRecce: false });
     expect(findMany.mock.calls[0][0].where.recces).toBeUndefined();
+    expect(findMany.mock.calls[0][0].where.AND).toBeUndefined();
   });
 
   it('status filter scopes the query WITHIN the tenant where (never widens scope)', async () => {

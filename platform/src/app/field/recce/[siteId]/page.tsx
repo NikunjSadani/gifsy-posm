@@ -5,9 +5,11 @@
  *
  * Two modes, resolved on load:
  *   - CREATE   → a site with no recce yet: POST /api/recce { siteId, posms }.
- *   - RESUBMIT → a REJECTED recce (reached via My Work "Re-capture", ?recceId=…, or detected
- *                for the site): POST /api/recce/:id/resubmit { posms } — a fresh POST would 409.
- *                The ASM's rejection reason is surfaced so the rep knows what to fix.
+ *   - RESUBMIT → a REJECTED recce (reached from "Recce to do" — a rejected outlet appears there —
+ *                via ?recceId=…, or detected for the site): POST /api/recce/:id/resubmit { posms }
+ *                — a fresh POST would 409. The rejection reason is surfaced so the rep knows what
+ *                to fix, and the element TYPE + DIMENSIONS are locked to the original submission
+ *                (one card per original posm): the rep re-captures only the photo + element box.
  *   - BLOCKED  → the site already has a SUBMITTED/APPROVED (immutable) recce: no re-capture.
  *
  * Each line (PosmCaptureCard): pick POSM type + dimensions, take a photo, auto-attach a GPS
@@ -182,6 +184,23 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     };
   }, [recceIdParam, siteId]);
 
+  // On resubmit the element SET is fixed to the original recce: render exactly one card per
+  // original posm, each locked to that posm's type + dimensions. In create mode the rep builds the
+  // set freely (1–2 cards, add/remove allowed).
+  const resubmitPosms = mode === 'resubmit' && existing ? existing.posms : null;
+  const cardCount = resubmitPosms ? resubmitPosms.length : count;
+
+  // When the resubmit context resolves, size the per-card state array to the original posm count
+  // (one slot per original posm) so each locked card reports into its own slot.
+  useEffect(() => {
+    if (resubmitPosms) {
+      setStates(resubmitPosms.map(() => EMPTY_STATE));
+      setExpandedIndex(0);
+    }
+    // Keyed on the resolved recce id — runs once per loaded resubmit recce.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, existing?.id]);
+
   const setStateAt = useCallback((i: number, s: PosmCaptureState) => {
     setStates((prev) => {
       const next = [...prev];
@@ -190,7 +209,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     });
   }, []);
 
-  const active = states.slice(0, count);
+  const active = states.slice(0, cardCount);
   const readyLines = useMemo(
     () => active.map((s) => s.line).filter((l): l is NonNullable<typeof l> => l !== null),
     [active],
@@ -318,19 +337,30 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
               GSB is not approved for this outlet.
             </p>
           )}
-          {Array.from({ length: count }).map((_, i) => (
-            <PosmCaptureCard
-              key={i}
-              slot={i + 1}
-              posmTypes={visiblePosmTypes}
-              onChange={(s) => setStateAt(i, s)}
-              onRemove={i === 1 ? removeSecond : undefined}
-              collapsed={count === 2 && i !== expandedIndex}
-              onExpand={() => setExpandedIndex(i)}
-            />
-          ))}
+          {Array.from({ length: cardCount }).map((_, i) => {
+            const original = resubmitPosms?.[i];
+            return (
+              <PosmCaptureCard
+                key={original ? original.id : i}
+                slot={i + 1}
+                posmTypes={visiblePosmTypes}
+                onChange={(s) => setStateAt(i, s)}
+                // Resubmit: the element set is fixed — no remove affordance. Create: card 2 removable.
+                onRemove={!resubmitPosms && i === 1 ? removeSecond : undefined}
+                collapsed={cardCount === 2 && i !== expandedIndex}
+                onExpand={() => setExpandedIndex(i)}
+                // Resubmit: seed + lock the element type and dimensions to the original posm so the
+                // rep only re-captures the photo + element box.
+                initialPosmTypeId={original?.posmType.id}
+                initialWidth={original?.dimensions?.width}
+                initialHeight={original?.dimensions?.height}
+                lockElementAndDims={!!original}
+              />
+            );
+          })}
 
-          {count < 2 && (
+          {/* Add a second element only in create mode — on resubmit the set is fixed to the original. */}
+          {!resubmitPosms && count < 2 && (
             <button
               type="button"
               onClick={addSecond}

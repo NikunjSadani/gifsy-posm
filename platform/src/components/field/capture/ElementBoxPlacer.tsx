@@ -114,8 +114,14 @@ export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onC
     const b = imgBox();
     if (!p || !b) return;
     if (d.mode === 'move') {
-      setRect((r) => (r ? moveElementBox(r, p.x - d.last.x, p.y - d.last.y) : r));
+      // Capture the delta from the LAST pointer position BEFORE advancing `d.last`. The setRect
+      // updater runs in React's render phase — AFTER this handler returns — so if it read `d.last`
+      // itself, `d.last` would already equal `p` and every delta would collapse to zero (the box
+      // would never move on a real pointer drag). Freezing dx/dy here keeps the updater pure.
+      const dx = p.x - d.last.x;
+      const dy = p.y - d.last.y;
       d.last = p;
+      setRect((r) => (r ? moveElementBox(r, dx, dy) : r));
     } else {
       const na = normAspectFor(realAspect, b.width, b.height);
       setRect((r) => (r ? resizeElementBox(r, na, p.x, p.y) : r));

@@ -12,9 +12,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw, PenSquare, X, ChevronRight } from 'lucide-react';
+import { Trash2, MapPin, Loader2, AlertCircle, CheckCircle2, TriangleAlert, RefreshCw, PenSquare, X, ChevronRight, Lock } from 'lucide-react';
 import { CameraCapture } from './CameraCapture';
 import { ElementBoxPlacer } from './ElementBoxPlacer';
+import { MarkupOverlay } from '@/components/ui/markup-overlay';
 import { useGeo, formatFix, type GeoFix } from '@/lib/field/geo';
 import { uploadMedia, type MediaQuality } from '@/lib/field/media-upload';
 import type { RecceMarkup } from '@/lib/markup';
@@ -73,14 +74,37 @@ interface PosmCaptureCardProps {
   collapsed?: boolean;
   /** Tapping a collapsed card asks the parent to expand it. */
   onExpand?: () => void;
+  /** Pre-fill the Element type (used on resubmit — the original recce's POSM type). */
+  initialPosmTypeId?: string;
+  /** Pre-fill the width (feet), from the original recce on resubmit. */
+  initialWidth?: number;
+  /** Pre-fill the height (feet), from the original recce on resubmit. */
+  initialHeight?: number;
+  /**
+   * Lock the Element type + dimensions to their pre-filled values (resubmit of a REJECTED recce):
+   * the rep re-captures only the photo + element-box; the element + dims stay fixed to the
+   * original submission and render as read-only (legible, not interactive).
+   */
+  lockElementAndDims?: boolean;
 }
 
-export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed, onExpand }: PosmCaptureCardProps) {
+export function PosmCaptureCard({
+  slot,
+  posmTypes,
+  onChange,
+  onRemove,
+  collapsed,
+  onExpand,
+  initialPosmTypeId,
+  initialWidth,
+  initialHeight,
+  lockElementAndDims,
+}: PosmCaptureCardProps) {
   const geo = useGeo();
 
-  const [posmTypeId, setPosmTypeId] = useState('');
-  const [width, setWidth] = useState('');
-  const [height, setHeight] = useState('');
+  const [posmTypeId, setPosmTypeId] = useState(initialPosmTypeId ?? '');
+  const [width, setWidth] = useState(initialWidth != null ? String(initialWidth) : '');
+  const [height, setHeight] = useState(initialHeight != null ? String(initialHeight) : '');
   const unit = DIMENSION_UNIT;
 
   const [file, setFile] = useState<File | null>(null);
@@ -94,6 +118,19 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
   const [markupOpen, setMarkupOpen] = useState(false);
   const [markupUrl, setMarkupUrl] = useState<string | null>(null);
 
+  // A persistent object-URL of the captured photo, so once the Element box is placed we can show
+  // the box drawn OVER the photo (not just a text chip). Tracks `file`; revoked on change/unmount.
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file) {
+      setPhotoUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPhotoUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
   // Keep the latest onChange without retriggering the report effect on every parent render.
   const onChangeRef = useRef(onChange);
   useEffect(() => {
@@ -104,6 +141,12 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
   const h = Number(height);
   const dimsValid = width !== '' && height !== '' && Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0;
   const started = posmTypeId !== '' || width !== '' || height !== '' || file !== null || uploaded !== null;
+
+  // Human-readable label for the locked Element type (resubmit). Derived from the tenant's POSM
+  // types; falls back to the raw code so the read-only field is never blank if the type is gated
+  // out of the picker for this outlet.
+  const lockedType = posmTypes.find((t) => t.id === posmTypeId);
+  const lockedTypeLabel = lockedType ? `${lockedType.name} (${lockedType.code})` : posmTypeId || null;
 
   // Marking the photo is compulsory: a line is ready only once it also carries a markup (≥1 shape).
   const line: CapturedReccePosm | null =
@@ -252,41 +295,75 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
 
       {/* POSM type */}
       <label className="mb-1.5 block text-xs font-medium text-gray-600">Element type</label>
-      <select
-        value={posmTypeId}
-        onChange={(e) => setPosmTypeId(e.target.value)}
-        className="mb-4 w-full rounded-xl border-2 border-gray-200 bg-white px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
-      >
-        <option value="">Select an Element type…</option>
-        {posmTypes.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name} ({t.code})
-          </option>
-        ))}
-      </select>
+      {lockElementAndDims ? (
+        // Resubmit: the Element type is fixed to the original submission — read-only, legible.
+        <div
+          data-testid={`posm-type-locked-${slot}`}
+          aria-label="Element type (locked)"
+          className="mb-4 flex w-full items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
+        >
+          <span className="truncate">{lockedTypeLabel ?? 'Element type'}</span>
+          <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+        </div>
+      ) : (
+        <select
+          value={posmTypeId}
+          onChange={(e) => setPosmTypeId(e.target.value)}
+          className="mb-4 w-full rounded-xl border-2 border-gray-200 bg-white px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
+        >
+          <option value="">Select an Element type…</option>
+          {posmTypes.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name} ({t.code})
+            </option>
+          ))}
+        </select>
+      )}
 
       {/* Dimensions — captured in feet */}
       <label className="mb-1.5 block text-xs font-medium text-gray-600">Dimension (in Ft.)</label>
-      <div className="mb-4 grid grid-cols-2 gap-2">
-        <input
-          type="number"
-          inputMode="decimal"
-          min={0}
-          value={width}
-          onChange={(e) => setWidth(e.target.value)}
-          placeholder="Width"
-          className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
-        />
-        <input
-          type="number"
-          inputMode="decimal"
-          min={0}
-          value={height}
-          onChange={(e) => setHeight(e.target.value)}
-          placeholder="Height"
-          className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
-        />
-      </div>
+      {lockElementAndDims ? (
+        // Resubmit: dimensions are fixed to the original submission — read-only, legible.
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          <div
+            data-testid={`posm-width-locked-${slot}`}
+            aria-label="Width (locked)"
+            className="flex items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
+          >
+            <span className="truncate">{width || '—'} ft</span>
+            <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+          </div>
+          <div
+            data-testid={`posm-height-locked-${slot}`}
+            aria-label="Height (locked)"
+            className="flex items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
+          >
+            <span className="truncate">{height || '—'} ft</span>
+            <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+          </div>
+        </div>
+      ) : (
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            value={width}
+            onChange={(e) => setWidth(e.target.value)}
+            placeholder="Width"
+            className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
+          />
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            value={height}
+            onChange={(e) => setHeight(e.target.value)}
+            placeholder="Height"
+            className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
+          />
+        </div>
+      )}
 
       {/* Photo */}
       <label className="mb-1.5 block text-xs font-medium text-gray-600">Photo</label>
@@ -350,25 +427,42 @@ export function PosmCaptureCard({ slot, posmTypes, onChange, onRemove, collapsed
       {file && !uploading && (
         <div className="mt-3">
           {markup ? (
-            <div className="flex items-center gap-2 rounded-xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
-              <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
-              <span className="flex-1 font-medium">Element box placed</span>
-              <button
-                type="button"
-                onClick={openMarkup}
-                className="shrink-0 font-semibold text-[var(--brand-primary)] underline active:scale-95 transition-transform"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={clearMarkup}
-                aria-label="Clear Element box"
-                className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
-              >
-                <X className="h-3.5 w-3.5" />
-                Clear
-              </button>
+            <div className="overflow-hidden rounded-xl border border-[var(--brand-primary)]/30">
+              {/* The placed Element box drawn OVER the captured photo, so the field user sees
+                  exactly where they marked it — not just a "placed" text chip. The img is
+                  natural-aspect (block w-full h-auto) so the overlay's 0..1 coords map to the
+                  image content box (same alignment contract as the review/audit overlays). */}
+              {photoUrl && (
+                <div className="relative bg-gray-100">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={photoUrl}
+                    alt="Captured photo with the Element box"
+                    className="block h-auto w-full"
+                  />
+                  <MarkupOverlay markup={markup} />
+                </div>
+              )}
+              <div className="flex items-center gap-2 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
+                <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
+                <span className="flex-1 font-medium">Element box placed</span>
+                <button
+                  type="button"
+                  onClick={openMarkup}
+                  className="shrink-0 font-semibold text-[var(--brand-primary)] underline active:scale-95 transition-transform"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={clearMarkup}
+                  aria-label="Clear Element box"
+                  className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Clear
+                </button>
+              </div>
             </div>
           ) : (
             <div>

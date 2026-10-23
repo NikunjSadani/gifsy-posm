@@ -35,8 +35,13 @@ export interface GeoError {
   message: string;
 }
 
-/** The high-accuracy fix timeout (ms) — a slow/failed fix rejects with `timeout`. */
+/** The high-accuracy fix timeout (ms) — no fix at all within this rejects with `timeout`. */
 export const GEO_TIMEOUT_MS = 15_000;
+/** Sampling window (ms): once a first fix arrives, keep watching briefly and settle for the BEST
+ *  (lowest accuracy) reading — GPS usually tightens over a few seconds as more satellites lock. */
+export const GEO_SAMPLE_MS = 6_000;
+/** Good-enough accuracy (m): a fix at least this tight resolves immediately (no need to keep sampling). */
+export const GEO_GOOD_ENOUGH_M = 20;
 
 /** Human, actionable copy for each failure mode (pure — unit-tested). */
 export function geoErrorMessage(code: GeoErrorCode): string {
@@ -106,25 +111,91 @@ export function useGeo(): UseGeoResult {
       setLoading(true);
       setError(null);
 
-      navigator.geolocation.getCurrentPosition(
+      // Sample over a short window and keep the TIGHTEST fix: GPS accuracy improves
+      // over a few seconds as more satellites lock, so a single instantaneous reading
+      // is often far looser than what the device can produce moments later.
+      let settled = false;
+      let watchId: number | null = null;
+      let sampleTimer: ReturnType<typeof setTimeout> | null = null;
+      let hardTimer: ReturnType<typeof setTimeout> | null = null;
+      let best: GeoFix | null = null;
+
+      const cleanup = () => {
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+          watchId = null;
+        }
+        if (sampleTimer !== null) {
+          clearTimeout(sampleTimer);
+          sampleTimer = null;
+        }
+        if (hardTimer !== null) {
+          clearTimeout(hardTimer);
+          hardTimer = null;
+        }
+      };
+
+      const settleSuccess = (fix: GeoFix) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        setCoords(fix);
+        setLoading(false);
+        resolve(fix);
+      };
+
+      const settleError = (code: GeoErrorCode) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const err: GeoError = { code, message: geoErrorMessage(code) };
+        setError(err);
+        setLoading(false);
+        reject(err);
+      };
+
+      hardTimer = setTimeout(() => {
+        // Overall deadline: settle for the best fix seen, else no fix at all → timeout.
+        if (best) settleSuccess(best);
+        else settleError('timeout');
+      }, GEO_TIMEOUT_MS);
+
+      watchId = navigator.geolocation.watchPosition(
         (pos) => {
+          if (settled) return;
           const acc = pos.coords.accuracy;
+          const accFinite = Number.isFinite(acc);
           const fix: GeoFix = {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
-            accuracy: Number.isFinite(acc) ? acc : undefined,
+            accuracy: accFinite ? acc : undefined,
             capturedAt: new Date(pos.timestamp || Date.now()).toISOString(),
           };
-          setCoords(fix);
-          setLoading(false);
-          resolve(fix);
+
+          // Keep the fix with the smallest finite accuracy: a fix WITH accuracy beats
+          // one without; between two with accuracy, the smaller (tighter) one wins.
+          if (
+            best === null ||
+            (fix.accuracy != null && (best.accuracy == null || fix.accuracy < best.accuracy))
+          ) {
+            best = fix;
+          }
+
+          // Good enough — resolve immediately, no need to keep sampling.
+          if (fix.accuracy != null && fix.accuracy <= GEO_GOOD_ENOUGH_M) {
+            settleSuccess(fix);
+            return;
+          }
+
+          // First fix arrived: start the brief sampling window, then settle for best.
+          if (sampleTimer === null) {
+            sampleTimer = setTimeout(() => {
+              if (best) settleSuccess(best);
+            }, GEO_SAMPLE_MS);
+          }
         },
         (e) => {
-          const code = mapPositionError(e);
-          const err: GeoError = { code, message: geoErrorMessage(code) };
-          setError(err);
-          setLoading(false);
-          reject(err);
+          settleError(mapPositionError(e));
         },
         { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
       );

@@ -70,11 +70,13 @@ export class RecceHoReviewService {
   // ── Queue ──────────────────────────────────────────────────────────────────────
 
   /**
-   * The recce-HO queue (widened for Manual Recce — R4). It holds recces awaiting HO review from
-   * BOTH entry paths:
-   *   - APP    — the ASM approved it (status APPROVED) and it awaits HO (hoReviewStatus PENDING).
-   *   - MANUAL — field-typed, skips ASM, so it arrives status SUBMITTED + hoReviewStatus PENDING.
-   * `?mode=all|app|manual` (default `all`) narrows to one path. Tenant-scoped; ordered oldest-first
+   * The recce-HO queue. Any recce awaiting HO sign-off is simply `hoReviewStatus = PENDING`
+   * (status-agnostic), which covers every entry path:
+   *   - APP (ASM-approved)   — the ASM approved it (status APPROVED) and it awaits HO.
+   *   - MANUAL               — field-typed, skips ASM, so it arrives status SUBMITTED.
+   *   - APP (resubmitted)    — a re-captured recce now skips ASM too (status SUBMITTED), landing
+   *                            straight here instead of silently vanishing between the old clauses.
+   * `?mode=all|app|manual` (default `all`) narrows by recceMode. Tenant-scoped; ordered oldest-first
    * (manual recces have no ASM `reviewedAt`, so a null-last secondary sort on `receivedAt` keeps the
    * FIFO sane across both kinds).
    */
@@ -83,18 +85,13 @@ export class RecceHoReviewService {
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
     const skip = (page - 1) * limit;
 
-    const appClause: Prisma.RecceWhereInput = { status: 'APPROVED', hoReviewStatus: 'PENDING' };
-    const manualClause: Prisma.RecceWhereInput = {
-      recceMode: RecceMode.MANUAL, status: 'SUBMITTED', hoReviewStatus: 'PENDING',
-    };
-    const mode = q.mode ?? 'all';
-    const orClauses =
-      mode === 'app' ? [appClause] : mode === 'manual' ? [manualClause] : [appClause, manualClause];
-
     const where: Prisma.RecceWhereInput = {
       ...this.recceWhere(user),
-      OR: orClauses,
+      hoReviewStatus: 'PENDING',
     };
+    const mode = q.mode ?? 'all';
+    if (mode === 'app') where.recceMode = RecceMode.APP;
+    else if (mode === 'manual') where.recceMode = RecceMode.MANUAL;
     const siteFilter: Prisma.SiteWhereInput = {};
     if (q.siteCode) siteFilter.code = { contains: q.siteCode, mode: 'insensitive' };
     if (q.town) siteFilter.town = { contains: q.town, mode: 'insensitive' };
@@ -196,10 +193,15 @@ export class RecceHoReviewService {
     return this.approveApp(user, recce);
   }
 
-  /** APP recce approve — the original transition (hoReviewStatus PENDING → APPROVED only). */
+  /**
+   * APP recce approve — PENDING → APPROVED on the HO stage, AND status → APPROVED unconditionally.
+   * For an ASM-approved recce status is already APPROVED (the set is a no-op); for a RESUBMITTED
+   * recce status is SUBMITTED, so HO sign-off promotes it to APPROVED here — exactly like a MANUAL
+   * recce — so the install gate (status === APPROVED && hoReviewStatus === APPROVED) passes.
+   */
   private approveApp(
     user: JwtPayload,
-    recce: { id: string; hoReviewStatus: string },
+    recce: { id: string; status: string; hoReviewStatus: string },
   ) {
     const id = recce.id;
     return this.prisma.$transaction(async (tx) => {
@@ -210,6 +212,7 @@ export class RecceHoReviewService {
           // loser matches 0 rows (P2025) → 409, so no second audit row is appended.
           where: { id, hoReviewStatus: 'PENDING' },
           data: {
+            status: 'APPROVED',
             hoReviewStatus: 'APPROVED',
             hoReviewedById: user.sub,
             hoReviewedAt: new Date(),
@@ -224,8 +227,8 @@ export class RecceHoReviewService {
         user,
         'APPROVE',
         id,
-        { hoReviewStatus: recce.hoReviewStatus },
-        { hoReviewStatus: 'APPROVED' },
+        { status: recce.status, hoReviewStatus: recce.hoReviewStatus },
+        { status: 'APPROVED', hoReviewStatus: 'APPROVED' },
       );
       return updated;
     });

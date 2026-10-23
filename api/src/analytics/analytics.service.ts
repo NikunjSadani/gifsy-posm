@@ -175,10 +175,12 @@ export class AnalyticsService {
       // HO-approved / installable: status APPROVED AND hoReviewStatus APPROVED.
       this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
       this.prisma.recce.count({ where: { ...s.recce, status: 'REJECTED' } }),
-      // Pending ASM review = SUBMITTED *app* recces only. A manual recce is also SUBMITTED but skips
-      // ASM (it sits in the HO queue), so counting it here would mislabel it as an ASM backlog and
-      // double-count it against the HO-pending lines (adversarial audit F4; matches the digest).
-      this.prisma.recce.count({ where: { ...s.recce, status: 'SUBMITTED', recceMode: 'APP' } }),
+      // Pending ASM review = SUBMITTED *app* recces STILL in the ASM stage (hoReviewStatus NONE).
+      // A manual recce is also SUBMITTED but skips ASM (hoReviewStatus PENDING → the HO queue), and
+      // a RESUBMITTED app recce is likewise SUBMITTED + APP but HO-bound (hoReviewStatus PENDING) —
+      // both are excluded here so neither is mislabeled as an ASM backlog or double-counted against
+      // the HO-pending line (adversarial audit F4; matches the digest + the ASM queue).
+      this.prisma.recce.count({ where: { ...s.recce, status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE' } }),
       this.prisma.recce.count({ where: { ...s.recce, geoFenceOk: true } }),
       this.prisma.recce.count({ where: { ...s.recce, geoFenceOk: { not: null } } }),
       this.prisma.installation.count({ where: s.install }),
@@ -191,15 +193,12 @@ export class AnalyticsService {
       // funnel's recce-count ordering above is unchanged. recceMode is NOT filtered anywhere else,
       // so the funnel stages already include manual recces — this only splits the recce total.
       this.prisma.recce.count({ where: { ...s.recce, recceMode: 'MANUAL' } }),
-      // Recces awaiting Head-Office sign-off (the HO queue): APP (ASM-approved, hoReviewStatus
-      // PENDING) OR MANUAL (skips ASM — status SUBMITTED, hoReviewStatus PENDING). Mirrors the
-      // recce-ho-review queue + the digest; invisible to pendingRecceReview (SUBMITTED app-only).
+      // Recces awaiting Head-Office sign-off (the HO queue) = ANY recce at hoReviewStatus PENDING,
+      // status-agnostic. Covers APP ASM-approved (status APPROVED), MANUAL (status SUBMITTED), AND
+      // resubmitted APP (status SUBMITTED). Mirrors the recce-ho-review queue + the digest; disjoint
+      // from pendingRecceReview, which is now pinned to hoReviewStatus NONE.
       this.prisma.recce.count({
-        where: {
-          ...s.recce,
-          hoReviewStatus: 'PENDING',
-          OR: [{ status: 'APPROVED' }, { recceMode: 'MANUAL', status: 'SUBMITTED' }],
-        },
+        where: { ...s.recce, hoReviewStatus: 'PENDING' },
       }),
     ]);
 
@@ -749,15 +748,13 @@ export class AnalyticsService {
       case DrilldownMetric.HO_APPROVED:
         return { status: 'APPROVED', hoReviewStatus: 'APPROVED' }; // summary `hoApproved`
       case DrilldownMetric.PENDING_ASM_REVIEW:
-        // APP-only ASM queue (manual skips ASM) — summary `pendingRecceReview`.
-        return { status: 'SUBMITTED', recceMode: 'APP' };
+        // APP-only ASM queue, still in the ASM stage (hoReviewStatus NONE — a resubmitted app recce
+        // is SUBMITTED + APP but HO-bound, so it is excluded) — mirrors summary `pendingRecceReview`.
+        return { status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE' };
       case DrilldownMetric.PENDING_HO_REVIEW:
-        // The HO queue, mirroring summary `pendingHoReview`: APP ASM-approved+HO-pending OR MANUAL
-        // SUBMITTED+HO-pending.
-        return {
-          hoReviewStatus: 'PENDING',
-          OR: [{ status: 'APPROVED' }, { recceMode: 'MANUAL', status: 'SUBMITTED' }],
-        };
+        // The HO queue, mirroring summary `pendingHoReview`: ANY recce at hoReviewStatus PENDING
+        // (APP ASM-approved, MANUAL, AND resubmitted-APP), status-agnostic.
+        return { hoReviewStatus: 'PENDING' };
       case DrilldownMetric.REJECTED_RECCE:
         return { status: 'REJECTED' }; // summary `rejectedRecce`
       case DrilldownMetric.RECCES_APP:

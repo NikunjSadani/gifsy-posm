@@ -109,6 +109,20 @@ describe('AnalyticsService.summary — scoping', () => {
     expect(firstSiteWhere(fns)).toEqual({ clientId: 'c1', asmUserId: 'asm-3' });
     expect(firstRecceWhere(fns)).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-3' } });
   });
+
+  it('pendingRecceReview pins hoReviewStatus NONE; pendingHoReview is just hoReviewStatus PENDING', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+    // recce.count order: 0 recced, 1 approved, 2 hoApproved, 3 rejectedRecce, 4 pendingRecceReview,
+    // 5 geoTrue, 6 geoDecided, 7 recceManual, 8 pendingHoReview.
+    // pendingRecceReview = SUBMITTED app recces STILL in the ASM stage (hoReviewStatus NONE).
+    expect(fns.recce.count.mock.calls[4][0].where).toEqual({
+      clientId: 'c1', status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE',
+    });
+    // pendingHoReview = ANY recce awaiting HO sign-off (covers app-approved, manual, resubmitted-app).
+    expect(fns.recce.count.mock.calls[8][0].where).toEqual({ clientId: 'c1', hoReviewStatus: 'PENDING' });
+  });
 });
 
 describe('AnalyticsService.summary — KPI math + 0-guards', () => {
@@ -436,22 +450,19 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
   });
 
-  it('pending-asm-review: SUBMITTED app recces (the ASM queue)', async () => {
+  it('pending-asm-review: SUBMITTED app recces STILL in the ASM stage (hoReviewStatus NONE)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new AnalyticsService(prisma);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'pending-asm-review' } as any);
-    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'SUBMITTED', recceMode: 'APP' });
+    // hoReviewStatus NONE excludes a resubmitted app recce (SUBMITTED + APP but HO-bound).
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE' });
   });
 
-  it('pending-ho-review: HO-pending — APP ASM-approved OR MANUAL SUBMITTED (mirrors summary)', async () => {
+  it('pending-ho-review: ANY recce at hoReviewStatus PENDING (mirrors summary — app/manual/resubmit)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new AnalyticsService(prisma);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'pending-ho-review' } as any);
-    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({
-      clientId: 'c1',
-      hoReviewStatus: 'PENDING',
-      OR: [{ status: 'APPROVED' }, { recceMode: 'MANUAL', status: 'SUBMITTED' }],
-    });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', hoReviewStatus: 'PENDING' });
   });
 
   it('rejected-recce / recces-app / recces-manual pin the expected recce predicate', async () => {

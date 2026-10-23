@@ -50,30 +50,33 @@ const user = (over: Partial<JwtPayload>): JwtPayload => ({
 });
 
 describe('RecceHoReviewService.listQueue — the recce-HO queue', () => {
-  it('CLIENT_ADMIN: pins the tenant + widens to app OR manual pending-HO clauses', async () => {
+  it('CLIENT_ADMIN: pins the tenant + matches ANY recce pending HO (hoReviewStatus PENDING)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new RecceHoReviewService(prisma);
     await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
     const where = fns.recce.findMany.mock.calls[0][0].where;
     expect(where.clientId).toBe('c1');
-    // R4 — app (ASM-approved, pending HO) OR manual (skipped ASM, SUBMITTED, pending HO).
-    expect(where.OR).toEqual([
-      { status: 'APPROVED', hoReviewStatus: 'PENDING' },
-      { recceMode: 'MANUAL', status: 'SUBMITTED', hoReviewStatus: 'PENDING' },
-    ]);
+    // Simplified: ANY recce at hoReviewStatus PENDING — covers app ASM-approved (status APPROVED),
+    // manual (status SUBMITTED), AND resubmitted-app (status SUBMITTED), which the old app/manual OR
+    // clauses would have silently dropped. No recceMode pin for the default (all) mode.
+    expect(where.hoReviewStatus).toBe('PENDING');
+    expect(where.recceMode).toBeUndefined();
+    expect(where.OR).toBeUndefined();
   });
 
-  it('mode=manual narrows to the manual clause; mode=app to the app clause', async () => {
+  it('mode=manual narrows to recceMode MANUAL; mode=app to recceMode APP (both still pending HO)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new RecceHoReviewService(prisma);
     await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { mode: 'manual' });
-    expect(fns.recce.findMany.mock.calls[0][0].where.OR).toEqual([
-      { recceMode: 'MANUAL', status: 'SUBMITTED', hoReviewStatus: 'PENDING' },
-    ]);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toMatchObject({
+      hoReviewStatus: 'PENDING', recceMode: 'MANUAL',
+    });
     await svc.listQueue(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { mode: 'app' });
-    expect(fns.recce.findMany.mock.calls[1][0].where.OR).toEqual([
-      { status: 'APPROVED', hoReviewStatus: 'PENDING' },
-    ]);
+    expect(fns.recce.findMany.mock.calls[1][0].where).toMatchObject({
+      hoReviewStatus: 'PENDING', recceMode: 'APP',
+    });
+    // mode=app now matches a resubmitted APP recce (SUBMITTED) too — no status pin excludes it.
+    expect(fns.recce.findMany.mock.calls[1][0].where.status).toBeUndefined();
   });
 
   it('a manual queue item carries recceMode + outletId (null while the code is provisional)', async () => {
@@ -184,10 +187,10 @@ describe('RecceHoReviewService — duplicate-photo fraud flag (mirrors the ASM c
 });
 
 describe('RecceHoReviewService.approve/reject — transitions', () => {
-  it('approve: hoReviewStatus PENDING → APPROVED + stamps reviewer; status is NOT rewritten', async () => {
+  it('approve (app): hoReviewStatus PENDING → APPROVED + stamps reviewer; status set to APPROVED (no-op for an ASM-approved recce, promotes a resubmit)', async () => {
     const { prisma, fns } = makePrisma();
     fns.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'PENDING' });
-    fns.recce.update.mockResolvedValue({ id: 'r1', hoReviewStatus: 'APPROVED' });
+    fns.recce.update.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
     const svc = new RecceHoReviewService(prisma);
     await svc.approve(user({ role: 'CLIENT_ADMIN', sub: 'ho-1', clientId: 'c1' }), 'r1');
     const call = fns.recce.update.mock.calls[0][0];
@@ -195,11 +198,24 @@ describe('RecceHoReviewService.approve/reject — transitions', () => {
     expect(call.data.hoReviewStatus).toBe('APPROVED');
     expect(call.data.hoReviewedById).toBe('ho-1');
     expect(call.data.hoReviewedAt).toBeInstanceOf(Date);
-    // The recce's status (APPROVED) is left intact — HO approve only flips the HO stage.
-    expect(call.data.status).toBeUndefined();
+    // HO approve now sets status APPROVED unconditionally so a RESUBMITTED app recce (status
+    // SUBMITTED) is promoted to APPROVED here too, making the install gate pass (same as manual).
+    expect(call.data.status).toBe('APPROVED');
     expect(fns.auditLog.create.mock.calls[0][0].data).toMatchObject({
       action: 'APPROVE', entityType: 'RECCE_HO_REVIEW', entityId: 'r1',
     });
+  });
+
+  it('approve (app) promotes a RESUBMITTED recce (status SUBMITTED) → APPROVED + hoReviewStatus APPROVED', async () => {
+    const { prisma, fns } = makePrisma();
+    // A resubmitted APP recce arrives at HO as SUBMITTED + hoReviewStatus PENDING (no recceMode set → app).
+    fns.recce.findFirst.mockResolvedValue({ id: 'r1', status: 'SUBMITTED', hoReviewStatus: 'PENDING' });
+    fns.recce.update.mockResolvedValue({ id: 'r1', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
+    const svc = new RecceHoReviewService(prisma);
+    await svc.approve(user({ role: 'CLIENT_ADMIN', sub: 'ho-1', clientId: 'c1' }), 'r1');
+    const data = fns.recce.update.mock.calls[0][0].data;
+    expect(data.status).toBe('APPROVED'); // promoted from SUBMITTED → install gate passes
+    expect(data.hoReviewStatus).toBe('APPROVED');
   });
 
   it('reject: hoReviewStatus PENDING → REJECTED AND status → REJECTED + stores the reason code', async () => {

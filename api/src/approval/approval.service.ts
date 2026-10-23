@@ -148,9 +148,11 @@ export class ApprovalService {
     const skip = (page - 1) * limit;
 
     // R3 — the ASM queue is APP-only: a MANUAL recce skips the ASM stage (field → HO directly), so
-    // an ASM must never see one here.
+    // an ASM must never see one here. hoReviewStatus NONE also EXCLUDES a resubmitted APP recce:
+    // a re-captured recce is SUBMITTED + APP but goes straight to HO (hoReviewStatus PENDING), so
+    // it belongs to the HO queue, not back in the ASM queue.
     const where: Prisma.RecceWhereInput = {
-      ...this.recceWhere(user), status: 'SUBMITTED', recceMode: RecceMode.APP,
+      ...this.recceWhere(user), status: 'SUBMITTED', recceMode: RecceMode.APP, hoReviewStatus: 'NONE',
     };
     // Site filters ride the site relation so an ASM's `site` scope is never overwritten
     // (we merge into it rather than replacing it).
@@ -328,8 +330,10 @@ export class ApprovalService {
     const scope = tenantScope(user);
     const recces = await this.prisma.recce.findMany({
       // R3 — APP-only: a MANUAL recce id is simply absent from the candidate set (→ skipped
-      // NOT_FOUND), never bulk-approved through the ASM lane.
-      where: { id: { in: ids }, recceMode: RecceMode.APP, ...(scope !== undefined ? { clientId: scope } : {}) },
+      // NOT_FOUND), never bulk-approved through the ASM lane. hoReviewStatus NONE also excludes a
+      // resubmitted APP recce (SUBMITTED + APP but HO-bound) so the bulk approve can't pull one
+      // back into the ASM lane.
+      where: { id: { in: ids }, recceMode: RecceMode.APP, hoReviewStatus: 'NONE', ...(scope !== undefined ? { clientId: scope } : {}) },
       include: { site: { select: { asmUserId: true } } },
     });
     const found = new Map(recces.map((r) => [r.id, r]));
@@ -639,7 +643,11 @@ export class ApprovalService {
   private async loadForMutation(user: JwtPayload, id: string) {
     const scope = tenantScope(user);
     const recce = await this.prisma.recce.findFirst({
-      where: { id, ...(scope !== undefined ? { clientId: scope } : {}) },
+      // hoReviewStatus NONE guards the MUTATION: an ASM can only approve/reject a recce still in
+      // the ASM stage. A resubmitted APP recce (SUBMITTED + APP but hoReviewStatus PENDING) and any
+      // recce already handed to HO are excluded here → 404, so an ASM can never approve/reject a
+      // recce that now belongs to the HO queue.
+      where: { id, hoReviewStatus: 'NONE', ...(scope !== undefined ? { clientId: scope } : {}) },
       include: { site: { select: { asmUserId: true } } },
     });
     if (!recce) throw new NotFoundException('Recce not found');

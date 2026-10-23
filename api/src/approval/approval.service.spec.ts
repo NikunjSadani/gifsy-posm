@@ -466,6 +466,44 @@ describe('ApprovalService — R3: the ASM lane excludes MANUAL recces', () => {
   });
 });
 
+describe('ApprovalService — resubmitted (HO-bound) recces are excluded from the ASM lane', () => {
+  it('listQueue pins hoReviewStatus NONE (a resubmitted SUBMITTED+APP recce is HO-bound, not ASM)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.listQueue(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), {});
+    expect(fns.recce.findMany.mock.calls[0][0].where.hoReviewStatus).toBe('NONE');
+  });
+
+  it('approve load guard pins hoReviewStatus NONE → a resubmitted recce (PENDING) is a scoped miss (404)', async () => {
+    const { prisma, fns } = makePrisma();
+    // The hoReviewStatus:'NONE' predicate excludes the resubmitted recce → findFirst returns null.
+    fns.recce.findFirst.mockResolvedValue(null);
+    const svc = new ApprovalService(prisma);
+    await expect(
+      svc.approve(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'r1'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(fns.recce.findFirst.mock.calls[0][0].where.hoReviewStatus).toBe('NONE');
+    expect(fns.recce.update).not.toHaveBeenCalled();
+  });
+
+  it('reject load guard also pins hoReviewStatus NONE', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findFirst.mockResolvedValue(null);
+    const svc = new ApprovalService(prisma);
+    await expect(
+      svc.reject(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), 'r1', { reasonCode: 'BLURRY' } as RejectRecceDto),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(fns.recce.findFirst.mock.calls[0][0].where.hoReviewStatus).toBe('NONE');
+  });
+
+  it('bulkApprove candidate read pins hoReviewStatus NONE (resubmitted recces never enter the set)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.bulkApprove(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { ids: ['x'] });
+    expect(fns.recce.findMany.mock.calls[0][0].where.hoReviewStatus).toBe('NONE');
+  });
+});
+
 describe('ApprovalService.records — scoped per-tile drill-down', () => {
   it('outlets: scoped site.findMany (ASM-territory pin) + empty byElementType + null recceId', async () => {
     const { prisma, fns } = makePrisma();
