@@ -438,9 +438,12 @@ export class ApprovalService {
       await Promise.all([
         this.prisma.site.count({ where: siteWhere }),
         this.prisma.recce.count({ where: recceWhere }),
-        // ASM-approved: APP recces at status APPROVED. Filtered to APP because MANUAL recces skip
-        // the ASM stage entirely (they reach APPROVED via HO), so they were never ASM-approved.
-        this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', recceMode: RecceMode.APP } }),
+        // ASM-approved = recces an ASM actually signed off: status APPROVED AND `approvedById` set.
+        // The approvedById stamp is written ONLY by the ASM approve / bulkApprove paths — a MANUAL
+        // recce (HO-approved, never ASM) and a RESUBMITTED APP recce (nulls approvedById, reaches
+        // APPROVED via HO) both leave it null, so neither is counted. This is stricter than the old
+        // `recceMode: APP` proxy, which wrongly counted a resubmitted-then-HO-approved APP recce.
+        this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', approvedById: { not: null } } }),
         // HO-approved / installable: ASM-approved AND signed off by HO.
         this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
         this.prisma.installation.count({ where: installWhere }),
@@ -620,8 +623,11 @@ export class ApprovalService {
       case RecordsStage.RECCE:
         return this.recceWhere(user);
       case RecordsStage.ASM_APPROVED:
-        // APP-only: a MANUAL recce skips ASM (approved via HO), so it was never ASM-approved.
-        return { ...this.recceWhere(user), status: 'APPROVED', recceMode: RecceMode.APP };
+        // Actually ASM-signed-off: status APPROVED AND `approvedById` stamped (written only by the
+        // ASM approve/bulkApprove paths). A MANUAL recce (HO-approved) and a resubmitted APP recce
+        // (approvedById nulled, HO-approved) both leave it null, so neither is listed here — the
+        // list total matches the waterfall `approved` count exactly.
+        return { ...this.recceWhere(user), status: 'APPROVED', approvedById: { not: null } };
       case RecordsStage.HO_APPROVED:
         return { ...this.recceWhere(user), status: 'APPROVED', hoReviewStatus: 'APPROVED' };
       case RecordsStage.PENDING_INSTALL:

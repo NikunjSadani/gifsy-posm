@@ -1,88 +1,105 @@
-/* ─── Outlet Execution Report — display column grouping (pure, unit-tested) ──────────────────────
-   The backend returns a flat `columns: string[]` (the owner's 36-column spec order). For the
-   on-screen table we want (a) the outlet identity pinned to the left so it stays visible while the
-   30+ detail columns scroll, and (b) a grouped 2-row header (Outlet · Details · Element 1 ·
-   Element 2 · Overall status) so the wide grid is scannable.
-
-   This derives that structure FROM the backend's column list (rather than re-hardcoding all 36
-   names) so it tracks the contract: element groups are matched by their "Element N" prefix, the
-   identity + status groups by a small known key set, and everything else falls into "Details" in
-   the backend's own order. A column the backend adds that matches none of the rules still appears
-   (under Details), so nothing is ever silently dropped from the view.
+/* ─── Recce Report — display column grouping (pure, unit-tested) ────────────────────────────────
+   Grouping is now SERVER-PROVIDED: every column carries a `group` (and whether it is `pinned`
+   sticky-left, or `excelOnly` and thus export-only). This module turns the flat server column list
+   into the on-screen grouped structure — groups rendered in a fixed canonical order, the order
+   WITHIN each group preserved from the server, `excelOnly` columns dropped from the view, and the
+   pinned identity columns flattened to the left. It no longer re-derives grouping from column-name
+   heuristics; it simply honors the contract.
 ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
-/** Columns pinned to the left edge, in display order (left → right). */
-export const PINNED_KEYS = ['Outlet Code', 'Outlet Name'] as const;
+import type { Column, ColumnGroup } from './outlet-execution';
 
-/** The outlet-level rollup statuses, grouped at the far right (this array's order IS the display
- *  order of the status block, so keep it in step with the backend OUTLET_REPORT_COLUMNS order). */
-const STATUS_KEYS = [
-  'Outlet Recce Status',
-  'ASM Approval Status',
-  'HO Approval Status',
-  'HO Recce Approval',
-  'ASM Rejection Reason',
-  'HO Rejection Reason',
-  'Installation Status',
-  'Audit Status',
+/** Canonical left→right order of the column groups. */
+export const GROUP_ORDER: ColumnGroup[] = [
+  'outlet',
+  'location',
+  'profile',
+  'element1',
+  'element2',
+  'overall',
+  'audit',
 ];
 
-export interface DisplayColumn {
-  /** The row-object key (unchanged — used to read `row[key]`). */
-  key: string;
-  /** The header label shown under its group (prefix stripped / de-duplicated). */
-  label: string;
-}
+/** The header label shown for each group. */
+export const GROUP_LABELS: Record<ColumnGroup, string> = {
+  outlet: 'Outlet',
+  location: 'Location',
+  profile: 'Profile',
+  element1: 'Element 1',
+  element2: 'Element 2',
+  overall: 'Overall',
+  audit: 'Audit trail',
+};
 
 export interface OutletColumnGroup {
+  group: ColumnGroup;
   label: string;
-  /** True for the frozen identity group (rendered sticky-left). */
+  /** True when every column in the group is pinned sticky-left (the identity group). */
   pinned: boolean;
-  columns: DisplayColumn[];
+  columns: Column[];
+}
+
+/** A column in flat left→right render order, tagged for the table header/body to iterate alike. */
+export interface FlatColumn {
+  column: Column;
+  /** First column of a non-first group → draw a left group-divider. */
+  groupStart: boolean;
+  /** Index among the sticky-left pinned columns (0-based), or -1 when not pinned. */
+  pinIndex: number;
 }
 
 /**
- * The header shown for a column UNDER its group — the group already carries the "Element 1 / 2"
- * context, so strip that prefix ("Element 1 Recce Status" → "Recce Status") and relabel the bare
- * element-name column ("Element 1" → "POSM type"). All other columns keep their name verbatim.
+ * Build the on-screen display groups from the server column list.
+ *   - `excelOnly` columns are omitted (they appear only in the .xlsx export).
+ *   - Groups are emitted in GROUP_ORDER; the order WITHIN a group is the server's order.
+ *   - Empty groups are dropped.
+ *   - A column with an unknown/future `group` value still appears (its group is appended after the
+ *     known ones), so nothing is ever silently dropped from the view.
  */
-export function subColumnLabel(key: string): string {
-  if (key === 'Element 1' || key === 'Element 2') return 'Element type';
-  const m = /^Element [12] (.+)$/.exec(key);
-  return m ? m[1] : key;
+export function groupOutletColumns(columns: Column[]): OutletColumnGroup[] {
+  const visible = columns.filter((c) => !c.excelOnly);
+
+  const byGroup = new Map<ColumnGroup, Column[]>();
+  for (const c of visible) {
+    const list = byGroup.get(c.group);
+    if (list) list.push(c);
+    else byGroup.set(c.group, [c]);
+  }
+
+  const known = GROUP_ORDER.filter((g) => byGroup.has(g));
+  const unknown = [...byGroup.keys()].filter((g) => !GROUP_ORDER.includes(g));
+
+  return [...known, ...unknown].map((group) => {
+    const cols = byGroup.get(group)!;
+    return {
+      group,
+      label: GROUP_LABELS[group] ?? group,
+      pinned: cols.length > 0 && cols.every((c) => c.pinned === true),
+      columns: cols,
+    };
+  });
 }
 
-const isElement = (key: string, slot: 1 | 2) =>
-  key === `Element ${slot}` || key.startsWith(`Element ${slot} `);
-
 /**
- * Group the backend's flat column list into the display groups, preserving the backend order within
- * each group. Returns groups in render order: Outlet (pinned) · Details · Element 1 · Element 2 ·
- * Overall status. Empty groups are omitted. Every input column lands in exactly one group.
+ * Flatten the grouped structure to the left→right render order the table iterates. Pinned columns
+ * (sticky-left) are those flagged `pinned` by the server; their 0-based index drives the cumulative
+ * sticky `left` offset in the table.
  */
-export function groupOutletColumns(columns: string[]): OutletColumnGroup[] {
-  const col = (key: string): DisplayColumn => ({ key, label: subColumnLabel(key) });
+export function flatColumns(groups: OutletColumnGroup[]): FlatColumn[] {
+  const pinnedKeys: string[] = [];
+  for (const g of groups) for (const c of g.columns) if (c.pinned) pinnedKeys.push(c.key);
 
-  const pinned = PINNED_KEYS.filter((k) => columns.includes(k)).map(col);
-  const element1 = columns.filter((c) => isElement(c, 1)).map(col);
-  const element2 = columns.filter((c) => isElement(c, 2)).map(col);
-  const status = STATUS_KEYS.filter((k) => columns.includes(k)).map(col);
-
-  const claimed = new Set<string>([
-    ...PINNED_KEYS,
-    ...columns.filter((c) => isElement(c, 1) || isElement(c, 2)),
-    ...STATUS_KEYS,
-  ]);
-  const details = columns.filter((c) => !claimed.has(c)).map(col);
-
-  const groups: OutletColumnGroup[] = [
-    { label: 'Outlet', pinned: true, columns: pinned },
-    { label: 'Details', pinned: false, columns: details },
-    { label: 'Element 1', pinned: false, columns: element1 },
-    { label: 'Element 2', pinned: false, columns: element2 },
-    { label: 'Overall status', pinned: false, columns: status },
-  ];
-  return groups.filter((g) => g.columns.length > 0);
+  const out: FlatColumn[] = [];
+  groups.forEach((g, gi) => {
+    g.columns.forEach((c, ci) => {
+      out.push({
+        column: c,
+        groupStart: gi > 0 && ci === 0,
+        pinIndex: pinnedKeys.indexOf(c.key),
+      });
+    });
+  });
+  return out;
 }
 
 /** The flat left→right display order of column keys (pinned first), from the grouped structure. */

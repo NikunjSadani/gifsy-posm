@@ -16,7 +16,7 @@
  * sole authority on the geo-fence verdict.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 /** A single shutter-time GPS fix — matches the backend `photo.geo` (GeoDto) contract. */
 export interface GeoFix {
@@ -98,18 +98,38 @@ export function useGeo(): UseGeoResult {
   const [error, setError] = useState<GeoError | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Unmount safety: a `capture()` schedules a watch + timers that can fire after the
+  // component is gone. `mountedRef` gates every state write so we never setState on an
+  // unmounted component (React warning), and `activeCleanupRef` holds the in-flight
+  // capture's teardown so the unmount effect can tear down the watch + timers.
+  const mountedRef = useRef(true);
+  const activeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeCleanupRef.current?.();
+      activeCleanupRef.current = null;
+    };
+  }, []);
+
   const capture = useCallback((): Promise<GeoFix> => {
     return new Promise<GeoFix>((resolve, reject) => {
       if (typeof navigator === 'undefined' || !navigator.geolocation) {
         const err: GeoError = { code: 'unsupported', message: geoErrorMessage('unsupported') };
-        setError(err);
-        setLoading(false);
+        if (mountedRef.current) {
+          setError(err);
+          setLoading(false);
+        }
         reject(err);
         return;
       }
 
-      setLoading(true);
-      setError(null);
+      if (mountedRef.current) {
+        setLoading(true);
+        setError(null);
+      }
 
       // Sample over a short window and keep the TIGHTEST fix: GPS accuracy improves
       // over a few seconds as more satellites lock, so a single instantaneous reading
@@ -133,14 +153,20 @@ export function useGeo(): UseGeoResult {
           clearTimeout(hardTimer);
           hardTimer = null;
         }
+        activeCleanupRef.current = null;
       };
+
+      // Let an unmount tear down this in-flight capture's watch + timers.
+      activeCleanupRef.current = cleanup;
 
       const settleSuccess = (fix: GeoFix) => {
         if (settled) return;
         settled = true;
         cleanup();
-        setCoords(fix);
-        setLoading(false);
+        if (mountedRef.current) {
+          setCoords(fix);
+          setLoading(false);
+        }
         resolve(fix);
       };
 
@@ -149,8 +175,10 @@ export function useGeo(): UseGeoResult {
         settled = true;
         cleanup();
         const err: GeoError = { code, message: geoErrorMessage(code) };
-        setError(err);
-        setLoading(false);
+        if (mountedRef.current) {
+          setError(err);
+          setLoading(false);
+        }
         reject(err);
       };
 
@@ -195,7 +223,13 @@ export function useGeo(): UseGeoResult {
           }
         },
         (e) => {
-          settleError(mapPositionError(e));
+          // A transient watch error (e.g. POSITION_UNAVAILABLE under flaky signal) must
+          // NOT throw away a usable fix we already captured: hand up the best fix instead
+          // of rejecting — matching the old getCurrentPosition path's reliability. Only
+          // reject when we have no fix at all yet. (The server-side geofence remains the
+          // authority on whether the fix is acceptable.)
+          if (best) settleSuccess(best);
+          else settleError(mapPositionError(e));
         },
         { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
       );

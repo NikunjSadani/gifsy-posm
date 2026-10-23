@@ -48,7 +48,18 @@ export class RecceController {
     return this.recce.list(user, query);
   }
 
-  /** GET /v1/recce/:id — a single recce with its POSM lines + media view-paths. */
+  /**
+   * GET /v1/recce/for-site/:siteId — resolve the REJECTED recce the caller may re-capture at a
+   * site (the field app's authoritative re-capture target). Returns `{ recce: <RecceDetail> | null }`.
+   * Literal `for-site` segment + 2 path parts, so it never collides with GET /v1/recce/:id.
+   */
+  @Roles('VENDOR_FIELD')
+  @Get('for-site/:siteId')
+  forSite(@CurrentUser() user: JwtPayload, @Param('siteId') siteId: string) {
+    return this.recce.forSite(user, siteId);
+  }
+
+  /** GET /v1/recce/:id — a single recce with its POSM lines + media view-paths (deep link). */
   @Roles('VENDOR_FIELD')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

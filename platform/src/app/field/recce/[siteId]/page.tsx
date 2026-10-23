@@ -34,6 +34,7 @@ import {
 import {
   fetchMyRecces,
   fetchRecce,
+  fetchRejectedRecceForSite,
   submitRecce,
   resubmitRecce,
   findSiteRecce,
@@ -145,8 +146,16 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     };
   }, [siteId]);
 
-  // Resolve the recce context: an explicit ?recceId (from My Work "Re-capture"), or detect an
-  // existing recce for this site. A REJECTED recce → resubmit; SUBMITTED/APPROVED → blocked.
+  // Resolve the recce context (create vs resubmit vs blocked). Precedence:
+  //   1. ?recceId= present (from My Work "Re-capture") → load THAT recce by id and decide mode from
+  //      its status: REJECTED → resubmit, anything else → blocked. The explicit id wins outright.
+  //   2. else the `for-site` resolver → the single REJECTED recce this user may resubmit for the
+  //      site. If it returns one → resubmit. This resolves the RIGHT recce even when the site also
+  //      carries a newer non-rejected recce (a newest-wins lookup would resolve that and wrongly
+  //      block), and it is single-result server-side so the list's 200-row cap can't hide it.
+  //   3. else fall back to the newest recce for the site (`findSiteRecce`) → SUBMITTED/APPROVED
+  //      blocks, none → create. The resolver already owns the rejected case, so this only ever
+  //      lands on a non-rejected (blocking) recce or nothing.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -157,16 +166,23 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
         const res = await fetchRecce(recceIdParam);
         if (alive && res.success) detail = res.data;
       } else {
-        const list = await fetchMyRecces();
-        if (alive && list.success) {
-          const row = findSiteRecce(list.data.recces, siteId);
-          if (row) {
-            const res = await fetchRecce(row.id);
-            if (alive && res.success) detail = res.data;
+        // Path 2: the rejected recce the user may resubmit for this site (if any).
+        const resolved = await fetchRejectedRecceForSite(siteId);
+        if (alive && resolved.success && resolved.data.recce) {
+          detail = resolved.data.recce;
+        } else if (alive) {
+          // Path 3: no rejected recce — fall back to the newest recce for the site to detect a
+          // blocking (SUBMITTED/APPROVED) one. A failure here is non-fatal: fall through as CREATE —
+          // the backend's one-live-recce constraint still guards (a duplicate comes back as a 409).
+          const list = await fetchMyRecces();
+          if (alive && list.success) {
+            const row = findSiteRecce(list.data.recces, siteId);
+            if (row) {
+              const res = await fetchRecce(row.id);
+              if (alive && res.success) detail = res.data;
+            }
           }
         }
-        // A list failure is non-fatal: fall through as CREATE — the backend's one-live-recce
-        // constraint still guards (a genuine duplicate comes back as a 409 we surface).
       }
 
       if (!alive) return;

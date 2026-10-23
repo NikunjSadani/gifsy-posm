@@ -1,20 +1,25 @@
 'use client';
 
 /**
- * Outlet Execution Report (owner spec 2026-09-30; Manual-Recce Wave B 2026-10-09) — ONE ROW PER
- * RECCE across recce → ASM → install → audit → HO, for up to 2 POSM elements. An outlet with one
- * APP recce renders a single row; an outlet with 1 app + N manual recces renders 1 + N rows (the
- * identity columns repeat, the element/status columns are each recce's own); a no-recce outlet
- * still renders one "Not started" row. The "Recce Mode" column (App / Manual) classifies each row.
- * The table is horizontally scrollable; the primary deliverable is the .xlsx download (all matching
- * rows). Paging is by outlet, so a multi-recce outlet never straddles a page. Filters: outlet code,
- * town, region, state, vendor. Admin-only (inside the /admin shell).
+ * Recce Report (curated cell contract, 2026-10-24) — a scannable per-recce report rendered from a
+ * SERVER-DRIVEN typed cell contract (not raw text columns). Each row is one recce; the server hands
+ * the columns (key/label/group, which are pinned sticky-left, which are excel-only) and per-cell
+ * typed values (text / colored status chip / inline photo thumbnail with a GPS pin / empty). The
+ * on-screen table SKIPS excel-only columns (audit-trail approver/date columns live only in the
+ * .xlsx). A grouped two-row header spans each group; the outlet identity columns are pinned
+ * sticky-left and the rest scroll horizontally. Filters (outlet code, town, region, state, vendor)
+ * and the "Download .xlsx" export (all columns, all matching rows) are unchanged. Admin-only.
+ *
+ * A `mode` seam ('recce' | 'installed') is in place for a later recce|installed toggle; only the
+ * 'recce' view is built today.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RefreshCw, Download, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Spinner } from '@/components/ui/spinner';
+import { Lightbox } from '@/components/audit/media-image';
+import { ReportCell } from '@/components/reports/report-cell';
 import { pageCount } from '@/components/audit/pagination';
 import { vendorsApi } from '@/lib/admin/api';
 import type { Vendor } from '@/lib/admin/types';
@@ -25,15 +30,25 @@ import {
   type OutletReportResult,
   type OutletReportFilters,
 } from '@/lib/reports/outlet-execution';
-import { groupOutletColumns, PINNED_KEYS } from '@/lib/reports/outlet-columns';
-
-/** Fixed widths (px) for the frozen identity columns — the 2nd column's sticky `left` is the 1st's
- *  width, so these MUST stay in step with the `w-*`/`left-*` classes used below. */
-const PIN_LEFT = ['left-0', 'left-28']; // 0, 112px (= w-28)
-const PIN_WIDTH = ['w-28 min-w-[7rem] max-w-[7rem]', 'w-48 min-w-[12rem] max-w-[12rem]'];
-const LAST_PINNED = PINNED_KEYS[PINNED_KEYS.length - 1];
+import { groupOutletColumns, flatColumns } from '@/lib/reports/outlet-columns';
 
 const PAGE_SIZE = 50;
+
+/** Pixel widths for the sticky-left pinned columns, by pin index; a further pinned column (none
+ *  today) falls back to the last width. The sticky `left` offset is the sum of earlier widths. */
+const PIN_WIDTHS = [128, 208];
+const pinWidth = (i: number) => PIN_WIDTHS[i] ?? PIN_WIDTHS[PIN_WIDTHS.length - 1] ?? 160;
+const pinLeft = (i: number) => {
+  let left = 0;
+  for (let j = 0; j < i; j++) left += pinWidth(j);
+  return left;
+};
+
+type ReportMode = 'recce' | 'installed';
+const MODE_TITLES: Record<ReportMode, string> = {
+  recce: 'Recce Report',
+  installed: 'Installation Report',
+};
 
 export default function ExecutionReportPage() {
   const [siteCode, setSiteCode] = useState('');
@@ -43,12 +58,16 @@ export default function ExecutionReportPage() {
   const [vendorId, setVendorId] = useState('');
   const [page, setPage] = useState(1);
 
+  // Seam for a later recce|installed toggle — only 'recce' is built today.
+  const [mode] = useState<ReportMode>('recce');
+
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [data, setData] = useState<OutletReportResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   const filters: OutletReportFilters = useMemo(
     () => ({ siteCode: siteCode.trim(), town: town.trim(), region: region.trim(), state: stateF.trim(), vendorId }),
@@ -84,37 +103,29 @@ export default function ExecutionReportPage() {
     else toast.success('Report downloaded');
   };
 
-  const columns = data?.columns ?? [];
+  const columns = useMemo(() => data?.columns ?? [], [data]);
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const totalPages = pageCount(total, PAGE_SIZE);
 
-  // Grouped display model (pure + unit-tested): pinned identity group first, then Details /
-  // Element 1 / Element 2 / Overall status. `flatCols` is the left→right render order, tagged with
-  // the pin index and the group-boundary flag so the header and body iterate identically.
+  // Grouped display model, driven entirely from the server columns (excel-only columns dropped).
+  // `flat` is the left→right render order tagged with the pin index and group-boundary flag so the
+  // header and body iterate identically.
   const groups = useMemo(() => groupOutletColumns(columns), [columns]);
-  const flatCols = useMemo(
-    () =>
-      groups.flatMap((g, gi) =>
-        g.columns.map((c, ci) => ({
-          key: c.key,
-          label: c.label,
-          pinIndex: PINNED_KEYS.indexOf(c.key as (typeof PINNED_KEYS)[number]),
-          groupStart: gi > 0 && ci === 0, // first column of a non-first group → left divider
-        })),
-      ),
-    [groups],
-  );
+  const flat = useMemo(() => flatColumns(groups), [groups]);
+  const lastPinnedKey = useMemo(() => {
+    const pinned = flat.filter((c) => c.pinIndex >= 0);
+    return pinned.length ? pinned[pinned.length - 1].column.key : null;
+  }, [flat]);
 
   return (
     <div className="fade-in">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Execution report</h1>
+          <h1 className="text-xl font-bold text-gray-900">{MODE_TITLES[mode]}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            One row per recce — an outlet with multiple recces (App + Manual) spans several rows,
-            each with its own Elements, installation, approvals and audit.
-            {!loading && !error && <> {' · '}{total} outlet{total === 1 ? '' : 's'}</>}
+            One row per recce — recce evidence, element status and approvals at a glance.
+            {!loading && !error && <> {' · '}{total} recce{total === 1 ? '' : 's'}</>}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -168,22 +179,23 @@ export default function ExecutionReportPage() {
           <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center">
             <FileSpreadsheet className="h-6 w-6 text-gray-400" />
           </div>
-          <p className="text-sm font-medium text-gray-700">No outlets match your filters</p>
+          <p className="text-sm font-medium text-gray-700">No recces match your filters</p>
         </div>
       ) : (
         <>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-auto max-h-[70vh]">
             <table className="border-separate border-spacing-0 text-sm">
               <thead>
-                {/* Row 1 — group headers (span their columns). */}
+                {/* Row 1 — group headers (each spans its columns). */}
                 <tr>
                   {groups.map((g, gi) => (
                     <th
-                      key={g.label}
+                      key={g.group}
                       colSpan={g.columns.length}
+                      style={g.pinned ? { left: 0 } : undefined}
                       className={cn(
                         'sticky top-0 h-9 px-3 text-left text-[10px] font-bold uppercase tracking-widest text-gray-500 bg-gray-100 border-b border-gray-200 whitespace-nowrap',
-                        g.pinned ? 'left-0 z-30 border-r-2 border-r-gray-200' : 'z-20',
+                        g.pinned ? 'z-30 border-r-2 border-r-gray-200' : 'z-20',
                         gi > 0 && 'border-l border-l-gray-200',
                       )}
                     >
@@ -193,43 +205,56 @@ export default function ExecutionReportPage() {
                 </tr>
                 {/* Row 2 — column headers (sticky below the group row). */}
                 <tr>
-                  {flatCols.map((c) => {
+                  {flat.map((c) => {
                     const pinned = c.pinIndex >= 0;
                     return (
                       <th
-                        key={c.key}
+                        key={c.column.key}
+                        style={
+                          pinned
+                            ? { left: pinLeft(c.pinIndex), width: pinWidth(c.pinIndex), minWidth: pinWidth(c.pinIndex), maxWidth: pinWidth(c.pinIndex) }
+                            : undefined
+                        }
                         className={cn(
                           'sticky top-9 h-9 px-3 text-left text-[11px] font-bold uppercase tracking-wide text-gray-500 bg-gray-50 border-b border-gray-200 whitespace-nowrap',
-                          pinned ? `${PIN_LEFT[c.pinIndex]} ${PIN_WIDTH[c.pinIndex]} z-30` : 'z-20',
-                          c.key === LAST_PINNED && 'border-r-2 border-r-gray-200',
+                          pinned ? 'z-30' : 'z-20',
+                          c.column.key === lastPinnedKey && 'border-r-2 border-r-gray-200',
                           c.groupStart && 'border-l border-l-gray-200',
                         )}
                       >
-                        {c.label}
+                        {c.column.label}
                       </th>
                     );
                   })}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i} className="group hover:bg-gray-50/60">
-                    {flatCols.map((c) => {
+                {rows.map((r) => (
+                  <tr key={r.id} className="group hover:bg-gray-50/60">
+                    {flat.map((c) => {
                       const pinned = c.pinIndex >= 0;
+                      const cell = r.cells[c.column.key] ?? { t: 'empty' as const };
                       return (
                         <td
-                          key={c.key}
-                          className={cn(
-                            'h-10 px-3 text-gray-700 whitespace-nowrap border-b border-gray-50',
+                          key={c.column.key}
+                          style={
                             pinned
-                              ? `${PIN_LEFT[c.pinIndex]} ${PIN_WIDTH[c.pinIndex]} sticky z-10 bg-white group-hover:bg-gray-50 truncate`
-                              : '',
-                            c.key === LAST_PINNED && 'border-r-2 border-r-gray-200',
+                              ? { left: pinLeft(c.pinIndex), width: pinWidth(c.pinIndex), minWidth: pinWidth(c.pinIndex), maxWidth: pinWidth(c.pinIndex) }
+                              : undefined
+                          }
+                          className={cn(
+                            'h-12 px-3 align-middle text-gray-700 whitespace-nowrap border-b border-gray-50',
+                            pinned ? 'sticky z-10 bg-white group-hover:bg-gray-50 truncate font-medium text-gray-900' : '',
+                            c.column.key === lastPinnedKey && 'border-r-2 border-r-gray-200',
                             c.groupStart && 'border-l border-l-gray-100',
                           )}
-                          title={pinned ? r[c.key] : undefined}
+                          title={pinned && cell.t === 'text' ? cell.v : undefined}
                         >
-                          {r[c.key] || <span className="text-gray-300">—</span>}
+                          <ReportCell
+                            cell={cell}
+                            label={c.column.label}
+                            onOpenPhoto={(src, alt) => setLightbox({ src, alt })}
+                          />
                         </td>
                       );
                     })}
@@ -252,6 +277,12 @@ export default function ExecutionReportPage() {
           )}
         </>
       )}
+
+      <Lightbox
+        src={lightbox?.src ?? null}
+        alt={lightbox?.alt ?? 'Photo'}
+        onClose={() => setLightbox(null)}
+      />
     </div>
   );
 }

@@ -184,6 +184,9 @@ export function streamXlsx({ sheetName, headers, nextBatch }: StreamXlsxOptions)
           ws.addRow(
             headers.map((h) => {
               const v = row[h];
+              // A hyperlink sentinel → an ExcelJS hyperlink cell (clickable text + target URL). The
+              // display text is still cellSafe-guarded, exactly like the in-memory jsonToSheetSafe path.
+              if (isHyperlinkCell(v)) return { text: cellSafe(v.text), hyperlink: v.target };
               return typeof v === 'string' ? cellSafe(v) : (v ?? '');
             }),
           ).commit();

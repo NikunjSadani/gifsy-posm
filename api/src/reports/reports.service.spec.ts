@@ -2,7 +2,10 @@ import { BadRequestException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { Prisma } from '@prisma/client';
+import * as XLSX from 'xlsx';
+import type { Readable } from 'node:stream';
 import { ReportsService } from './reports.service';
+import { CURATED_COLUMNS, type RepSite, type RepRecce } from './outlet-execution.helper';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
 import {
   DEFAULT_EMAIL_REPORTS_CONFIG,
@@ -29,6 +32,7 @@ function makePrisma() {
       update: jest.fn().mockResolvedValue({}),
     },
     recce: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    site: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
     installation: { count: jest.fn().mockResolvedValue(0) },
     manualTask: { count: jest.fn().mockResolvedValue(0) },
     manualTaskSubmission: { count: jest.fn().mockResolvedValue(0) },
@@ -502,9 +506,11 @@ describe('ReportsService.runAsmRecceReminders', () => {
     const now = new Date();
     await service.runAsmRecceReminders(now);
 
-    // Query is tenant + SUBMITTED + threshold + has-asm + not-recently-reminded.
+    // Query is tenant + SUBMITTED + APP + HO-NONE + threshold + has-asm + not-recently-reminded.
+    // recceMode APP + hoReviewStatus NONE together exclude manual recces AND resubmitted APP recces
+    // (SUBMITTED + APP but HO-bound) — neither is pending an ASM, so neither may be reminded.
     const where = fns.recce.findMany.mock.calls[0][0].where;
-    expect(where).toMatchObject({ clientId: 'c1', status: 'SUBMITTED' });
+    expect(where).toMatchObject({ clientId: 'c1', status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE' });
     expect(where.site).toMatchObject({ asmUserId: { not: null } });
 
     // Two ASMs → two emails, each to the right address.
@@ -586,5 +592,96 @@ describe('ReportsService.runAsmRecceReminders', () => {
     // Claim must STAY (the interval-bucket ledger row now guards against a re-send this window) —
     // rolling it back here is exactly what caused the repeating-duplicate bug the audit found.
     expect(fns.asmReminderLog.delete).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Outlet-execution "Recce Report" — curated columns/rows contract + .xlsx stream
+// ─────────────────────────────────────────────────────────────────────────────
+const sampleRecce = (): RepRecce => ({
+  id: 'recA', recceMode: 'APP', status: 'APPROVED', hoReviewStatus: 'APPROVED',
+  capturedAt: new Date('2026-08-28T02:30:00Z'), receivedAt: new Date('2026-08-28T02:30:00Z'),
+  reviewedAt: new Date('2026-08-28T03:30:00Z'), hoReviewedAt: new Date('2026-08-28T04:30:00Z'),
+  submittedBy: { promoterCode: 'P100' }, approvedBy: { name: 'Asha ASM' }, hoReviewedBy: { name: 'Hari HO' },
+  posms: [
+    { id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' }, dimensions: { width: 24, height: 12, unit: 'in' }, photo: { key: 'r1', geo: { lat: 19.2401, lng: 73.1301 } } },
+  ],
+});
+const sampleSite = (): RepSite => ({
+  id: 'siteA', code: 'A8', name: 'Kalyan Mega Mart',
+  town: 'Kalyan', state: 'MH', rsCode: 'WB2.09', rsName: 'Das', channel: 'GT',
+  recces: [sampleRecce()],
+});
+
+const streamToBuffer = (s: Readable): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    s.on('data', (c) => chunks.push(c as Buffer));
+    s.on('end', () => resolve(Buffer.concat(chunks)));
+    s.on('error', reject);
+  });
+
+describe('ReportsService.outletExecution (curated contract)', () => {
+  it('returns the curated columns — incl. the excel-only audit group — and one row per recce with cells', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([sampleSite()]);
+    fns.site.count.mockResolvedValue(1);
+
+    const res = await service.outletExecution(admin(), {});
+    // The column contract is exactly CURATED_COLUMNS (same reference the FE builds to).
+    expect(res.columns).toBe(CURATED_COLUMNS);
+    expect(res.total).toBe(1);
+    expect(res.page).toBe(1);
+    // Audit columns are present and flagged excel-only; outlet identity is pinned.
+    const audit = res.columns.filter((c) => c.group === 'audit');
+    expect(audit.map((c) => c.key)).toEqual(['capturedOn', 'asmApprovedBy', 'asmApprovedOn', 'hoApprovedBy', 'hoApprovedOn']);
+    expect(audit.every((c) => c.excelOnly === true)).toBe(true);
+    expect(res.columns.filter((c) => c.pinned).map((c) => c.key)).toEqual(['outletCode', 'outletName']);
+
+    // One recce → one row; the photo cell carries key + viewPath + geotag.
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0].id).toBe('recA');
+    expect(res.rows[0].cells.el1Photo).toEqual({ t: 'photo', key: 'r1', viewPath: '/v1/media/view?key=r1', lat: 19.2401, lng: 73.1301 });
+    expect(res.rows[0].cells.recceStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+  });
+
+  it('keeps tenant scope + text filters on the Site query (unchanged)', async () => {
+    const { service, fns } = makeService();
+    await service.outletExecution(admin(), { siteCode: 'A8', town: 'Kalyan', region: 'West', state: 'MH', vendorId: 'v9' });
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.clientId).toBe('c1'); // tenant-scoped to the caller
+    expect(where.code).toEqual({ contains: 'A8', mode: 'insensitive' });
+    expect(where.town).toEqual({ contains: 'Kalyan', mode: 'insensitive' });
+    expect(where.region).toEqual({ contains: 'West', mode: 'insensitive' });
+    expect(where.state).toEqual({ contains: 'MH', mode: 'insensitive' });
+    expect(where.vendorId).toBe('v9');
+  });
+});
+
+describe('ReportsService.outletExecutionXlsxStream', () => {
+  it('writes the curated headers (incl. the excel-only audit columns) and renders the photo cell as a hyperlink', async () => {
+    const { service, fns } = makeService();
+    // One batch then exhausted (1 site < the 1000-batch size ends the stream).
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+
+    const buf = await streamToBuffer(service.outletExecutionXlsxStream(admin(), {}));
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
+
+    const header = aoa[0];
+    // Every curated label is a header, excel-only audit columns included.
+    for (const label of CURATED_COLUMNS.map((c) => c.label)) expect(header).toContain(label);
+    expect(header).toContain('ASM Approved By');
+    expect(header).toContain('Captured On');
+
+    const dataRow = aoa[1];
+    // The photo cell rendered as hyperlink TEXT (never "[object Object]"), with the geotag inline.
+    const imageCol = header.indexOf('Element 1 Image');
+    expect(dataRow[imageCol]).toBe('Photo (19.24010, 73.13010)');
+    expect(aoa.flat().some((v) => String(v).includes('[object Object]'))).toBe(false);
+    // Audit-trail values are present in the Excel row.
+    expect(dataRow[header.indexOf('ASM Approved By')]).toBe('Asha ASM');
+    expect(dataRow[header.indexOf('HO Approved By')]).toBe('Hari HO');
   });
 });

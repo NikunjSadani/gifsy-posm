@@ -1,15 +1,59 @@
-/* ─── Outlet Execution Report — typed API client ──────────────────────────────
-   The admin per-outlet execution report (owner spec 2026-09-30). One row per outlet
-   with recce/install/HO/audit status across up to 2 POSM elements.
+/* ─── Outlet Execution ("Recce") Report — typed API client ────────────────────
+   The admin per-recce execution report. The backend now returns a CURATED, typed cell
+   contract (not raw text columns) so the on-screen table can render inline photo thumbnails,
+   colored status chips and GPS pins:
      - GET /api/reports/outlet-execution        → { columns, rows, total, page, limit }
-     - GET /api/reports/outlet-execution.xlsx    → downloadable .xlsx (all matching rows)
+     - GET /api/reports/outlet-execution.xlsx    → downloadable .xlsx (all matching rows, incl.
+                                                    excel-only audit-trail columns)
 ─────────────────────────────────────────────────────────────────────────────── */
 
 import { api, type ApiResponse } from '@/lib/api-client';
 
+/** The visual tone of a status chip (drives its color). */
+export type CellTone = 'approved' | 'pending' | 'rejected' | 'neutral';
+
+/** The column groups, in their canonical left→right display order. `audit` columns are
+ *  export-only (see `Column.excelOnly`) — the on-screen table skips them. */
+export type ColumnGroup =
+  | 'outlet'
+  | 'location'
+  | 'profile'
+  | 'element1'
+  | 'element2'
+  | 'overall'
+  | 'audit';
+
+/** A server-described column. The server owns the full column set, order, grouping, which are
+ *  pinned sticky-left, and which are excel-only — the UI never hardcodes columns. */
+export interface Column {
+  key: string;
+  label: string;
+  group: ColumnGroup;
+  /** Rendered sticky to the left edge so it stays visible while the rest scrolls. */
+  pinned?: boolean;
+  /** Present only in the .xlsx export (audit-trail approver/date columns) — the on-screen
+   *  table omits it to stay uncongested. */
+  excelOnly?: boolean;
+}
+
+/** A single curated cell. The `t` discriminant picks the renderer. */
+export type Cell =
+  | { t: 'text'; v: string }
+  | { t: 'status'; v: string; tone: CellTone }
+  | { t: 'photo'; key: string; viewPath: string; lat?: number; lng?: number }
+  | { t: 'empty' };
+
+/** One report row (one recce). `cells` is keyed by `Column.key`. */
+export interface Row {
+  id: string;
+  outletCode: string;
+  outletName: string;
+  cells: Record<string, Cell>;
+}
+
 export interface OutletReportResult {
-  columns: string[];
-  rows: Record<string, string>[];
+  columns: Column[];
+  rows: Row[];
   total: number;
   page: number;
   limit: number;
@@ -44,8 +88,30 @@ export function fetchOutletReport(f: OutletReportFilters = {}): Promise<ApiRespo
 }
 
 /**
+ * Browser `<img src>` for a photo cell's backend view-path. The report streams photos through
+ * the auth-gated `/api/media/view` proxy (the session cookie is injected same-origin). The
+ * contract hands a proxy-relative path (e.g. `/media/view?key=…`), so the browser URL is
+ * `"/api" + viewPath`. Defensive: an already `/api`-prefixed value passes through, a legacy
+ * `/v1/…` backend surface is remapped onto `/api/…`, and a bare path still gets an `/api` prefix.
+ */
+export function reportMediaSrc(viewPath: string): string {
+  const p = (viewPath ?? '').trim();
+  if (!p) return '';
+  if (p.startsWith('/api/')) return p;
+  if (p.startsWith('/v1/')) return `/api/${p.slice('/v1/'.length)}`;
+  if (p.startsWith('/')) return `/api${p}`;
+  return `/api/${p}`;
+}
+
+/** Google Maps link for a photo cell's capture location. */
+export function gpsMapsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+/**
  * Download the full report as .xlsx. Fetches the auth-gated stream (cookie injected by the /api
- * proxy) into a blob and triggers a browser save. Returns an error string on failure, else null.
+ * proxy) into a blob and triggers a browser save. The export includes every column — pinned,
+ * scrollable AND excel-only audit columns. Returns an error string on failure, else null.
  */
 export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Promise<string | null> {
   const p = toParams(f);
@@ -63,7 +129,7 @@ export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Pro
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `outlet-execution-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.download = `recce-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();

@@ -6,10 +6,13 @@ const push = vi.fn();
 const back = vi.fn();
 const replace = vi.fn();
 
+// Mutable so a test can drive the ?recceId path (explicit id) vs the for-site resolver path (none).
+let recceIdValue: string | null = 'rec-1';
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push, back, replace }),
   // Resubmit is reached from "Recce to do" with ?recceId=… — mirror that here.
-  useSearchParams: () => ({ get: (k: string) => (k === 'recceId' ? 'rec-1' : null) }),
+  useSearchParams: () => ({ get: (k: string) => (k === 'recceId' ? recceIdValue : null) }),
 }));
 
 const apiGet = vi.fn();
@@ -49,6 +52,7 @@ const RECCE_DETAIL = {
 
 beforeEach(() => {
   push.mockClear();
+  recceIdValue = 'rec-1';
   apiGet.mockReset();
   apiGet.mockImplementation((url: string) => {
     if (url.startsWith('/api/posm-types')) {
@@ -62,6 +66,11 @@ beforeEach(() => {
     }
     if (url.startsWith('/api/sites/')) {
       return Promise.resolve({ success: true, data: { gsbAllowed: true } });
+    }
+    // The for-site resolver must be matched BEFORE the generic by-id branch (both start with
+    // `/api/recce/`). Default: no rejected recce to resolve (the ?recceId path owns these tests).
+    if (url.startsWith('/api/recce/for-site/')) {
+      return Promise.resolve({ success: true, data: { recce: null } });
     }
     if (url.startsWith('/api/recce/')) {
       return Promise.resolve({ success: true, data: RECCE_DETAIL });
@@ -93,5 +102,49 @@ describe('ReccePage — resubmit of a REJECTED recce', () => {
     // The element set is fixed on resubmit: no editable picker, no "Add second Element".
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByText('Add second Element')).toBeNull();
+  });
+});
+
+describe('ReccePage — for-site resolver (no ?recceId)', () => {
+  it('resolves the rejected recce to resubmit even when a NEWER non-rejected recce exists', async () => {
+    recceIdValue = null; // reached via "Start recce" (no explicit id) → precedence falls to the resolver
+
+    apiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/posm-types')) {
+        return Promise.resolve({
+          success: true,
+          data: [{ id: 'gsb', code: 'GSB', name: 'Glow Sign Board', isActive: true }],
+        });
+      }
+      if (url.startsWith('/api/sites/')) {
+        return Promise.resolve({ success: true, data: { gsbAllowed: true } });
+      }
+      // The resolver returns the REJECTED recce this user may resubmit for the site.
+      if (url.startsWith('/api/recce/for-site/')) {
+        return Promise.resolve({ success: true, data: { recce: RECCE_DETAIL } });
+      }
+      // The flat list carries a NEWER, non-rejected (SUBMITTED) recce for the same site — a plain
+      // newest-wins lookup would resolve THIS and wrongly block. The resolver must win instead.
+      return Promise.resolve({
+        success: true,
+        data: {
+          recces: [
+            { id: 'rec-2', status: 'SUBMITTED', recceMode: 'APP', site: { id: SITE_ID, code: 'S9', name: 'Outlet 9', town: 'Town' } },
+          ],
+          total: 1,
+          page: 1,
+          limit: 200,
+        },
+      });
+    });
+
+    await act(async () => {
+      render(<ReccePage params={Promise.resolve({ siteId: SITE_ID })} />);
+    });
+
+    // Resubmit (not blocked) — the resolver's rejected recce won over the newer submitted one.
+    expect(await screen.findByText('Re-capture recce')).toBeInTheDocument();
+    expect(await screen.findByTestId('posm-type-locked-1')).toHaveTextContent('Glow Sign Board (GSB)');
+    expect(screen.queryByText(/already has a/i)).toBeNull(); // not the blocked state
   });
 });

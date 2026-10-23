@@ -166,12 +166,15 @@ export class AnalyticsService {
     ] = await Promise.all([
       this.prisma.site.count({ where: s.site }),
       this.prisma.recce.count({ where: s.recce }),
-      // ASM-approved: APP recces at status APPROVED. Filtered to APP because MANUAL recces skip the
-      // ASM stage entirely (they reach APPROVED via HO), so they were never ASM-approved — consistent
-      // with the ASM dashboard + the `asm-approved` drill-down. NOTE: because manual recces enter at
-      // HO, `hoApproved` (all modes) can exceed this APP-only `approved`; the funnel "% of prev" is
-      // clamped to 100% (buildFunnel) since the two recce paths aren't a strict nesting.
-      this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', recceMode: 'APP' } }),
+      // ASM-approved = recces an ASM actually signed off: status APPROVED AND `approvedById` set
+      // (stamped only by the ASM approve/bulkApprove paths). A MANUAL recce (HO-approved, never ASM)
+      // and a RESUBMITTED APP recce (approvedById nulled, reaches APPROVED via HO) both leave it null,
+      // so neither is counted — stricter than the old `recceMode: APP` proxy, which wrongly counted a
+      // resubmitted-then-HO-approved APP recce. Consistent with the ASM dashboard + the `asm-approved`
+      // drill-down. NOTE: because manual recces enter at HO, `hoApproved` (all modes) can exceed this
+      // ASM `approved`; the funnel "% of prev" is clamped to 100% (buildFunnel) since the two recce
+      // paths aren't a strict nesting.
+      this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', approvedById: { not: null } } }),
       // HO-approved / installable: status APPROVED AND hoReviewStatus APPROVED.
       this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
       this.prisma.recce.count({ where: { ...s.recce, status: 'REJECTED' } }),
@@ -302,10 +305,22 @@ export class AnalyticsService {
     });
 
     // EXACT per-site aggregates via groupBy (NO row cap) — attributed to vendors via siteToVendor.
-    const [recceByStatus, recceByGeo, recceHoApproved, installByStatus, turnaroundRows] = await Promise.all([
+    const [recceByStatus, recceAsmApproved, recceByGeo, recceHoApproved, installByStatus, turnaroundRows] = await Promise.all([
+      // recced (all statuses) + rejected per site. ASM-approved is NO LONGER derived from this
+      // (recceMode is not a sound ASM signal — see recceAsmApproved), so the groupBy no longer
+      // carries recceMode.
       this.prisma.recce.groupBy({
-        by: ['siteId', 'status', 'recceMode'],
+        by: ['siteId', 'status'],
         where: s.recce,
+        _count: { _all: true },
+      }),
+      // ASM-approved per site = status APPROVED AND `approvedById` set (stamped only by the ASM
+      // approve/bulkApprove paths). Separate exact aggregate — EXACT (no row cap), attributed via
+      // siteToVendor — because approvedById is not a group key and a MANUAL / resubmitted-APP recce
+      // reaches APPROVED without it. Mirrors the summary `approved` + the recceHoApproved pattern.
+      this.prisma.recce.groupBy({
+        by: ['siteId'],
+        where: { ...s.recce, status: 'APPROVED', approvedById: { not: null } },
         _count: { _all: true },
       }),
       this.prisma.recce.groupBy({
@@ -357,15 +372,22 @@ export class AnalyticsService {
       return b;
     };
 
-    // Recce counts by status (recced = all statuses; approved / rejected among them).
+    // Recce counts by status (recced = all statuses; rejected among them). ASM-approved is NOT
+    // derived here anymore — it comes from recceAsmApproved below (approvedById, not recceMode).
     for (const g of recceByStatus) {
       const b = bucket(siteToVendor.get(g.siteId));
       if (!b) continue;
       const n = g._count._all;
       b.recced += n;
-      // ASM-approved = APP recces at APPROVED (manual recces skip ASM — consistent with summary).
-      if (g.status === 'APPROVED' && g.recceMode === 'APP') b.approved += n;
-      else if (g.status === 'REJECTED') b.rejectedRecce += n;
+      if (g.status === 'REJECTED') b.rejectedRecce += n;
+    }
+    // ASM-approved per site = status APPROVED AND `approvedById` stamped by an ASM. A MANUAL recce
+    // (HO-approved) and a resubmitted-then-HO-approved APP recce both leave approvedById null, so
+    // neither is counted here — consistent with summary `approved`.
+    for (const g of recceAsmApproved) {
+      const b = bucket(siteToVendor.get(g.siteId));
+      if (!b) continue;
+      b.approved += g._count._all;
     }
     // HO-approved / installable per site (status APPROVED && hoReviewStatus APPROVED).
     for (const g of recceHoApproved) {
@@ -743,8 +765,11 @@ export class AnalyticsService {
       case DrilldownMetric.RECCE:
         return {}; // all scoped recces (summary `recced`)
       case DrilldownMetric.ASM_APPROVED:
-        // APP-only: a MANUAL recce skips ASM, so it was never ASM-approved (Phase-1 semantics).
-        return { status: 'APPROVED', recceMode: 'APP' };
+        // Actually ASM-signed-off: status APPROVED AND `approvedById` stamped (written only by the
+        // ASM approve/bulkApprove paths). A MANUAL recce and a resubmitted-then-HO-approved APP recce
+        // both leave approvedById null, so neither is listed — keeps this drill-down EXACTLY equal to
+        // the summary `approved` tile (which now uses the same predicate).
+        return { status: 'APPROVED', approvedById: { not: null } };
       case DrilldownMetric.HO_APPROVED:
         return { status: 'APPROVED', hoReviewStatus: 'APPROVED' }; // summary `hoApproved`
       case DrilldownMetric.PENDING_ASM_REVIEW:

@@ -20,6 +20,7 @@ import {
   resubmitRecce,
   submitManualRecce,
   fetchMyRecces,
+  fetchRejectedRecceForSite,
   RECCE_GROUP_ORDER,
   type RecceGroupKey,
   type RecceListRow,
@@ -185,6 +186,16 @@ describe('fetchMyRecces — query building', () => {
   it('appends recceMode when set (manual recces fetched independent of RS/Beat)', () => {
     void fetchMyRecces({ recceMode: 'MANUAL' });
     expect(urlOf()).toContain('recceMode=MANUAL');
+  });
+});
+
+describe('fetchRejectedRecceForSite — resolver URL', () => {
+  beforeEach(() => get.mockClear());
+
+  it('hits the for-site resolver with an encoded site id', () => {
+    void fetchRejectedRecceForSite('site 9/x');
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls[0][0]).toBe('/api/recce/for-site/site%209%2Fx');
   });
 });
 

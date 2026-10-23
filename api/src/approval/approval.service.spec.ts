@@ -378,8 +378,10 @@ describe('ApprovalService.waterfall — scoped counts', () => {
     await svc.waterfall(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }));
     expect(fns.site.count.mock.calls[0][0].where).toEqual({ clientId: 'c1', asmUserId: 'asm-7' });
     expect(fns.recce.count.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
-    // ASM-approved recce count = APP recces at status APPROVED (manual recces skip ASM).
-    expect(fns.recce.count.mock.calls[1][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', recceMode: 'APP' });
+    // ASM-approved recce count = recces an ASM actually signed off (status APPROVED && approvedById
+    // set) — NOT a recceMode proxy. A MANUAL / resubmitted-then-HO-approved APP recce leaves
+    // approvedById null, so neither is counted.
+    expect(fns.recce.count.mock.calls[1][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', approvedById: { not: null } });
     // HO-approved / installable count also pins hoReviewStatus APPROVED — the subset that is installable.
     expect(fns.recce.count.mock.calls[2][0].where).toEqual({
       clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', hoReviewStatus: 'APPROVED',
@@ -541,11 +543,11 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     ]);
   });
 
-  it('asm-approved: APP recces at status APPROVED (manual recces excluded — they skip ASM)', async () => {
+  it('asm-approved: status APPROVED && approvedById set (manual + resubmitted-then-HO-approved APP excluded)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new ApprovalService(prisma);
     await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.ASM_APPROVED });
-    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', recceMode: 'APP' });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', approvedById: { not: null } });
   });
 
   it('ho-approved: adds status APPROVED && hoReviewStatus APPROVED', async () => {

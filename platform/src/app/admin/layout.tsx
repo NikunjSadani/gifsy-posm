@@ -62,7 +62,7 @@ const SECTIONS: NavSection[] = [
     title: 'Reports',
     items: [
       { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
-      { href: '/admin/execution-report', label: 'Execution report', icon: FileSpreadsheet },
+      { href: '/admin/execution-report', label: 'Recce Report', icon: FileSpreadsheet },
       { href: '/admin/reports', label: 'Email reports', icon: Mail },
     ],
   },

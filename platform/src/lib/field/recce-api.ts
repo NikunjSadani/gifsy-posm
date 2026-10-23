@@ -151,9 +151,25 @@ export function fetchMyRecces(filters: MyReccesFilters = {}) {
   return api.get<RecceListResult>(`/api/recce${qs ? `?${qs}` : ''}`);
 }
 
-/** Fetch one recce with its POSM lines + rejection reason. */
+/** Fetch one recce with its POSM lines + rejection reason (by id, vendor+submitter scoped). */
 export function fetchRecce(id: string) {
   return api.get<RecceDetail>(`/api/recce/${encodeURIComponent(id)}`);
+}
+
+/** The `GET /v1/recce/for-site/:siteId` resolver payload: the single REJECTED recce this user may resubmit, or null. */
+export interface RecceForSiteResult {
+  /** The REJECTED recce for this site the current user may re-capture, or null when there is none. */
+  recce: RecceDetail | null;
+}
+
+/**
+ * Resolve the REJECTED recce for a site that the current user may resubmit (null when none). Used by
+ * the recce page to pick the RIGHT recce to re-capture even when the site also carries a newer
+ * non-rejected recce — a plain newest-wins lookup (`findSiteRecce`) would otherwise resolve the newer
+ * one and wrongly block. Scoped + single-result server-side, so it also dodges the list's 200-row cap.
+ */
+export function fetchRejectedRecceForSite(siteId: string) {
+  return api.get<RecceForSiteResult>(`/api/recce/for-site/${encodeURIComponent(siteId)}`);
 }
 
 /**

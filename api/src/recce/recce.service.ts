@@ -292,7 +292,11 @@ export class RecceService {
 
     const recce = await this.prisma.recce.findFirst({
       where: { id, ...scope },
-      include: { site: true },
+      // The original POSM lines (type + dimensions) are loaded so the resubmit can be validated to
+      // EQUAL them — the FE locks the element type + dimensions to the original and only re-captures
+      // photo + markup, so a modified client (or an FE bug) must not be able to drop / re-type an
+      // element and silently lose it. See assertResubmitMatchesOriginal below.
+      include: { site: true, posms: { select: { posmTypeId: true, dimensions: true } } },
     });
     if (!recce) throw new NotFoundException('Recce not found');
     if (recce.status !== RecceStatus.REJECTED) {
@@ -302,7 +306,17 @@ export class RecceService {
     }
     if (recce.site.status !== 'ACTIVE') throw new BadRequestException('Outlet is not active');
 
-    const prepared = await this.prepare(clientId, recce.site, dto.posms);
+    // The element SET is locked on resubmit: the resubmitted POSM lines must match the original
+    // recce's — same count, same set of posmTypeIds, same dimensions (order-insensitive). This
+    // enforces the FE lock server-side so an element can never be dropped or re-typed on re-capture.
+    this.assertResubmitMatchesOriginal(recce.posms, dto.posms);
+
+    // GSB gate is BYPASSED on resubmit: the element identity is fixed (it equals the original, which
+    // was already GSB-valid when first accepted). Only the photo + markup are new, so re-applying the
+    // gate against the outlet's CURRENT gsbAllowed would turn a later gsbAllowed=false flip into a
+    // permanent dead-end (a locked GSB element could never be re-captured). A normal create/manual
+    // path still runs the gate unchanged.
+    const prepared = await this.prepare(clientId, recce.site, dto.posms, { skipGsbGate: true });
 
     let duplicate = false;
     let updated;
@@ -460,6 +474,34 @@ export class RecceService {
     return this.present(recce, { duplicate });
   }
 
+  // ── Resolve the resubmit target for a site (field app re-capture) ───────────────
+  /**
+   * Resolve the REJECTED recce the CURRENT caller may re-capture at a given site — the
+   * authoritative target for the field app's re-capture flow. Returns `{ recce: <RecceDetail> }`
+   * (the SAME shape as get(), so the FE can seed + lock from `recce.posms`) or `{ recce: null }`
+   * when the site has no rejected recce the caller can act on.
+   *
+   * Scoped EXACTLY like resubmit() (via `scopeWhere`: tenant + vendor pin, fail-closed for a vendor
+   * with no vendorId) — never widened. This replaces the FE's fragile "scan my-recces + take the
+   * newest for the site" heuristic, which resolved the wrong recce at a site carrying a rejected
+   * APP recce alongside a newer (manual/approved) one, and missed it entirely past the page cap.
+   * When several rejected recces match, the newest is returned (deterministic); a caller targeting a
+   * specific one uses the GET /v1/recce/:id deep link.
+   */
+  async forSite(user: JwtPayload, siteId: string) {
+    const scope = this.scopeWhere(user);
+    if (scope === null) return { recce: null }; // fail-closed (a vendor with no vendorId)
+
+    const recce = await this.prisma.recce.findFirst({
+      where: { ...scope, siteId, status: RecceStatus.REJECTED },
+      orderBy: { createdAt: 'desc' },
+      include: this.detailInclude(),
+    });
+    if (!recce) return { recce: null };
+    const duplicate = await this.recceDuplicate(recce.clientId, recce.id);
+    return { recce: this.present(recce, { duplicate }) };
+  }
+
   /**
    * B8: does any of this recce's recorded photo hashes also appear on a DIFFERENT owner (a
    * recce photo reused across sites / an install)? Two cheap indexed lookups against the shared
@@ -494,17 +536,20 @@ export class RecceService {
     clientId: string,
     site: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; gsbAllowed?: boolean; settings?: unknown },
     lines: ReccePosmLineDto[],
+    opts: { skipGsbGate?: boolean } = {},
   ): Promise<PreparedRecce> {
     const posmTypes = await this.assertPosmTypesInTenant(clientId, lines.map((l) => l.posmTypeId));
 
     // GSB GATE: the GSB element (the PosmType whose code is "GSB", case-insensitive) may be recced
     // ONLY at an outlet whose master record is approved for GSB (Site.gsbAllowed === true). Enforced
-    // here, the shared choke-point for the APP (create), MANUAL (createManual) and resubmit lanes, so
-    // the gate cannot be bypassed by any submit path — and BEFORE any media/fence/hash/DB write. A
+    // here, the shared choke-point for the APP (create) and MANUAL (createManual) lanes, so the gate
+    // cannot be bypassed by any FRESH submit path — and BEFORE any media/fence/hash/DB write. A
     // provisional manual walk-in outlet has gsbAllowed=false by default, so GSB is correctly blocked
-    // there until HO finalises + approves the outlet.
+    // there until HO finalises + approves the outlet. The resubmit lane passes skipGsbGate:true — its
+    // element set is locked to the (already-valid) original, so re-applying the gate against the
+    // outlet's CURRENT gsbAllowed would make a later gsbAllowed flip a permanent dead-end.
     const hasGsb = posmTypes.some((p) => (p.code ?? '').toUpperCase() === 'GSB');
-    if (hasGsb && site.gsbAllowed !== true) {
+    if (!opts.skipGsbGate && hasGsb && site.gsbAllowed !== true) {
       throw new BadRequestException('You can only recce the GSB element at outlets approved for GSB.');
     }
 
@@ -637,6 +682,61 @@ export class RecceService {
     if (!Array.isArray(lines) || lines.length < 1 || lines.length > 2) {
       throw new BadRequestException('A recce must have 1 or 2 Element lines.');
     }
+  }
+
+  /**
+   * Enforce the resubmit element LOCK server-side: the resubmitted POSM lines must EQUAL the
+   * original recce's — same COUNT, same set of `posmTypeId`s, and the same dimensions
+   * (width/height/unit, canonicalised so the "branding not required"/NA case compares equal).
+   * The match is ORDER-INSENSITIVE and multiset-aware (two identical lines must still both be
+   * present). Any mismatch is a 400 — the FE only re-captures photo + markup, never the element
+   * identity, so a dropped / re-typed / re-sized element can only mean a tampered or buggy client.
+   */
+  private assertResubmitMatchesOriginal(
+    original: { posmTypeId: string; dimensions: Prisma.JsonValue }[],
+    incoming: ReccePosmLineDto[],
+  ) {
+    const fail = (): never => {
+      throw new BadRequestException(
+        'Resubmission must re-capture the same elements (type and dimensions) as the original recce.',
+      );
+    };
+    if (original.length !== incoming.length) fail();
+
+    const key = (posmTypeId: string, dims: unknown) => {
+      const d = this.canonicalDims(dims);
+      return `${posmTypeId}|${d.width}|${d.height}|${d.unit}`;
+    };
+    // Multiset of the original lines' keys; each incoming line must consume one.
+    const counts = new Map<string, number>();
+    for (const o of original) {
+      const k = key(o.posmTypeId, o.dimensions);
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    for (const i of incoming) {
+      const k = key(i.posmTypeId, i.dimensions);
+      const c = counts.get(k);
+      if (!c) fail(); // not in the original set (or already fully consumed)
+      else counts.set(k, c - 1);
+    }
+    // Lengths are equal and every incoming line consumed a positive count, so the multiset matched.
+  }
+
+  /**
+   * Canonicalise a dimensions value (stored JSON OR an incoming DTO) to comparable primitives, so
+   * the resubmit lock compares like-for-like. A numeric width/height is kept, a non-numeric one
+   * becomes null, and a non-string / empty unit becomes null — so an absent / NA / malformed
+   * dimension (`{}`, null, "garbage") collapses to {null,null,null} and compares equal to another
+   * absent one, while a real {width,height,unit} compares on its actual values.
+   */
+  private canonicalDims(d: unknown): { width: number | null; height: number | null; unit: string | null } {
+    if (!d || typeof d !== 'object' || Array.isArray(d)) {
+      return { width: null, height: null, unit: null };
+    }
+    const o = d as Record<string, unknown>;
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : null);
+    return { width: num(o.width), height: num(o.height), unit: str(o.unit) };
   }
 
   private async assertPosmTypesInTenant(clientId: string, ids: string[]) {

@@ -7,9 +7,13 @@
  *   APPROVED  → "Start installation" → /field/install/[recceId] (the ONLY nav path to install).
  *   SUBMITTED → read-only "Awaiting ASM/HO approval".
  *
- * A REJECTED recce is NOT handled here — it is re-captured from "Recce to do" (/field/sites),
- * whose list now includes rejected outlets; tapping one lands on the recce page in resubmit mode.
- * So this screen drops the 'Needs re-capture' group entirely and shows only the install pipeline.
+ * A rejected recce splits by how it was captured:
+ *   - APP-rejected    → re-captured from "Recce to do" (/field/sites), whose list includes rejected
+ *                       outlets; tapping one lands on the recce page in resubmit mode. These do NOT
+ *                       appear here.
+ *   - MANUAL-rejected → has NO outlet-list home (a manual outlet carries no RS/Beat and never shows
+ *                       in Recce to do), so it WOULD be stranded. This screen gives it the only
+ *                       re-capture surface: a 'Needs re-capture' entry → /field/recce/:siteId?recceId=.
  *
  * Data is `GET /api/recce` (vendor + submitter scoped server-side). Note: that list carries no
  * installation linkage, so an APPROVED recce always offers "Start installation"; a recce that
@@ -37,6 +41,7 @@ import {
   fetchMyRecces,
   groupRecces,
   groupInstallableByOutlet,
+  rejectionLabel,
   type RecceListRow,
   type RecceGroup,
   type RecceGroupKey,
@@ -44,15 +49,17 @@ import {
 } from '@/lib/field/recce-api';
 import { getOutletFilter, beatSummary, type OutletFilter } from '@/lib/field/outlet-filter';
 
-// The Installation list no longer handles RECCE-rejected ('Needs re-capture') work — a REJECTED
-// recce is re-captured from "Recce to do" (/field/sites), not here. So this screen only renders the
-// post-submit install-pipeline states.
-type InstallGroupKey = Exclude<RecceGroupKey, 'NEEDS_RECAPTURE'>;
+// This screen handles the post-submit install pipeline PLUS the one re-capture case that has no other
+// home: a MANUAL-rejected recce (APP-rejected is re-captured from "Recce to do", never here). So the
+// group set is the full RecceGroupKey — but NEEDS_RECAPTURE is populated only by MANUAL rejects (see
+// the APP-rejected filter before grouping).
+type WorkGroupKey = RecceGroupKey;
 
 const STATUS_META: Record<
-  InstallGroupKey,
+  WorkGroupKey,
   { label: string; icon: typeof Clock; tint: string; dot: string }
 > = {
+  NEEDS_RECAPTURE: { label: 'Needs re-capture', icon: RefreshCw, tint: 'text-red-600', dot: '#dc2626' },
   READY_TO_INSTALL: { label: 'Ready to install', icon: CheckCircle2, tint: 'text-emerald-600', dot: '#16a34a' },
   AWAITING_HO: { label: 'Awaiting HO approval', icon: ShieldCheck, tint: 'text-sky-600', dot: '#0284c7' },
   AWAITING_ASM: { label: 'Awaiting ASM approval', icon: Clock, tint: 'text-amber-600', dot: '#d97706' },
@@ -84,7 +91,8 @@ export default function MyWorkPage() {
     setError(null);
     // Two fetches: the APP recces for the chosen RS/Beat (the beat chip governs these), PLUS the
     // exec's own MANUAL recces regardless of beat — a manual outlet has a null RS/Beat, so without
-    // this a manual submission (including a rejected one awaiting re-capture) would never show.
+    // this a manual submission (including a rejected one that must be re-captured from this screen,
+    // since manual outlets have no "Recce to do" home) would never show.
     const [appRes, manualRes] = await Promise.all([
       fetchMyRecces({ rsCode: f.rsCode, beatNames: f.beatNames }),
       fetchMyRecces({ recceMode: 'MANUAL' }),
@@ -120,11 +128,14 @@ export default function MyWorkPage() {
   const filtered = recces
     ? recces.filter((r) => !q || r.site.name.toLowerCase().includes(q) || r.site.code.toLowerCase().includes(q))
     : null;
-  // RECCE-rejected recces are re-captured from "Recce to do", not here, so they're dropped from the
-  // Installation list — it shows only the post-submit install-pipeline states.
-  const groups = (filtered ? groupRecces(filtered) : []).filter(
-    (g): g is RecceGroup & { key: InstallGroupKey } => g.key !== 'NEEDS_RECAPTURE',
-  );
+  // Drop APP-rejected recces BEFORE grouping: those are re-captured from "Recce to do", not here.
+  // What survives into NEEDS_RECAPTURE is therefore only MANUAL rejects — the strand-prone case that
+  // has no outlet-list home and needs this screen's re-capture entry. (groupRecces drops the group
+  // entirely when nothing is left, so a rep with no manual rejects sees no 'Needs re-capture'.)
+  const forWork = filtered
+    ? filtered.filter((r) => !(r.status === 'REJECTED' && r.recceMode === 'APP'))
+    : null;
+  const groups: RecceGroup[] = forWork ? groupRecces(forWork) : [];
   const hasAnyWork = !!recces && recces.length > 0;
 
   // Until the device filter has been read (and while redirecting when none is set), show a
@@ -261,9 +272,10 @@ export default function MyWorkPage() {
 }
 
 // ── One recce row with its group-specific action ──────────────────────────────
-// Only the read-only waiting states + the defensive install fallback reach this card now;
-// RECCE-rejected ('Needs re-capture') work is handled from "Recce to do", not here.
-function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: InstallGroupKey }) {
+// Reached by the read-only waiting states, the defensive install fallback, AND the MANUAL-rejected
+// 'Needs re-capture' case (its re-capture action is the only home a manual reject has — APP rejects
+// are filtered out before grouping and re-captured from "Recce to do" instead).
+function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: WorkGroupKey }) {
   const key = groupKey;
   const meta = STATUS_META[key];
   const posmLabel = `${recce.posmCount} Element${recce.posmCount === 1 ? '' : 's'}`;
@@ -284,6 +296,27 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: Install
           {meta.label}
         </span>
       </div>
+
+      {/* MANUAL-rejected re-capture — the only re-capture surface for a manual reject (no "Recce to
+          do" home). Carries the recceId so the recce page loads THIS rejected recce and re-captures
+          with element type + dimensions locked to the original. */}
+      {key === 'NEEDS_RECAPTURE' && (
+        <>
+          {rejectionLabel(recce.hoRejectionReasonCode ?? recce.rejectionReasonCode) && (
+            <p className="mt-3 flex items-start gap-1.5 text-xs text-red-700">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Sent back: {rejectionLabel(recce.hoRejectionReasonCode ?? recce.rejectionReasonCode)}
+            </p>
+          )}
+          <Link
+            href={`/field/recce/${encodeURIComponent(recce.site.id)}?recceId=${encodeURIComponent(recce.id)}`}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand-primary)] py-3 text-sm font-bold text-white transition-all hover:bg-[var(--brand-primary-dark)] active:scale-95"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Re-capture
+          </Link>
+        </>
+      )}
 
       {key === 'AWAITING_ASM' && (
         <p className="mt-3 flex items-center gap-1.5 text-xs text-gray-500">

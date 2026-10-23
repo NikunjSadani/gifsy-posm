@@ -168,6 +168,12 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
     expect(res.byRecceMode.app + res.byRecceMode.manual).toBe(res.waterfall.recced);
     // The manual-split count (LAST recce.count) pins recceMode MANUAL within the same scope.
     expect(fns.recce.count.mock.calls[7][0].where).toEqual({ clientId: 'c1', recceMode: 'MANUAL' });
+    // The ASM-approved count (2nd recce.count) pins status APPROVED && approvedById NOT NULL — the
+    // recce was actually stamped by an ASM, NOT a recceMode proxy (a manual / resubmitted-then-
+    // HO-approved APP recce leaves approvedById null and is excluded).
+    expect(fns.recce.count.mock.calls[1][0].where).toEqual({
+      clientId: 'c1', status: 'APPROVED', approvedById: { not: null },
+    });
     // The hoApproved count (3rd recce.count) pins status APPROVED && hoReviewStatus APPROVED.
     expect(fns.recce.count.mock.calls[2][0].where).toEqual({
       clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
@@ -213,13 +219,17 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     ]);
     fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
     // EXACT per-site groupBy results: 3 recces (1 APPROVED, 1 REJECTED, 1 SUBMITTED).
-    // recce.groupBy call order: #1 by status, #2 by geoFenceOk, #3 the HO-approved (installable) count.
+    // recce.groupBy call order: #1 by status (recced/rejected), #2 ASM-approved (approvedById set),
+    // #3 by geoFenceOk, #4 the HO-approved (installable) count.
     fns.recce.groupBy
       .mockResolvedValueOnce([
-        { siteId: 's1', status: 'APPROVED', recceMode: 'APP', _count: { _all: 1 } },
-        { siteId: 's2', status: 'REJECTED', recceMode: 'APP', _count: { _all: 1 } },
-        { siteId: 's3', status: 'SUBMITTED', recceMode: 'APP', _count: { _all: 1 } },
+        { siteId: 's1', status: 'APPROVED', _count: { _all: 1 } },
+        { siteId: 's2', status: 'REJECTED', _count: { _all: 1 } },
+        { siteId: 's3', status: 'SUBMITTED', _count: { _all: 1 } },
       ])
+      // ASM-approved per site (status APPROVED && approvedById set): the one APPROVED recce on s1 was
+      // actually ASM-signed-off, so it is counted here (NOT derived from status/recceMode).
+      .mockResolvedValueOnce([{ siteId: 's1', _count: { _all: 1 } }])
       .mockResolvedValueOnce([
         { siteId: 's1', geoFenceOk: true, _count: { _all: 1 } },
         { siteId: 's2', geoFenceOk: false, _count: { _all: 1 } },
@@ -237,8 +247,12 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     expect(row).toMatchObject({ vendorId: 'v-1', vendorCode: 'VC1', vendorName: 'Vendor One', sites: 4, recced: 3, approved: 1, hoApproved: 1 });
     // hoApproved (installable) is a subset of ASM-approved.
     expect(row.hoApproved).toBeLessThanOrEqual(row.approved);
-    // The HO-approved groupBy (3rd recce.groupBy) pins status APPROVED && hoReviewStatus APPROVED.
-    expect(fns.recce.groupBy.mock.calls[2][0].where).toEqual({
+    // The ASM-approved groupBy (2nd recce.groupBy) pins status APPROVED && approvedById NOT NULL.
+    expect(fns.recce.groupBy.mock.calls[1][0].where).toEqual({
+      clientId: 'c1', status: 'APPROVED', approvedById: { not: null },
+    });
+    // The HO-approved groupBy (4th recce.groupBy) pins status APPROVED && hoReviewStatus APPROVED.
+    expect(fns.recce.groupBy.mock.calls[3][0].where).toEqual({
       clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED',
     });
     // approved 1 / decided (1+1)=2 → 50
@@ -261,10 +275,15 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
     // A single group whose exact count far exceeds ROW_CAP (20k) — the old bounded findMany
     // would have undercounted; the groupBy _count carries the true total.
+    // groupBy order: #1 by status, #2 ASM-approved (approvedById), #3 by geoFenceOk, #4 HO-approved.
     fns.recce.groupBy
       .mockResolvedValueOnce([
-        { siteId: 's1', status: 'APPROVED', recceMode: 'APP', _count: { _all: 25_000 } },
-        { siteId: 's2', status: 'REJECTED', recceMode: 'APP', _count: { _all: 5_000 } },
+        { siteId: 's1', status: 'APPROVED', _count: { _all: 25_000 } },
+        { siteId: 's2', status: 'REJECTED', _count: { _all: 5_000 } },
+      ])
+      // ASM-approved per site (approvedById set): all 25k APPROVED recces on s1 were ASM-stamped.
+      .mockResolvedValueOnce([
+        { siteId: 's1', _count: { _all: 25_000 } },
       ])
       .mockResolvedValueOnce([
         { siteId: 's1', geoFenceOk: true, _count: { _all: 25_000 } },
@@ -283,6 +302,45 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     expect(row.audited).toBe(22_000);
     expect(row.rejectedCount).toBe(5_000); // 5k rejected recces + 0 rejected installs
     expect(row.recceApprovalRatePct).toBe(83.3); // approved 25k / decided (25k+5k=30k) → 83.3
+  });
+
+  it('ASM-approved counts approvedById, NOT a recceMode proxy: a manual + a resubmitted-then-HO-approved APP recce are NOT ASM-approved', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.groupBy.mockResolvedValue([{ vendorId: 'v-1', _count: { _all: 2 } }]);
+    fns.site.findMany.mockResolvedValue([
+      { id: 's1', vendorId: 'v-1' }, { id: 's2', vendorId: 'v-1' },
+    ]);
+    fns.vendor.findMany.mockResolvedValue([{ id: 'v-1', code: 'VC1', name: 'Vendor One' }]);
+    // s1 = a MANUAL recce HO-approved (status APPROVED, approvedById null — never ASM-stamped).
+    // s2 = a RESUBMITTED APP recce HO-approved (status APPROVED, approvedById nulled on resubmit).
+    // Both are APPROVED (so counted in `recced`) and HO-signed-off (so counted in `hoApproved`),
+    // but NEITHER was ASM-signed-off → the ASM-approved aggregate (#2) returns them for NO site.
+    fns.recce.groupBy
+      .mockResolvedValueOnce([
+        { siteId: 's1', status: 'APPROVED', _count: { _all: 1 } },
+        { siteId: 's2', status: 'APPROVED', _count: { _all: 1 } },
+      ])
+      // ASM-approved (approvedById NOT NULL): EMPTY — the DB filter excluded both approvedById-null recces.
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]) // geo
+      // HO-approved: BOTH are HO-signed-off.
+      .mockResolvedValueOnce([
+        { siteId: 's1', _count: { _all: 1 } },
+        { siteId: 's2', _count: { _all: 1 } },
+      ]);
+    fns.installation.groupBy.mockResolvedValue([]);
+    fns.installation.findMany.mockResolvedValue([]);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.vendorScorecards(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+
+    const row = res.items[0];
+    expect(row.recced).toBe(2); // both APPROVED recces are still recces
+    expect(row.hoApproved).toBe(2); // both are HO-signed-off / installable
+    expect(row.approved).toBe(0); // but NEITHER was ASM-signed-off (approvedById null)
+    // And the ASM-approved aggregate filtered on approvedById, never status/recceMode.
+    expect(fns.recce.groupBy.mock.calls[1][0].where).toEqual({
+      clientId: 'c1', status: 'APPROVED', approvedById: { not: null },
+    });
   });
 });
 
@@ -436,11 +494,11 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     expect(res.items[1]).toMatchObject({ id: 'r2', recceId: null });
   });
 
-  it('asm-approved: APPROVED app recces only (APP-only — manual skips ASM)', async () => {
+  it('asm-approved: APPROVED && approvedById set (matches summary — manual + resubmitted-then-HO-approved APP excluded)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new AnalyticsService(prisma);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'asm-approved' } as any);
-    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', recceMode: 'APP' });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', approvedById: { not: null } });
   });
 
   it('ho-approved: APPROVED && hoReviewStatus APPROVED', async () => {

@@ -1,109 +1,108 @@
 import { describe, it, expect } from 'vitest';
 import {
   groupOutletColumns,
+  flatColumns,
   displayOrder,
-  subColumnLabel,
-  PINNED_KEYS,
+  GROUP_LABELS,
 } from '../outlet-columns';
+import type { Column, ColumnGroup } from '../outlet-execution';
 
-/** The owner's spec column order (mirrors api OUTLET_REPORT_COLUMNS). "Recce Mode" (Manual-Recce
- *  Wave B) sits right after "Direct Installation", just before the Element columns. */
-const SPEC_COLUMNS = [
-  'Vendor Name', 'Recce Promoter ID', 'Install Promoter ID', 'Region', 'State', 'Cluster',
-  'Town', 'RS Code', 'Beat Name', 'Outlet Code', 'Outlet Name', 'Channel', 'Address',
-  'Lat Long', 'Direct Installation', 'Recce Mode',
-  'Element 1', 'Element 1 Recce Status', 'Element 1 Recce Time and Date', 'Element 1 Recce Location',
-  'Element 1 Installation Status', 'Element 1 Installation Time and Date', 'Element 1 Installation Location',
-  'Element 1 Recce and Installation distance',
-  'Element 2', 'Element 2 Recce Status', 'Element 2 Recce Time and Date', 'Element 2 Recce Location',
-  'Element 2 Installation Status', 'Element 2 Installation Time and Date', 'Element 2 Installation Location',
-  'Element 2 Recce and Installation distance',
-  'Outlet Recce Status', 'ASM Approval Status', 'HO Approval Status',
-  'HO Recce Approval', 'ASM Rejection Reason', 'HO Rejection Reason',
-  'Installation Status', 'Audit Status',
+/** The curated server column set (mirrors the BE contract). The audit-trail columns are
+ *  `excelOnly` — present in the payload for the .xlsx export, omitted from the on-screen table. */
+const SPEC_COLUMNS: Column[] = [
+  { key: 'outletCode', label: 'Outlet Code', group: 'outlet', pinned: true },
+  { key: 'outletName', label: 'Outlet Name', group: 'outlet', pinned: true },
+  { key: 'town', label: 'Town', group: 'location' },
+  { key: 'state', label: 'State', group: 'location' },
+  { key: 'rs', label: 'RS Code', group: 'location' },
+  { key: 'outletType', label: 'Outlet Type', group: 'profile' },
+  { key: 'source', label: 'Source', group: 'profile' },
+  { key: 'recceDate', label: 'Recce Date', group: 'profile' },
+  { key: 'promoter', label: 'Promoter', group: 'profile' },
+  { key: 'el1Type', label: 'Type', group: 'element1' },
+  { key: 'el1Dims', label: 'Dimensions', group: 'element1' },
+  { key: 'el1RecceStatus', label: 'Recce Status', group: 'element1' },
+  { key: 'el1Photo', label: 'Photo', group: 'element1' },
+  { key: 'el2Type', label: 'Type', group: 'element2' },
+  { key: 'el2Dims', label: 'Dimensions', group: 'element2' },
+  { key: 'el2RecceStatus', label: 'Recce Status', group: 'element2' },
+  { key: 'el2Photo', label: 'Photo', group: 'element2' },
+  { key: 'recceStatus', label: 'Recce Status', group: 'overall' },
+  { key: 'asmApprover', label: 'ASM Approver', group: 'audit', excelOnly: true },
+  { key: 'asmApprovedAt', label: 'ASM Approved At', group: 'audit', excelOnly: true },
+  { key: 'hoApprover', label: 'HO Approver', group: 'audit', excelOnly: true },
 ];
 
-describe('groupOutletColumns', () => {
+describe('groupOutletColumns (server-driven grouping)', () => {
   const groups = groupOutletColumns(SPEC_COLUMNS);
 
-  it('produces the five groups in render order', () => {
+  it('emits the visible groups in canonical order, labelled', () => {
+    expect(groups.map((g) => g.group)).toEqual([
+      'outlet', 'location', 'profile', 'element1', 'element2', 'overall',
+    ]);
     expect(groups.map((g) => g.label)).toEqual([
-      'Outlet', 'Details', 'Element 1', 'Element 2', 'Overall status',
+      GROUP_LABELS.outlet, GROUP_LABELS.location, GROUP_LABELS.profile,
+      GROUP_LABELS.element1, GROUP_LABELS.element2, GROUP_LABELS.overall,
     ]);
   });
 
-  it('pins only the identity group, in PINNED_KEYS order', () => {
-    const outlet = groups[0];
+  it('drops the all-excelOnly audit group from the on-screen view', () => {
+    expect(groups.find((g) => g.group === 'audit')).toBeUndefined();
+    expect(displayOrder(groups)).not.toContain('asmApprover');
+  });
+
+  it('marks only the all-pinned identity group as pinned', () => {
+    const outlet = groups.find((g) => g.group === 'outlet')!;
     expect(outlet.pinned).toBe(true);
-    expect(outlet.columns.map((c) => c.key)).toEqual([...PINNED_KEYS]);
-    // no other group is pinned
-    expect(groups.slice(1).every((g) => !g.pinned)).toBe(true);
+    expect(outlet.columns.map((c) => c.key)).toEqual(['outletCode', 'outletName']);
+    expect(groups.filter((g) => g.group !== 'outlet').every((g) => !g.pinned)).toBe(true);
   });
 
-  it('puts the 8 columns of each element under its group', () => {
-    const e1 = groups.find((g) => g.label === 'Element 1')!;
-    const e2 = groups.find((g) => g.label === 'Element 2')!;
-    expect(e1.columns).toHaveLength(8);
-    expect(e2.columns).toHaveLength(8);
-    expect(e1.columns.every((c) => c.key.startsWith('Element 1'))).toBe(true);
-    expect(e2.columns.every((c) => c.key.startsWith('Element 2'))).toBe(true);
+  it('preserves the server order within a group', () => {
+    const el1 = groups.find((g) => g.group === 'element1')!;
+    expect(el1.columns.map((c) => c.key)).toEqual(['el1Type', 'el1Dims', 'el1RecceStatus', 'el1Photo']);
   });
 
-  it('groups the 8 rollup statuses last', () => {
-    const status = groups.find((g) => g.label === 'Overall status')!;
-    expect(status.columns.map((c) => c.key)).toEqual([
-      'Outlet Recce Status', 'ASM Approval Status', 'HO Approval Status',
-      'HO Recce Approval', 'ASM Rejection Reason', 'HO Rejection Reason',
-      'Installation Status', 'Audit Status',
-    ]);
-  });
-
-  it('puts the remaining 14 meta columns in Details, in backend order', () => {
-    const details = groups.find((g) => g.label === 'Details')!;
-    expect(details.columns.map((c) => c.key)).toEqual([
-      'Vendor Name', 'Recce Promoter ID', 'Install Promoter ID', 'Region', 'State', 'Cluster',
-      'Town', 'RS Code', 'Beat Name', 'Channel', 'Address', 'Lat Long', 'Direct Installation',
-      'Recce Mode',
-    ]);
-  });
-
-  it('places "Recce Mode" in Details, immediately after "Direct Installation" (adjacent, as specced)', () => {
-    const details = groups.find((g) => g.label === 'Details')!;
-    const keys = details.columns.map((c) => c.key);
-    expect(keys).toContain('Recce Mode');
-    expect(keys.indexOf('Recce Mode')).toBe(keys.indexOf('Direct Installation') + 1);
-    // It is NOT absorbed into any Element or status group, and keeps its verbatim label.
-    expect(subColumnLabel('Recce Mode')).toBe('Recce Mode');
-  });
-
-  it('accounts for every column exactly once (nothing dropped or duplicated)', () => {
+  it('keeps every visible column exactly once (nothing dropped/duplicated)', () => {
     const flat = displayOrder(groups);
-    expect(flat).toHaveLength(SPEC_COLUMNS.length);
-    expect(new Set(flat).size).toBe(SPEC_COLUMNS.length);
-    expect([...flat].sort()).toEqual([...SPEC_COLUMNS].sort());
+    const visibleKeys = SPEC_COLUMNS.filter((c) => !c.excelOnly).map((c) => c.key);
+    expect([...flat].sort()).toEqual([...visibleKeys].sort());
+    expect(new Set(flat).size).toBe(flat.length);
   });
 
-  it('keeps an unknown future column (lands in Details, never dropped)', () => {
-    const groups2 = groupOutletColumns([...SPEC_COLUMNS, 'Surprise Column']);
-    const details = groups2.find((g) => g.label === 'Details')!;
-    expect(details.columns.map((c) => c.key)).toContain('Surprise Column');
-    expect(displayOrder(groups2)).toContain('Surprise Column');
+  it('keeps an unknown/future group — appended after the known ones, never dropped', () => {
+    const extra: Column = { key: 'future', label: 'Future', group: 'mystery' as ColumnGroup };
+    const groups2 = groupOutletColumns([...SPEC_COLUMNS, extra]);
+    const last = groups2[groups2.length - 1];
+    expect(last.group).toBe('mystery');
+    expect(last.columns.map((c) => c.key)).toEqual(['future']);
+    expect(displayOrder(groups2)).toContain('future');
+  });
+
+  it('omits groups that have only excelOnly columns but keeps partially-visible ones', () => {
+    const mixed: Column[] = [
+      { key: 'a', label: 'A', group: 'overall' },
+      { key: 'b', label: 'B', group: 'overall', excelOnly: true },
+    ];
+    const g = groupOutletColumns(mixed);
+    const overall = g.find((x) => x.group === 'overall')!;
+    expect(overall.columns.map((c) => c.key)).toEqual(['a']);
   });
 });
 
-describe('subColumnLabel', () => {
-  it('relabels the bare element-name column to "Element type"', () => {
-    expect(subColumnLabel('Element 1')).toBe('Element type');
-    expect(subColumnLabel('Element 2')).toBe('Element type');
+describe('flatColumns', () => {
+  const flat = flatColumns(groupOutletColumns(SPEC_COLUMNS));
+
+  it('assigns a 0-based pinIndex to pinned columns and -1 to the rest', () => {
+    expect(flat.find((c) => c.column.key === 'outletCode')!.pinIndex).toBe(0);
+    expect(flat.find((c) => c.column.key === 'outletName')!.pinIndex).toBe(1);
+    expect(flat.find((c) => c.column.key === 'town')!.pinIndex).toBe(-1);
   });
 
-  it('strips the "Element N" prefix from element sub-columns', () => {
-    expect(subColumnLabel('Element 1 Recce Status')).toBe('Recce Status');
-    expect(subColumnLabel('Element 2 Recce and Installation distance')).toBe('Recce and Installation distance');
-  });
-
-  it('leaves non-element columns verbatim', () => {
-    expect(subColumnLabel('Outlet Code')).toBe('Outlet Code');
-    expect(subColumnLabel('ASM Approval Status')).toBe('ASM Approval Status');
+  it('flags the first column of each non-first group as a group boundary', () => {
+    expect(flat.find((c) => c.column.key === 'outletCode')!.groupStart).toBe(false); // first group
+    expect(flat.find((c) => c.column.key === 'town')!.groupStart).toBe(true); // location starts
+    expect(flat.find((c) => c.column.key === 'state')!.groupStart).toBe(false); // mid-group
+    expect(flat.find((c) => c.column.key === 'el1Type')!.groupStart).toBe(true); // element1 starts
   });
 });

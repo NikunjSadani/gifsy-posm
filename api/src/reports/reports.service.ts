@@ -13,11 +13,13 @@ import { istDateLabel, istDateOnlyUtc, istHour } from './reports.time';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
 import { ListOutletReportDto } from './dto/list-outlet-report.dto';
 import { tenantScope } from '../common/tenant-scope';
-import { streamXlsx } from '../common/xlsx';
+import { streamXlsx, type HyperlinkCell } from '../common/xlsx';
 import type { Readable } from 'node:stream';
 import {
-  OUTLET_REPORT_COLUMNS,
+  CURATED_COLUMNS,
   buildOutletExecutionRows,
+  type Cell,
+  type ReportRow,
   type RepSite,
 } from './outlet-execution.helper';
 
@@ -25,28 +27,23 @@ import {
 const OUTLET_EXPORT_BATCH = 1_000;
 
 /**
- * Prisma include that feeds the Outlet Execution row builder. ONE ROW PER RECCE (Wave B): load ALL
- * of the outlet's recces (1 app + N manual) with EACH recce's own installation nested under it
- * (Recce.installation, 0-or-1 via Installation.recceId @unique), so a row's install facts are its
- * own recce's — never a sibling's. Recces are ordered app-first then manual oldest-first (matching
- * the helper's sort) for a stable, page-safe row order.
+ * Prisma include that feeds the curated Recce Report row builder. ONE ROW PER RECCE: load ALL of the
+ * outlet's recces (1 app + N manual). `include` (not `select`) returns ALL Recce scalars — recceMode,
+ * status, hoReviewStatus, capturedAt/receivedAt, and the ASM/HO approval stamps (reviewedAt,
+ * hoReviewedAt) — so the RepRecce fields flow through without an explicit select. Only the USER
+ * relations (submittedBy for the promoter id, approvedBy + hoReviewedBy for the excel-only audit
+ * trail) and the per-element POSMs (with their dimensions + photo JSON) are pulled explicitly.
+ * Recces are ordered app-first then manual oldest-first (matching the helper's sort) for a stable,
+ * page-safe row order.
  */
 const OUTLET_REPORT_INCLUDE = {
-  vendor: { select: { name: true } },
   recces: {
     orderBy: [{ recceMode: 'asc' }, { receivedAt: 'asc' }, { id: 'asc' }],
-    // `include` (not `select`) returns ALL Recce scalars, so the report's RepRecce fields —
-    // recceMode, status, the ASM rejectionReason*, and the recce-side HO-approval fields
-    // (hoReviewStatus, hoRejectionReason*) — all flow through without an explicit select.
     include: {
-      submittedBy: { select: { name: true, promoterCode: true } },
+      submittedBy: { select: { promoterCode: true } },
+      approvedBy: { select: { name: true } },
+      hoReviewedBy: { select: { name: true } },
       posms: { include: { posmType: { select: { name: true } } } },
-      installation: {
-        include: {
-          submittedBy: { select: { name: true, promoterCode: true } },
-          posms: { select: { reccePosmId: true, captureLat: true, captureLng: true, distanceFromRecce: true } },
-        },
-      },
     },
   },
 } satisfies Prisma.SiteInclude;
@@ -308,8 +305,11 @@ export class ReportsService {
             status: 'SUBMITTED',
             // APP-only: a MANUAL recce skips the ASM stage (field → HO directly), so it must never
             // be reminded to an ASM as "pending your approval" even when attached to an ASM-owned
-            // outlet. Mirrors the ASM queue filter (approval.service: SUBMITTED + recceMode APP).
+            // outlet. hoReviewStatus NONE additionally excludes a RESUBMITTED APP recce (SUBMITTED +
+            // APP but HO-bound) — it skipped ASM on resubmit, so the ASM must not be nagged for it.
+            // Mirrors the ASM queue filter (approval.service.listQueue: SUBMITTED + APP + NONE).
             recceMode: 'APP',
+            hoReviewStatus: 'NONE',
             receivedAt: { lte: thresholdCutoff },
             site: { asmUserId: { not: null } },
             OR: [{ lastRemindedAt: null }, { lastRemindedAt: { lte: remindCutoff } }],
@@ -678,13 +678,13 @@ export class ReportsService {
     return where;
   }
 
-  /** Load matching sites (with the report include) and map each to an ordered report row. */
+  /** Load matching sites (with the report include) and map each to one-row-per-recce report rows. */
   private async loadOutletRows(
     user: JwtPayload,
     q: ListOutletReportDto,
     skip: number,
     take: number,
-  ): Promise<{ rows: Record<string, string>[]; total: number }> {
+  ): Promise<{ rows: ReportRow[]; total: number }> {
     const where = this.outletReportWhere(user, q);
     const [sites, total] = await Promise.all([
       this.prisma.site.findMany({
@@ -715,7 +715,42 @@ export class ReportsService {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(500, Math.max(1, q.limit ?? 50));
     const { rows, total } = await this.loadOutletRows(user, q, (page - 1) * limit, limit);
-    return { columns: [...OUTLET_REPORT_COLUMNS], rows, total, page, limit };
+    return { columns: CURATED_COLUMNS, rows, total, page, limit };
+  }
+
+  /**
+   * Project one curated report row onto the .xlsx record (keyed by column LABEL, which is what
+   * streamXlsx uses as both the header and the per-row lookup). ALL columns are included — the
+   * excel-only `audit` group too (the FE table skips those, but the download is a full audit trail).
+   * A `photo` cell becomes a clickable {@link HyperlinkCell} ("Photo", or "Photo (lat, lng)" when the
+   * capture carried a geotag) pointing at the auth-gated view path; every other cell is plain text.
+   */
+  private rowToXlsxRecord(row: ReportRow): Record<string, string | HyperlinkCell> {
+    const rec: Record<string, string | HyperlinkCell> = {};
+    for (const col of CURATED_COLUMNS) {
+      rec[col.label] = this.cellToXlsx(row.cells[col.key]);
+    }
+    return rec;
+  }
+
+  /** One cell → a string or a hyperlink sentinel for the xlsx writer. */
+  private cellToXlsx(cell: Cell | undefined): string | HyperlinkCell {
+    if (!cell) return '';
+    switch (cell.t) {
+      case 'text':
+      case 'status':
+        return cell.v;
+      case 'photo': {
+        const geo =
+          cell.lat != null && cell.lng != null
+            ? ` (${cell.lat.toFixed(5)}, ${cell.lng.toFixed(5)})`
+            : '';
+        return { __hyperlink: true, text: `Photo${geo}`, target: cell.viewPath };
+      }
+      case 'empty':
+      default:
+        return '';
+    }
   }
 
   /**
@@ -730,7 +765,7 @@ export class ReportsService {
     let cursorId: string | undefined;
     let exhausted = false;
 
-    const nextBatch = async (): Promise<Record<string, string>[]> => {
+    const nextBatch = async (): Promise<Record<string, string | HyperlinkCell>[]> => {
       if (exhausted) return [];
       const sites = await this.prisma.site.findMany({
         where,
@@ -741,12 +776,16 @@ export class ReportsService {
       });
       if (sites.length < OUTLET_EXPORT_BATCH) exhausted = true;
       if (sites.length > 0) cursorId = sites[sites.length - 1].id;
-      return sites.flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite));
+      return sites
+        .flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite))
+        .map((r) => this.rowToXlsxRecord(r));
     };
 
+    // The export includes EVERY curated column, the excel-only audit group included (col.label is
+    // both the header and the per-row key streamXlsx projects onto).
     return streamXlsx({
-      sheetName: 'Outlet Execution',
-      headers: [...OUTLET_REPORT_COLUMNS],
+      sheetName: 'Recce Report',
+      headers: CURATED_COLUMNS.map((c) => c.label),
       nextBatch,
     });
   }
