@@ -8,6 +8,8 @@ import {
   recceStatusCell,
   rsLabel,
   sourceLabel,
+  isPlausibleOrigin,
+  mediaHyperlinkTarget,
   type Cell,
   type ReportColumn,
   type RepSite,
@@ -29,6 +31,7 @@ describe('CURATED_COLUMNS (the authoritative column contract)', () => {
       ['town', 'location'],
       ['state', 'location'],
       ['rs', 'location'],
+      ['vendor', 'location'],
       ['outletType', 'profile'],
       ['source', 'profile'],
       ['recceDate', 'profile'],
@@ -145,6 +148,94 @@ describe('recceStatusCell — overall lifecycle chip + tone', () => {
   });
 });
 
+// ── Element-status tone (same status+hoReviewStatus nuance as the overall chip) ─────────────────
+// elementStatusCell isn't exported; drive it through buildRecceRow's el1RecceStatus cell. Recce
+// approval is per-recce, so el1 == el2 on the recce report (they diverge on the future installed one).
+describe('element status chip — tone + label mirror the overall recce lifecycle', () => {
+  const el1 = (over: Partial<RepRecce>): Cell =>
+    buildRecceRow(fullSite(), { ...appRecce(), ...over }).cells.el1RecceStatus;
+
+  it('APPROVED + HO APPROVED → green "Approved" (terminal good)', () => {
+    expect(el1({ status: 'APPROVED', hoReviewStatus: 'APPROVED' })).toEqual({ t: 'status', v: 'Approved', tone: 'approved' });
+  });
+
+  it('APPROVED + HO PENDING → amber "ASM approved" (NOT a premature green), matching the overall chip', () => {
+    // The audit bug: this used to show green "Approved" while recceStatus correctly said "ASM approved".
+    expect(el1({ status: 'APPROVED', hoReviewStatus: 'PENDING' })).toEqual({ t: 'status', v: 'ASM approved', tone: 'pending' });
+    expect(recceStatusCell({ ...appRecce(), status: 'APPROVED', hoReviewStatus: 'PENDING' })).toEqual({ t: 'status', v: 'ASM approved', tone: 'pending' });
+  });
+
+  it('SUBMITTED → amber "Submitted"', () => {
+    expect(el1({ status: 'SUBMITTED', hoReviewStatus: 'NONE' })).toEqual({ t: 'status', v: 'Submitted', tone: 'pending' });
+  });
+
+  it('REJECTED → red "Rejected"', () => {
+    expect(el1({ status: 'REJECTED', hoReviewStatus: 'NONE' })).toEqual({ t: 'status', v: 'Rejected', tone: 'rejected' });
+  });
+
+  it('an empty slot stays empty regardless of status', () => {
+    const site = fullSite();
+    site.recces[0] = { ...appRecce(), posms: [appRecce().posms[0]] }; // only slot 1
+    expect(buildRecceRow(site, site.recces[0]).cells.el2RecceStatus).toEqual({ t: 'empty' });
+  });
+});
+
+// ── Vendor column ───────────────────────────────────────────────────────────────────────────
+describe('vendor cell', () => {
+  it('renders the servicing vendor name', () => {
+    expect(buildRecceRow(fullSite(), appRecce()).cells.vendor).toEqual({ t: 'text', v: 'Prime Fleet' });
+  });
+  it('falls back to blank text when the outlet has no vendor (filterable field never invisible)', () => {
+    const noVendor: RepSite = { ...fullSite(), vendor: null };
+    expect(buildRecceRow(noVendor, appRecce()).cells.vendor).toEqual({ t: 'text', v: '' });
+    const omitted: RepSite = { ...fullSite() };
+    delete (omitted as { vendor?: unknown }).vendor;
+    expect(buildRecceRow(omitted, appRecce()).cells.vendor).toEqual({ t: 'text', v: '' });
+  });
+});
+
+// ── xlsx photo hyperlink target (absolute app-origin URL + validation + fallback) ───────────────
+describe('isPlausibleOrigin', () => {
+  it('accepts a bare http(s)://host[:port]', () => {
+    expect(isPlausibleOrigin('https://app.kwality.in')).toBe(true);
+    expect(isPlausibleOrigin('http://localhost:3000')).toBe(true);
+    expect(isPlausibleOrigin(' https://app.kwality.in ')).toBe(true); // trimmed
+  });
+  it('rejects anything that is not a bare origin', () => {
+    expect(isPlausibleOrigin('')).toBe(false);
+    expect(isPlausibleOrigin(undefined)).toBe(false);
+    expect(isPlausibleOrigin(null)).toBe(false);
+    expect(isPlausibleOrigin(42)).toBe(false);
+    expect(isPlausibleOrigin('ftp://app.kwality.in')).toBe(false); // wrong scheme
+    expect(isPlausibleOrigin('app.kwality.in')).toBe(false); // no scheme
+    expect(isPlausibleOrigin('https://app.kwality.in/reports')).toBe(false); // has a path
+    expect(isPlausibleOrigin('https://app.kwality.in?x=1')).toBe(false); // has a query
+    expect(isPlausibleOrigin('javascript:alert(1)')).toBe(false);
+  });
+});
+
+describe('mediaHyperlinkTarget', () => {
+  it('makes the link ABSOLUTE on the app origin + /api surface, remapping /v1 → /api', () => {
+    expect(mediaHyperlinkTarget('/v1/media/view?key=r1', 'https://app.kwality.in')).toBe(
+      'https://app.kwality.in/api/media/view?key=r1',
+    );
+    // A trailing slash on the origin is normalised (no double slash).
+    expect(mediaHyperlinkTarget('/v1/media/view?key=r1', 'https://app.kwality.in/')).toBe(
+      'https://app.kwality.in/api/media/view?key=r1',
+    );
+    // An already-/api path and a bare path both land on <origin>/api/…
+    expect(mediaHyperlinkTarget('/api/media/view?key=r1', 'http://localhost:3000')).toBe(
+      'http://localhost:3000/api/media/view?key=r1',
+    );
+  });
+  it('DEGRADES to the relative view-path when the origin is absent or invalid (never crashes)', () => {
+    expect(mediaHyperlinkTarget('/v1/media/view?key=r1', undefined)).toBe('/v1/media/view?key=r1');
+    expect(mediaHyperlinkTarget('/v1/media/view?key=r1', '')).toBe('/v1/media/view?key=r1');
+    expect(mediaHyperlinkTarget('/v1/media/view?key=r1', 'not-an-origin')).toBe('/v1/media/view?key=r1');
+    expect(mediaHyperlinkTarget('/v1/media/view?key=r1', 'https://evil.test/path')).toBe('/v1/media/view?key=r1');
+  });
+});
+
 // ── Row builder fixtures ──────────────────────────────────────────────────────────────────────
 
 const appRecce = (): RepRecce => ({
@@ -174,6 +265,7 @@ const fullSite = (): RepSite => ({
   rsCode: 'WB2.09',
   rsName: 'Das',
   channel: 'GT',
+  vendor: { name: 'Prime Fleet' },
   recces: [appRecce()],
 });
 
@@ -193,6 +285,7 @@ describe('buildOutletExecutionRows — app-only outlet (one recce → one row)',
     expect(cells.town).toEqual({ t: 'text', v: 'Kalyan' });
     expect(cells.state).toEqual({ t: 'text', v: 'MH' });
     expect(cells.rs).toEqual({ t: 'text', v: 'WB2.09 — Das' });
+    expect(cells.vendor).toEqual({ t: 'text', v: 'Prime Fleet' });
     expect(cells.outletType).toEqual({ t: 'text', v: 'GT' });
     expect(cells.source).toEqual({ t: 'text', v: 'App' });
     expect(cells.promoter).toEqual({ t: 'text', v: 'P100' });

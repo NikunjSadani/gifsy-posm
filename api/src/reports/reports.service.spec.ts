@@ -610,6 +610,7 @@ const sampleRecce = (): RepRecce => ({
 const sampleSite = (): RepSite => ({
   id: 'siteA', code: 'A8', name: 'Kalyan Mega Mart',
   town: 'Kalyan', state: 'MH', rsCode: 'WB2.09', rsName: 'Das', channel: 'GT',
+  vendor: { name: 'Prime Fleet' },
   recces: [sampleRecce()],
 });
 
@@ -680,8 +681,55 @@ describe('ReportsService.outletExecutionXlsxStream', () => {
     const imageCol = header.indexOf('Element 1 Image');
     expect(dataRow[imageCol]).toBe('Photo (19.24010, 73.13010)');
     expect(aoa.flat().some((v) => String(v).includes('[object Object]'))).toBe(false);
+    // The Vendor column is present and carries the servicing fleet (the vendor filter is no longer
+    // filtering on an invisible field).
+    expect(header).toContain('Vendor');
+    expect(dataRow[header.indexOf('Vendor')]).toBe('Prime Fleet');
     // Audit-trail values are present in the Excel row.
     expect(dataRow[header.indexOf('ASM Approved By')]).toBe('Asha ASM');
     expect(dataRow[header.indexOf('HO Approved By')]).toBe('Hari HO');
+  });
+
+  it('with no origin, the photo hyperlink target DEGRADES to the relative backend view-path', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+
+    const buf = await streamToBuffer(service.outletExecutionXlsxStream(admin(), {}));
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
+    const imageCol = aoa[0].indexOf('Element 1 Image');
+    const addr = XLSX.utils.encode_cell({ r: 1, c: imageCol });
+    expect((ws[addr] as XLSX.CellObject).l?.Target).toBe('/v1/media/view?key=r1');
+  });
+
+  it('with a valid origin, the photo hyperlink target is ABSOLUTE on the app origin + /api surface', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+
+    const buf = await streamToBuffer(
+      service.outletExecutionXlsxStream(admin(), { origin: 'https://app.kwality.in' }),
+    );
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
+    const imageCol = aoa[0].indexOf('Element 1 Image');
+    const addr = XLSX.utils.encode_cell({ r: 1, c: imageCol });
+    expect((ws[addr] as XLSX.CellObject).l?.Target).toBe('https://app.kwality.in/api/media/view?key=r1');
+  });
+
+  it('an INVALID origin (e.g. carrying a path) falls back to the relative view-path (never a bad absolute URL)', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+
+    const buf = await streamToBuffer(
+      service.outletExecutionXlsxStream(admin(), { origin: 'https://evil.test/phish' }),
+    );
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
+    const imageCol = aoa[0].indexOf('Element 1 Image');
+    const addr = XLSX.utils.encode_cell({ r: 1, c: imageCol });
+    expect((ws[addr] as XLSX.CellObject).l?.Target).toBe('/v1/media/view?key=r1');
   });
 });

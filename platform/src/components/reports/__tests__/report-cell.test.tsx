@@ -27,14 +27,27 @@ describe('ReportCell', () => {
   it('renders a photo thumbnail with the proxied /api src and fires onOpenPhoto on click', () => {
     const onOpen = vi.fn();
     const cell: Cell = { t: 'photo', key: 'k1', viewPath: '/media/view?key=k1' };
-    render(<ReportCell cell={cell} label="Element 1 Photo" onOpenPhoto={onOpen} />);
+    // The column label carries an "Image" suffix; the alt collapses it to a single "photo" word.
+    render(<ReportCell cell={cell} label="Element 1 Image" onOpenPhoto={onOpen} />);
 
-    const img = screen.getByRole('img', { name: 'Element 1 Photo' }) as HTMLImageElement;
+    const img = screen.getByRole('img', { name: 'Element 1 photo' }) as HTMLImageElement;
     expect(img.getAttribute('src')).toBe('/api/media/view?key=k1');
     expect(img.getAttribute('loading')).toBe('lazy');
 
     fireEvent.click(screen.getByRole('button', { name: /open element 1 photo/i }));
-    expect(onOpen).toHaveBeenCalledWith('/api/media/view?key=k1', 'Element 1 Photo');
+    expect(onOpen).toHaveBeenCalledWith('/api/media/view?key=k1', 'Element 1 photo');
+  });
+
+  it('threads the outlet identity into the photo alt/aria (and never doubles "Image photo")', () => {
+    const onOpen = vi.fn();
+    const cell: Cell = { t: 'photo', key: 'k1', viewPath: '/media/view?key=k1' };
+    render(
+      <ReportCell cell={cell} label="Element 1 Image" outlet="Kalyan Mega Mart" onOpenPhoto={onOpen} />,
+    );
+    // Single "photo", no "Image photo" doubling, with the outlet appended for screen-reader context.
+    expect(screen.getByRole('img', { name: 'Element 1 photo — Kalyan Mega Mart' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Element 1 photo — Kalyan Mega Mart' }));
+    expect(onOpen).toHaveBeenCalledWith('/api/media/view?key=k1', 'Element 1 photo — Kalyan Mega Mart');
   });
 
   it('shows a Google Maps GPS link only when the photo cell is geotagged', () => {
@@ -50,7 +63,7 @@ describe('ReportCell', () => {
 
   it('maps a legacy /v1 view-path onto the /api proxy surface', () => {
     render(<ReportCell cell={{ t: 'photo', key: 'k', viewPath: '/v1/media/view?key=k' }} label="P" onOpenPhoto={noop} />);
-    const img = screen.getByRole('img', { name: 'P' }) as HTMLImageElement;
+    const img = screen.getByRole('img', { name: 'P photo' }) as HTMLImageElement;
     expect(img.getAttribute('src')).toBe('/api/media/view?key=k');
   });
 });

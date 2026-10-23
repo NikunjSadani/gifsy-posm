@@ -27,6 +27,16 @@ export class ListOutletReportDto {
   @IsString()
   vendorId?: string;
 
+  /**
+   * The caller's browser origin (`window.location.origin`), sent ONLY by the .xlsx download so the
+   * backend — which sits behind the Next proxy and can't know the public origin — can build ABSOLUTE
+   * photo hyperlinks (`<origin>/api/media/view?key=…`) that open from Excel. Validated as a plausible
+   * `http(s)://host` before use (invalid ⇒ relative-link fallback); never affects the JSON view.
+   */
+  @IsOptional()
+  @IsString()
+  origin?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

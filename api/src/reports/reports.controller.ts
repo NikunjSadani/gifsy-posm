@@ -75,10 +75,12 @@ export class ReportsController {
     @Query() query: ListOutletReportDto,
   ): StreamableFile {
     const stream = this.reports.outletExecutionXlsxStream(user, query);
-    const stamp = new Date().toISOString().slice(0, 10);
+    // IST date (en-CA → YYYY-MM-DD) so the fallback filename matches the IST dates in the report.
+    // In the real FE flow the blob's `a.download` overrides this; it only surfaces on a direct hit.
+    const stamp = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     return new StreamableFile(stream, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="outlet-execution-${stamp}.xlsx"`,
+      disposition: `attachment; filename="recce-report-${stamp}.xlsx"`,
     });
   }
 }

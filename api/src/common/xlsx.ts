@@ -19,8 +19,10 @@ export interface XlsxSheet {
  * Sentinel a cell value can take to render a REAL Excel hyperlink (SheetJS `.l`)
  * rather than plain text. The DISPLAY `text` is still formula-injection-guarded
  * (cellSafe); the `target` is written verbatim as the link URL. Used so a
- * downloaded .xlsx can have clickable "View image" media links (the target is a
- * PUBLIC tokenized view URL).
+ * downloaded .xlsx can have clickable "View image" media links. The target is an
+ * APP-ORIGIN URL (e.g. `https://<host>/api/media/view?key=…`), NOT a public or
+ * tokenized URL: opening it needs an active session for that app in the SAME
+ * browser (the same-origin session cookie is what authorises the proxied fetch).
  */
 export interface HyperlinkCell {
   __hyperlink: true;

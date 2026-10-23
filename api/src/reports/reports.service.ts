@@ -18,6 +18,7 @@ import type { Readable } from 'node:stream';
 import {
   CURATED_COLUMNS,
   buildOutletExecutionRows,
+  mediaHyperlinkTarget,
   type Cell,
   type ReportRow,
   type RepSite,
@@ -37,6 +38,9 @@ const OUTLET_EXPORT_BATCH = 1_000;
  * page-safe row order.
  */
 const OUTLET_REPORT_INCLUDE = {
+  // The servicing vendor's name feeds the "Vendor" report column (the vendorId filter targets this
+  // relation) — select only `name`, never the whole Vendor row.
+  vendor: { select: { name: true } },
   recces: {
     orderBy: [{ recceMode: 'asc' }, { receivedAt: 'asc' }, { id: 'asc' }],
     include: {
@@ -725,16 +729,24 @@ export class ReportsService {
    * A `photo` cell becomes a clickable {@link HyperlinkCell} ("Photo", or "Photo (lat, lng)" when the
    * capture carried a geotag) pointing at the auth-gated view path; every other cell is plain text.
    */
-  private rowToXlsxRecord(row: ReportRow): Record<string, string | HyperlinkCell> {
+  private rowToXlsxRecord(
+    row: ReportRow,
+    origin: string | undefined,
+  ): Record<string, string | HyperlinkCell> {
     const rec: Record<string, string | HyperlinkCell> = {};
     for (const col of CURATED_COLUMNS) {
-      rec[col.label] = this.cellToXlsx(row.cells[col.key]);
+      rec[col.label] = this.cellToXlsx(row.cells[col.key], origin);
     }
     return rec;
   }
 
-  /** One cell → a string or a hyperlink sentinel for the xlsx writer. */
-  private cellToXlsx(cell: Cell | undefined): string | HyperlinkCell {
+  /**
+   * One cell → a string or a hyperlink sentinel for the xlsx writer. For a photo, the link target is
+   * made ABSOLUTE on the caller's app origin + `/api` surface (via {@link mediaHyperlinkTarget}) so a
+   * logged-in user can click it straight from Excel; with no/invalid origin it degrades to the raw
+   * relative view-path. The display text (cellSafe-guarded downstream) still carries the geotag.
+   */
+  private cellToXlsx(cell: Cell | undefined, origin: string | undefined): string | HyperlinkCell {
     if (!cell) return '';
     switch (cell.t) {
       case 'text':
@@ -745,7 +757,11 @@ export class ReportsService {
           cell.lat != null && cell.lng != null
             ? ` (${cell.lat.toFixed(5)}, ${cell.lng.toFixed(5)})`
             : '';
-        return { __hyperlink: true, text: `Photo${geo}`, target: cell.viewPath };
+        return {
+          __hyperlink: true,
+          text: `Photo${geo}`,
+          target: mediaHyperlinkTarget(cell.viewPath, origin),
+        };
       }
       case 'empty':
       default:
@@ -762,6 +778,10 @@ export class ReportsService {
    */
   outletExecutionXlsxStream(user: JwtPayload, q: ListOutletReportDto): Readable {
     const where = this.outletReportWhere(user, q);
+    // The FE passes its own `window.location.origin` so photo links can be ABSOLUTE on the public
+    // app surface (the backend sits behind the Next proxy and can't reliably know it). Validated +
+    // remapped per-cell in mediaHyperlinkTarget; an absent/invalid origin degrades to a relative link.
+    const origin = q.origin;
     let cursorId: string | undefined;
     let exhausted = false;
 
@@ -778,7 +798,7 @@ export class ReportsService {
       if (sites.length > 0) cursorId = sites[sites.length - 1].id;
       return sites
         .flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite))
-        .map((r) => this.rowToXlsxRecord(r));
+        .map((r) => this.rowToXlsxRecord(r, origin));
     };
 
     // The export includes EVERY curated column, the excel-only audit group included (col.label is

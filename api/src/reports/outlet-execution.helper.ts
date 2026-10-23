@@ -68,6 +68,7 @@ export const CURATED_COLUMNS: ReportColumn[] = [
   { key: 'town', label: 'Town', group: 'location' },
   { key: 'state', label: 'State', group: 'location' },
   { key: 'rs', label: 'RS', group: 'location' },
+  { key: 'vendor', label: 'Vendor', group: 'location' },
   // Profile.
   { key: 'outletType', label: 'Outlet Type', group: 'profile' },
   { key: 'source', label: 'Source', group: 'profile' },
@@ -129,6 +130,9 @@ export interface RepSite {
   rsCode: string | null;
   rsName: string | null;
   channel: string | null;
+  /** The vendor (fleet) servicing this outlet — the "Vendor" report column + filter dimension.
+   *  Optional so pure fixtures can omit it; the service always includes it (null when unassigned). */
+  vendor?: { name: string | null } | null;
   /** All recces for the outlet (1 app + N manual). Each becomes one report row. */
   recces: RepRecce[];
 }
@@ -212,12 +216,20 @@ function photoCell(photo: unknown): Cell {
   return cell;
 }
 
-/** Per-element recce approval chip for a PRESENT element; `empty` when the slot has no element. */
+/**
+ * Per-element recce approval chip for a PRESENT element; `empty` when the slot has no element.
+ * Recce approval is PER-RECCE (not per-element) today, so Element 1 & 2 always read the same chip
+ * — they only diverge on the future installed report. This mirrors {@link recceStatusCell}'s
+ * status+hoReviewStatus nuance so an ASM-approved-but-HO-pending recce reads amber "ASM approved"
+ * here too, instead of a premature green "Approved" while the overall status still says "ASM approved".
+ */
 function elementStatusCell(recce: RepRecce | null, present: boolean): Cell {
   if (!recce || !present) return empty();
   if (recce.status === 'REJECTED') return { t: 'status', v: 'Rejected', tone: 'rejected' };
-  if (recce.status === 'APPROVED') return { t: 'status', v: 'Approved', tone: 'approved' };
-  return { t: 'status', v: 'Pending', tone: 'pending' }; // SUBMITTED
+  if (recce.status === 'APPROVED' && recce.hoReviewStatus === 'APPROVED')
+    return { t: 'status', v: 'Approved', tone: 'approved' }; // HO sign-off — terminal good
+  if (recce.status === 'APPROVED') return { t: 'status', v: 'ASM approved', tone: 'pending' }; // awaiting HO
+  return { t: 'status', v: 'Submitted', tone: 'pending' }; // SUBMITTED
 }
 
 /**
@@ -231,6 +243,40 @@ export function recceStatusCell(recce: RepRecce | null): Cell {
   if (recce.hoReviewStatus === 'APPROVED') return { t: 'status', v: 'HO approved', tone: 'approved' };
   if (recce.status === 'APPROVED') return { t: 'status', v: 'ASM approved', tone: 'pending' };
   return { t: 'status', v: 'Submitted', tone: 'pending' }; // SUBMITTED, HO not yet approved
+}
+
+/**
+ * A browser-supplied origin is trusted for building an xlsx hyperlink only when it is a plausible
+ * bare `http(s)://host[:port]` — scheme + authority, no path / query / fragment / whitespace. This
+ * is NOT an allow-list (the backend can't know the public origin — it sits behind the Next proxy),
+ * just a sanity guard so a malformed / injected value never lands in a cell's link target.
+ */
+export function isPlausibleOrigin(origin: unknown): origin is string {
+  if (typeof origin !== 'string') return false;
+  // scheme + authority, with at most a single trailing slash (normalised away by the caller). No
+  // path segment, query or fragment — those mark a crafted value, not a browser's own origin.
+  return /^https?:\/\/[^/\s?#]+\/?$/.test(origin.trim());
+}
+
+/**
+ * Build the .xlsx photo hyperlink target. Excel cannot resolve a relative URL, so when the FE passes
+ * its own `origin` (validated by {@link isPlausibleOrigin}) this returns an ABSOLUTE link on the
+ * public app origin and the `/api` surface — `<origin>/api/media/view?key=…` — which a user already
+ * logged in to that app, in the same browser, can click straight from Excel: the request is same-
+ * origin so the session cookie rides along, and the `/api`→`/v1` proxy injects the bearer. The
+ * `/v1`→`/api` remap mirrors the FE's `reportMediaSrc`. With no / an invalid origin it DEGRADES to
+ * the original relative `viewPath` (not clickable from Excel, but never a crash or a bad absolute URL).
+ */
+export function mediaHyperlinkTarget(viewPath: string, origin: unknown): string {
+  const p = (viewPath ?? '').trim();
+  if (!isPlausibleOrigin(origin)) return viewPath;
+  const base = origin.trim().replace(/\/+$/, '');
+  let rel: string;
+  if (p.startsWith('/api/')) rel = p;
+  else if (p.startsWith('/v1/')) rel = `/api/${p.slice('/v1/'.length)}`;
+  else if (p.startsWith('/')) rel = `/api${p}`;
+  else rel = `/api/${p}`;
+  return `${base}${rel}`;
 }
 
 /** "App" / "Manual" for the row's recce source; "" for a no-recce row. */
@@ -300,6 +346,7 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null): ReportRow 
     town: text(site.town),
     state: text(site.state),
     rs: text(rsLabel(site.rsCode, site.rsName)),
+    vendor: text(site.vendor?.name),
     outletType: text(site.channel),
     source: recce ? text(sourceLabel(recce)) : empty(),
     recceDate: recce ? text(recceDate) : empty(),

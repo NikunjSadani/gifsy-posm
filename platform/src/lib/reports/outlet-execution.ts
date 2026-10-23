@@ -109,12 +109,32 @@ export function gpsMapsUrl(lat: number, lng: number): string {
 }
 
 /**
+ * An IST (Asia/Kolkata) `YYYY-MM-DD` stamp for the download filename, so it matches the IST dates
+ * shown everywhere in the report (NOT UTC `toISOString()`, which rolls a day early for late-evening
+ * IST). `en-CA` formats as `YYYY-MM-DD`.
+ */
+export function istDateStamp(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+/**
  * Download the full report as .xlsx. Fetches the auth-gated stream (cookie injected by the /api
  * proxy) into a blob and triggers a browser save. The export includes every column — pinned,
  * scrollable AND excel-only audit columns. Returns an error string on failure, else null.
  */
 export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Promise<string | null> {
   const p = toParams(f);
+  // Pass our own origin so the backend (behind the Next proxy, blind to the public origin) can make
+  // the in-sheet photo links ABSOLUTE on this app's `/api` surface — clickable from the opened Excel
+  // file in this same logged-in browser. The backend validates it and falls back to a relative link.
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    p.set('origin', window.location.origin);
+  }
   try {
     const res = await fetch(`/api/reports/outlet-execution.xlsx?${p.toString()}`, {
       method: 'GET',
@@ -129,7 +149,7 @@ export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Pro
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `recce-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.download = `recce-report-${istDateStamp()}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();

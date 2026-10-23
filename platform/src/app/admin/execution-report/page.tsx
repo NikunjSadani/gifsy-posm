@@ -35,14 +35,34 @@ import { groupOutletColumns, flatColumns } from '@/lib/reports/outlet-columns';
 const PAGE_SIZE = 50;
 
 /** Pixel widths for the sticky-left pinned columns, by pin index; a further pinned column (none
- *  today) falls back to the last width. The sticky `left` offset is the sum of earlier widths. */
-const PIN_WIDTHS = [128, 208];
-const pinWidth = (i: number) => PIN_WIDTHS[i] ?? PIN_WIDTHS[PIN_WIDTHS.length - 1] ?? 160;
-const pinLeft = (i: number) => {
+ *  today) falls back to the last width. The sticky `left` offset is the sum of earlier widths.
+ *  Two sets: the desktop widths, and a NARROWER mobile set so the 2 pinned columns don't eat a
+ *  ~375px PWA phone (336px pinned → 224px, leaving room for the scrollable groups). The sticky
+ *  offsets are derived from whichever set is active, so they stay correct at either width. */
+const PIN_WIDTHS_DESKTOP = [128, 208];
+const PIN_WIDTHS_MOBILE = [96, 128];
+const pinWidth = (widths: number[], i: number) => widths[i] ?? widths[widths.length - 1] ?? 160;
+const pinLeft = (widths: number[], i: number) => {
   let left = 0;
-  for (let j = 0; j < i; j++) left += pinWidth(j);
+  for (let j = 0; j < i; j++) left += pinWidth(widths, j);
   return left;
 };
+
+/** Tracks whether the viewport is below the `sm` breakpoint (640px) so the pinned columns can shrink
+ *  on a phone. SSR-safe: starts `false` (desktop widths) on both server and first client render to
+ *  avoid a hydration mismatch, then syncs to the real viewport after mount. */
+function useIsSmallViewport(): boolean {
+  const [small, setSmall] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-width: 639px)');
+    const sync = () => setSmall(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+  return small;
+}
 
 type ReportMode = 'recce' | 'installed';
 const MODE_TITLES: Record<ReportMode, string> = {
@@ -60,6 +80,11 @@ export default function ExecutionReportPage() {
 
   // Seam for a later recce|installed toggle — only 'recce' is built today.
   const [mode] = useState<ReportMode>('recce');
+
+  // Pinned-column widths shrink below the `sm` breakpoint so the two frozen identity columns stay
+  // usable on a ~375px PWA phone.
+  const isSmall = useIsSmallViewport();
+  const pinWidths = isSmall ? PIN_WIDTHS_MOBILE : PIN_WIDTHS_DESKTOP;
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [data, setData] = useState<OutletReportResult | null>(null);
@@ -124,8 +149,9 @@ export default function ExecutionReportPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">{MODE_TITLES[mode]}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            One row per recce — recce evidence, element status and approvals at a glance.
-            {!loading && !error && <> {' · '}{total} recce{total === 1 ? '' : 's'}</>}
+            One row per recce (an outlet can have more than one) — recce evidence, element status and
+            approvals at a glance.
+            {!loading && !error && <> {' · '}{total} outlet{total === 1 ? '' : 's'}</>}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -212,7 +238,7 @@ export default function ExecutionReportPage() {
                         key={c.column.key}
                         style={
                           pinned
-                            ? { left: pinLeft(c.pinIndex), width: pinWidth(c.pinIndex), minWidth: pinWidth(c.pinIndex), maxWidth: pinWidth(c.pinIndex) }
+                            ? { left: pinLeft(pinWidths, c.pinIndex), width: pinWidth(pinWidths, c.pinIndex), minWidth: pinWidth(pinWidths, c.pinIndex), maxWidth: pinWidth(pinWidths, c.pinIndex) }
                             : undefined
                         }
                         className={cn(
@@ -239,7 +265,7 @@ export default function ExecutionReportPage() {
                           key={c.column.key}
                           style={
                             pinned
-                              ? { left: pinLeft(c.pinIndex), width: pinWidth(c.pinIndex), minWidth: pinWidth(c.pinIndex), maxWidth: pinWidth(c.pinIndex) }
+                              ? { left: pinLeft(pinWidths, c.pinIndex), width: pinWidth(pinWidths, c.pinIndex), minWidth: pinWidth(pinWidths, c.pinIndex), maxWidth: pinWidth(pinWidths, c.pinIndex) }
                               : undefined
                           }
                           className={cn(
@@ -253,6 +279,7 @@ export default function ExecutionReportPage() {
                           <ReportCell
                             cell={cell}
                             label={c.column.label}
+                            outlet={r.outletName || r.outletCode}
                             onOpenPhoto={(src, alt) => setLightbox({ src, alt })}
                           />
                         </td>
