@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-/** `/field` → the mandatory outlet-filter landing (RS code + Beat). */
+/** `/field` → the recce list, which now hosts the RS + Beat filter inline. */
 export default function FieldIndex() {
-  redirect('/field/filter');
+  redirect('/field/sites');
 }

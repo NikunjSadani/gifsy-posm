@@ -394,7 +394,16 @@ export class RecceService {
         rsCode: { equals: q.rsCode, mode: 'insensitive' },
       };
     }
-    if (q.beatName) {
+    // Beat: a non-empty `beatNames` multi-select wins — matched CASE-INSENSITIVELY (an OR of
+    // insensitive equals inside the `site` relation filter, AND-ed with the vendor pin + any
+    // rsCode/siteCode clause). Mixed-case bulk-upload beat data must not hide a rep's own recces,
+    // so this mirrors the legacy single-beat insensitive match. Else: the legacy single `beatName`.
+    if (Array.isArray(q.beatNames) && q.beatNames.length > 0) {
+      where.site = {
+        ...(where.site as Prisma.SiteWhereInput | undefined),
+        OR: q.beatNames.map((b) => ({ beatName: { equals: b, mode: 'insensitive' } })),
+      };
+    } else if (q.beatName) {
       where.site = {
         ...(where.site as Prisma.SiteWhereInput | undefined),
         beatName: { equals: q.beatName, mode: 'insensitive' },

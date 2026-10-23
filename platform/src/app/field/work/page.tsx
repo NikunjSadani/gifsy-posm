@@ -44,7 +44,7 @@ import {
   type RecceGroupKey,
   type InstallableOutlet,
 } from '@/lib/field/recce-api';
-import { getOutletFilter, type OutletFilter } from '@/lib/field/outlet-filter';
+import { getOutletFilter, beatSummary, type OutletFilter } from '@/lib/field/outlet-filter';
 
 const STATUS_META: Record<
   RecceGroupKey,
@@ -71,7 +71,7 @@ export default function MyWorkPage() {
     const f = getOutletFilter();
     if (!f) {
       setOutlet(null);
-      router.replace('/field/filter');
+      router.replace('/field/sites');
       return;
     }
     setOutlet(f);
@@ -84,7 +84,7 @@ export default function MyWorkPage() {
     // exec's own MANUAL recces regardless of beat — a manual outlet has a null RS/Beat, so without
     // this a manual submission (including a rejected one awaiting re-capture) would never show.
     const [appRes, manualRes] = await Promise.all([
-      fetchMyRecces({ rsCode: f.rsCode, beatName: f.beatName }),
+      fetchMyRecces({ rsCode: f.rsCode, beatNames: f.beatNames }),
       fetchMyRecces({ recceMode: 'MANUAL' }),
     ]);
     if (appRes.success) {
@@ -138,15 +138,15 @@ export default function MyWorkPage() {
       {/* Active outlet filter — RS code · Beat, with a Change control. */}
       <button
         type="button"
-        onClick={() => router.push('/field/filter')}
+        onClick={() => router.push('/field/sites')}
         data-testid="work-filter-chip"
         className="mb-4 flex w-full items-center justify-between gap-2 rounded-2xl border border-[var(--brand-primary)]/30 bg-[var(--brand-primary-light)] px-3 py-2.5 text-left active:scale-[0.99] transition-transform"
       >
         <span className="flex min-w-0 items-center gap-2 text-sm text-gray-800">
           <SlidersHorizontal className="h-4 w-4 shrink-0 text-[var(--brand-primary)]" />
           <span className="truncate">
-            RS <span className="font-semibold">{outlet.rsCode}</span> · Beat{' '}
-            <span className="font-semibold">{outlet.beatName}</span>
+            RS <span className="font-semibold">{outlet.rsCode}</span> ·{' '}
+            <span className="font-semibold">{beatSummary(outlet.beatNames)}</span>
           </span>
         </span>
         <span className="shrink-0 text-xs font-bold text-[var(--brand-primary)]">Change</span>

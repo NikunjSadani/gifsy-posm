@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt, Min, Max, IsEnum, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, Max, IsEnum, IsBoolean, IsArray } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { SiteStatus } from '@prisma/client';
 
@@ -29,6 +29,16 @@ export class ListSitesDto {
   @IsOptional()
   @IsString()
   beatName?: string;
+
+  // Optional MULTI-select Beat filter. A repeated query param `?beatNames=A&beatNames=B`
+  // parses to `['A','B']`; a single `?beatNames=A` to `['A']`. When present+non-empty it
+  // filters by EXACT membership (the values come from the server's own beat-options list,
+  // i.e. canonical stored strings). Back-compat: the single `beatName` above is kept.
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]))
+  @IsArray()
+  @IsString({ each: true })
+  beatNames?: string[];
 
   @IsOptional()
   @IsString()

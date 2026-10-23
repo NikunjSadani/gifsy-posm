@@ -153,7 +153,16 @@ export class SitesService {
     // a dependent drop-down, not a substring). The field app is the only consumer passing
     // these; the admin list does not filter on rsCode, so no substring behaviour is lost.
     if (q.rsCode) where.rsCode = { equals: q.rsCode, mode: 'insensitive' };
-    if (q.beatName) where.beatName = { equals: q.beatName, mode: 'insensitive' };
+    // Beat: a non-empty `beatNames` multi-select wins — matched CASE-INSENSITIVELY (an OR of
+    // insensitive equals, AND-ed with the other top-level scalar pins). Bulk-uploaded beat data can
+    // carry mixed casing ("MG Road" vs "mg road"); an exact `{ in }` would silently hide pending
+    // recces under the other casing, so we mirror the legacy single-beat insensitive match.
+    // Otherwise the legacy single `beatName` keeps its insensitive match (back-compat). Else: none.
+    if (Array.isArray(q.beatNames) && q.beatNames.length > 0) {
+      where.OR = q.beatNames.map((b) => ({ beatName: { equals: b, mode: 'insensitive' } }));
+    } else if (q.beatName) {
+      where.beatName = { equals: q.beatName, mode: 'insensitive' };
+    }
     // Visibility by status: a DEACTIVATED (INACTIVE) outlet is ADMIN-ONLY. Field / ASM / vendor-HO
     // roles are hard-pinned to ACTIVE outlets — a `status` filter they pass is ignored, so a
     // deactivated outlet can never surface in the field list, the nearby map, or the recce picker.
@@ -186,12 +195,17 @@ export class SitesService {
 
   // ── Filter drop-down options (RS code → Beat, scoped like list) ─────────────────
   /**
-   * Distinct, sorted RS codes among the caller's SCOPED sites — the source for the field
-   * app's RS-code drop-down. Scoped identically to {@link list} (vendor pin for a vendor
-   * role, tenant pin, ACTIVE-only for non-admins) and FAILS CLOSED for a vendor with no
-   * scope (empty array, NO query). Null/empty rsCode values are dropped.
+   * Distinct, sorted RS codes — each WITH a representative RS name — among the caller's SCOPED
+   * sites, the source for the field app's RS-code drop-down (which now shows code + name).
+   * Scoped identically to {@link list} (vendor pin for a vendor role, tenant pin, ACTIVE-only
+   * for non-admins) and FAILS CLOSED for a vendor with no scope (empty array, NO query).
+   * Rows whose rsCode is null/empty/whitespace are dropped. `distinct: ['rsCode']` keeps ONE
+   * row per code, so a code that appears with multiple names in dirty data contributes a single
+   * accepted representative name. The orderBy must START with the distinct column.
    */
-  async rsCodeOptions(user: JwtPayload): Promise<{ rsCodes: string[] }> {
+  async rsCodeOptions(
+    user: JwtPayload,
+  ): Promise<{ rsCodes: Array<{ code: string; name: string | null }> }> {
     const scope = this.scopedWhere(user);
     if (scope === null) return { rsCodes: [] }; // fail-closed: no scope → no query
     const where: Prisma.SiteWhereInput = { ...scope };
@@ -201,12 +215,14 @@ export class SitesService {
     const rows = await this.prisma.site.findMany({
       where,
       distinct: ['rsCode'],
-      select: { rsCode: true },
+      select: { rsCode: true, rsName: true },
+      orderBy: [{ rsCode: 'asc' }],
     });
     const rsCodes = rows
-      .map((r) => r.rsCode)
-      .filter((v): v is string => !!v && v.trim() !== '')
-      .sort((a, b) => a.localeCompare(b));
+      .filter((r): r is { rsCode: string; rsName: string | null } =>
+        !!r.rsCode && r.rsCode.trim() !== '')
+      .map((r) => ({ code: r.rsCode, name: r.rsName ?? null }))
+      .sort((a, b) => a.code.localeCompare(b.code));
     return { rsCodes };
   }
 
@@ -230,9 +246,19 @@ export class SitesService {
       distinct: ['beatName'],
       select: { beatName: true },
     });
+    // The DB `distinct` is case-sensitive, so "MG Road" and "mg road" would both appear. Collapse
+    // them case/whitespace-insensitively to ONE representative chip (the field matches beats
+    // insensitively too), so a rep can't miss outlets stored under a different casing.
+    const seen = new Set<string>();
     const beats = rows
       .map((r) => r.beatName)
       .filter((v): v is string => !!v && v.trim() !== '')
+      .filter((v) => {
+        const key = v.trim().toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .sort((a, b) => a.localeCompare(b));
     return { beats };
   }

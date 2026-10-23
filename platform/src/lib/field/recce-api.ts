@@ -123,9 +123,10 @@ export interface RecceDetail {
 /** Optional filters for the field user's own recce list. */
 export interface MyReccesFilters {
   status?: RecceStatus;
-  /** Filter-first field screen: EXACT RS code + Beat (there is no beatId). */
+  /** Filter-first field screen: EXACT RS code + optional MULTI beats (there is no beatId). */
   rsCode?: string;
-  beatName?: string;
+  /** Beats matched EXACTLY by name; sent as repeated `beatNames` params. Empty/absent = all beats. */
+  beatNames?: string[];
   /**
    * Restrict to one entry mode. MANUAL recces carry a null RS/Beat (a provisional outlet), so the
    * exec fetches them with `recceMode: 'MANUAL'` INDEPENDENT of the RS/Beat gate — otherwise their
@@ -140,7 +141,8 @@ export function fetchMyRecces(filters: MyReccesFilters = {}) {
   const params = new URLSearchParams();
   if (filters.status) params.set('status', filters.status);
   if (filters.rsCode) params.set('rsCode', filters.rsCode);
-  if (filters.beatName) params.set('beatName', filters.beatName);
+  // Beats are optional + multi: each selected beat becomes a repeated `beatNames` param.
+  for (const b of filters.beatNames ?? []) params.append('beatNames', b);
   if (filters.recceMode) params.set('recceMode', filters.recceMode);
   // Match the sites screen's page size (backend max is 200) so a rep's work in a beat isn't
   // silently truncated at the default of 50.

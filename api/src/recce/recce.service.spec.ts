@@ -420,6 +420,38 @@ describe('RecceService', () => {
     });
   });
 
+  it('list: beatNames (multi-select) → case-INSENSITIVE OR merged into where.site, vendor pin kept', async () => {
+    mockPrisma.recce.findMany.mockResolvedValue([]);
+    mockPrisma.recce.count.mockResolvedValue(0);
+    await service.list(vendorField, { beatNames: ['Beat 1', 'Beat 2'] } as any);
+    const where = mockPrisma.recce.findMany.mock.calls[0][0].where;
+    expect(where.site).toEqual({
+      vendorId: 'vA', // set by scopeWhere — survives the merge
+      OR: [
+        { beatName: { equals: 'Beat 1', mode: 'insensitive' } },
+        { beatName: { equals: 'Beat 2', mode: 'insensitive' } },
+      ],
+    });
+    expect(where.submittedById).toBe('u1'); // own-recces pin intact
+  });
+
+  it('list: beatNames WINS over a single beatName when both present', async () => {
+    mockPrisma.recce.findMany.mockResolvedValue([]);
+    mockPrisma.recce.count.mockResolvedValue(0);
+    await service.list(vendorField, { beatName: 'Beat 9', beatNames: ['Beat 1'] } as any);
+    const where = mockPrisma.recce.findMany.mock.calls[0][0].where;
+    expect(where.site.OR).toEqual([{ beatName: { equals: 'Beat 1', mode: 'insensitive' } }]);
+    expect(where.site.beatName).toBeUndefined();
+  });
+
+  it('list: empty beatNames array falls back to the single beatName behaviour', async () => {
+    mockPrisma.recce.findMany.mockResolvedValue([]);
+    mockPrisma.recce.count.mockResolvedValue(0);
+    await service.list(vendorField, { beatName: 'Beat 9', beatNames: [] } as any);
+    const where = mockPrisma.recce.findMany.mock.calls[0][0].where;
+    expect(where.site.beatName).toEqual({ equals: 'Beat 9', mode: 'insensitive' });
+  });
+
   it('list: each row carries hoReviewStatus + hoRejectionReasonCode (so the re-capture card can show the HO reason)', async () => {
     mockPrisma.recce.findMany.mockResolvedValue([
       {

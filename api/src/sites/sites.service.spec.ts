@@ -139,6 +139,39 @@ describe('SitesService.list — role scoping', () => {
     expect(where.beatName).toEqual({ equals: 'Beat 1', mode: 'insensitive' });
   });
 
+  it('beatNames (multi-select) → case-INSENSITIVE OR membership (mixed-case data not hidden)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { beatNames: ['Beat 1', 'Beat 2'] });
+    expect(findMany.mock.calls[0][0].where.OR).toEqual([
+      { beatName: { equals: 'Beat 1', mode: 'insensitive' } },
+      { beatName: { equals: 'Beat 2', mode: 'insensitive' } },
+    ]);
+    expect(findMany.mock.calls[0][0].where.beatName).toBeUndefined();
+  });
+
+  it('beatNames WINS over a single beatName when both are present', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { beatName: 'Beat 9', beatNames: ['Beat 1'] });
+    expect(findMany.mock.calls[0][0].where.OR).toEqual([{ beatName: { equals: 'Beat 1', mode: 'insensitive' } }]);
+    expect(findMany.mock.calls[0][0].where.beatName).toBeUndefined();
+  });
+
+  it('empty beatNames array falls back to the single beatName behaviour', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { beatName: 'Beat 9', beatNames: [] });
+    expect(findMany.mock.calls[0][0].where.beatName).toEqual({ equals: 'Beat 9', mode: 'insensitive' });
+  });
+
+  it('no beat filter when neither beatName nor beatNames is set', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
+    expect(findMany.mock.calls[0][0].where.beatName).toBeUndefined();
+  });
+
   it('pendingRecce=true filters to outlets with NO recce (recces: none), AND-ed onto scope', async () => {
     const { prisma, findMany, count } = makePrisma();
     const svc = new SitesService(prisma);
@@ -234,24 +267,39 @@ describe('SitesService.create — F8 tenant-context write gate', () => {
 
 // ── Filter drop-down options — scoped like list(), fail-closed for an unscoped vendor ──
 describe('SitesService.rsCodeOptions', () => {
-  function makeOptionPrisma(rows: { rsCode: string | null }[] = []) {
+  function makeOptionPrisma(rows: { rsCode: string | null; rsName?: string | null }[] = []) {
     const findMany = jest.fn().mockResolvedValue(rows);
     const prisma = { site: { findMany } } as unknown as PrismaService;
     return { prisma, findMany };
   }
 
-  it('returns distinct, sorted, non-empty RS codes under the ACTIVE vendor pin (VENDOR_FIELD)', async () => {
+  it('returns distinct, sorted {code,name} under the ACTIVE vendor pin, dropping blank codes (VENDOR_FIELD)', async () => {
     const { prisma, findMany } = makeOptionPrisma([
-      { rsCode: 'RS2' }, { rsCode: 'RS1' }, { rsCode: null }, { rsCode: '' },
+      { rsCode: 'RS2', rsName: 'North RS' }, { rsCode: 'RS1', rsName: 'South RS' },
+      { rsCode: null, rsName: 'X' }, { rsCode: '', rsName: 'Y' },
     ]);
     const svc = new SitesService(prisma);
     const res = await svc.rsCodeOptions(user({ role: 'VENDOR_FIELD', vendorId: 'v9', clientId: 'c1' }));
-    expect(res).toEqual({ rsCodes: ['RS1', 'RS2'] });
+    expect(res).toEqual({
+      rsCodes: [
+        { code: 'RS1', name: 'South RS' },
+        { code: 'RS2', name: 'North RS' },
+      ],
+    });
     const args = findMany.mock.calls[0][0];
     expect(args.distinct).toEqual(['rsCode']);
+    expect(args.select).toEqual({ rsCode: true, rsName: true });
+    expect(args.orderBy).toEqual([{ rsCode: 'asc' }]); // must start with the distinct column
     expect(args.where.vendorId).toBe('v9');
     expect(args.where.clientId).toBe('c1');
     expect(args.where.status).toBe('ACTIVE'); // non-admin → ACTIVE-only
+  });
+
+  it('maps a null rsName to name: null (code kept)', async () => {
+    const { prisma } = makeOptionPrisma([{ rsCode: 'RS1', rsName: null }]);
+    const svc = new SitesService(prisma);
+    const res = await svc.rsCodeOptions(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+    expect(res).toEqual({ rsCodes: [{ code: 'RS1', name: null }] });
   });
 
   it('admin is NOT pinned to ACTIVE (sees all statuses)', async () => {

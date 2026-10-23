@@ -168,11 +168,13 @@ describe('fetchMyRecces — query building', () => {
     expect(urlOf()).toBe('/api/recce?limit=200');
   });
 
-  it('appends rsCode + beatName when set', () => {
-    void fetchMyRecces({ rsCode: 'RS1', beatName: 'Beat A' });
+  it('appends rsCode + each beat as a repeated beatNames param', () => {
+    void fetchMyRecces({ rsCode: 'RS1', beatNames: ['Beat A', 'Beat B'] });
     const url = urlOf();
     expect(url).toContain('rsCode=RS1');
-    expect(url).toContain('beatName=Beat+A');
+    expect(url).toContain('beatNames=Beat+A');
+    expect(url).toContain('beatNames=Beat+B');
+    expect(url).not.toContain('beatName=Beat');
   });
 
   it('appends status when set', () => {

@@ -62,8 +62,9 @@ export class SitesController {
   }
 
   /**
-   * GET /v1/sites/filter-options/rs-codes — distinct RS codes among the caller's scoped
-   * sites (the field RS-code drop-down source). Scoped exactly like the list.
+   * GET /v1/sites/filter-options/rs-codes — distinct RS codes, each with a representative RS
+   * name (`{ rsCodes: Array<{ code, name }> }`), among the caller's scoped sites (the field
+   * RS-code drop-down source, which shows code + name). Scoped exactly like the list.
    */
   @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN', 'VENDOR_FIELD')
   @Get('filter-options/rs-codes')

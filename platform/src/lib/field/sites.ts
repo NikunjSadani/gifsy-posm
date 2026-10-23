@@ -51,8 +51,12 @@ export interface SiteFilters {
   code?: string;
   town?: string;
   rsCode?: string;
-  /** Beat is matched EXACTLY by name (there is no beatId) — the filter-first field screen. */
-  beatName?: string;
+  /**
+   * Beats are matched EXACTLY by name (there is no beatId) and are OPTIONAL + MULTI — the
+   * filter-first field screen. Sent as a repeated `beatNames` query param (`?beatNames=A&beatNames=B`);
+   * an empty/absent array means "all beats under the RS code".
+   */
+  beatNames?: string[];
   /** "Recce to do": only outlets that still owe a recce (no recce yet). */
   pendingRecce?: boolean;
   page?: number;
@@ -69,7 +73,8 @@ export function fetchSites(filters: SiteFilters = {}) {
   if (filters.code) params.set('code', filters.code);
   if (filters.town) params.set('town', filters.town);
   if (filters.rsCode) params.set('rsCode', filters.rsCode);
-  if (filters.beatName) params.set('beatName', filters.beatName);
+  // Beats are optional + multi: each selected beat becomes a repeated `beatNames` param.
+  for (const b of filters.beatNames ?? []) params.append('beatNames', b);
   if (filters.pendingRecce) params.set('pendingRecce', 'true');
   params.set('page', String(filters.page ?? 1));
   params.set('limit', String(filters.limit ?? 200));
@@ -118,12 +123,19 @@ export function lookupSiteByOutletId(outletId: string) {
   return api.get<SiteLookupResult>(`/api/sites/lookup?outletId=${encodeURIComponent(outletId)}`);
 }
 
+/** One RS/distributor option — the code plus its (optional) human name, for labeled display. */
+export interface RsCodeOption {
+  code: string;
+  name: string | null;
+}
+
 /**
  * Distinct, sorted RS codes available to this vendor login (for the filter-first screen's
- * first dropdown). Vendor-scoped server-side.
+ * first dropdown). Each carries the RS code and its human name so the dropdown can show — and
+ * search by — both. Vendor-scoped server-side.
  */
 export function fetchRsCodes() {
-  return api.get<{ rsCodes: string[] }>('/api/sites/filter-options/rs-codes');
+  return api.get<{ rsCodes: RsCodeOption[] }>('/api/sites/filter-options/rs-codes');
 }
 
 /**

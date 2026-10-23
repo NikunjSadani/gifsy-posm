@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsInt, Min, Max, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsInt, Min, Max, IsEnum, IsArray } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { RecceStatus, RecceMode } from '@prisma/client';
 
 /**
@@ -36,6 +36,18 @@ export class ListRecceDto {
   @IsOptional()
   @IsString()
   beatName?: string;
+
+  /**
+   * Optional MULTI-select Beat filter. A repeated query param `?beatNames=A&beatNames=B`
+   * parses to `['A','B']`; a single `?beatNames=A` to `['A']`. When present+non-empty it
+   * filters the site's Beat by EXACT membership (the values come from the server's own
+   * beat-options list, i.e. canonical stored strings). Back-compat: single `beatName` is kept.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]))
+  @IsArray()
+  @IsString({ each: true })
+  beatNames?: string[];
 
   @IsOptional()
   @Type(() => Number)

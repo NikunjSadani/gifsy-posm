@@ -12,17 +12,26 @@ describe('fetchSites — query building', () => {
   beforeEach(() => get.mockClear());
   const urlOf = () => get.mock.calls[0][0] as string;
 
-  it('sends beatName (exact filter) when set', () => {
-    void fetchSites({ rsCode: 'RS1', beatName: 'Beat A', pendingRecce: true });
+  it('sends each selected beat as a repeated beatNames param', () => {
+    void fetchSites({ rsCode: 'RS1', beatNames: ['Beat A', 'Beat B'], pendingRecce: true });
     const url = urlOf();
     expect(url).toContain('rsCode=RS1');
-    expect(url).toContain('beatName=Beat+A');
+    expect(url).toContain('beatNames=Beat+A');
+    expect(url).toContain('beatNames=Beat+B');
     expect(url).toContain('pendingRecce=true');
   });
 
-  it('omits beatName when not set', () => {
+  it('omits beatNames when none set (empty or absent)', () => {
+    void fetchSites({ rsCode: 'RS1', beatNames: [] });
+    expect(urlOf()).not.toContain('beatNames=');
+    get.mockClear();
     void fetchSites({ rsCode: 'RS1' });
-    expect(urlOf()).not.toContain('beatName=');
+    expect(urlOf()).not.toContain('beatNames=');
+  });
+
+  it('no longer sends the legacy single beatName param', () => {
+    void fetchSites({ rsCode: 'RS1', beatNames: ['Beat A'] });
+    expect(urlOf()).not.toContain('beatName=Beat');
   });
 });
 

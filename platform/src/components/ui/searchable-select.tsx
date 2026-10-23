@@ -4,13 +4,46 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface SearchableSelectProps {
-  /** Current selected value (a plain string — the option text). */
+/**
+ * A labeled option. `value` is the stable key committed to `onChange`; `label` is what the user
+ * sees; `keywords` (defaults to `label`) extends what the search query matches against — so an
+ * option can be found by text that is not shown (e.g. an RS code as well as its name).
+ */
+export interface SearchableOption {
   value: string;
-  /** Called with the selected option string (or '' when cleared). */
+  label: string;
+  keywords?: string;
+}
+
+/**
+ * Options may be plain strings (value === label === the string, the long-standing form used by
+ * admin / re-KYC forms) OR labeled `{ value, label, keywords? }` objects. Both are accepted and
+ * normalised internally, so existing string[] callers are entirely unaffected.
+ */
+type RawOption = string | SearchableOption;
+
+interface NormOption {
+  value: string;
+  label: string;
+  keywords: string;
+}
+
+/** Normalise a raw option: a string → value=label=string, no extra keywords; an object → its
+ *  own keywords (or none). Keywords are EXTRA search text only — the label is always searched —
+ *  so leaving them empty keeps a string option's search identical to a plain label match (no
+ *  self-join across a duplicated "label label" string). */
+function normalizeOption(o: RawOption): NormOption {
+  if (typeof o === 'string') return { value: o, label: o, keywords: '' };
+  return { value: o.value, label: o.label, keywords: o.keywords ?? '' };
+}
+
+interface SearchableSelectProps {
+  /** Current selected value — the option's `value` (for string options this is the string itself). */
+  value: string;
+  /** Called with the selected option's `value` (or '' when cleared). */
   onChange: (value: string) => void;
-  /** The list of selectable option strings. */
-  options: readonly string[];
+  /** The selectable options — plain strings or labeled `{ value, label, keywords? }` objects. */
+  options: readonly RawOption[];
   placeholder?: string;
   /** Extra classes merged onto the text input (used for re-KYC flag styling). */
   className?: string;
@@ -48,12 +81,23 @@ export function SearchableSelect({
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // While open the input shows the transient query; while closed it mirrors value.
-  const display = open ? query : value;
+  // Normalise every option once so the rest of the component works in a single labeled shape.
+  const norm = React.useMemo(() => options.map(normalizeOption), [options]);
 
+  // The label to show for a committed value (looked up by value; falls back to the raw value when
+  // not in the list — e.g. a value that is no longer a valid option).
+  const labelFor = (v: string) => norm.find((o) => o.value === v)?.label ?? v;
+
+  // While open the input shows the transient query; while closed it mirrors the selected label.
+  const display = open ? query : (value ? labelFor(value) : '');
+
+  // Filtering matches the query against `label + ' ' + keywords` (case-insensitive) so an option
+  // can be found by hidden keywords (e.g. an RS code) as well as its visible label.
   const filtered = open
-    ? options.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
-    : options;
+    ? norm.filter((o) =>
+        (o.keywords ? `${o.label} ${o.keywords}` : o.label).toLowerCase().includes(query.trim().toLowerCase()),
+      )
+    : norm;
 
   // Close on outside click — restore the committed value (drop the partial query).
   useEffect(() => {
@@ -75,8 +119,8 @@ export function SearchableSelect({
     setOpen(true);
   };
 
-  const commit = (option: string) => {
-    onChange(option);
+  const commit = (option: NormOption) => {
+    onChange(option.value);
     setOpen(false);
     setQuery('');
   };
@@ -128,9 +172,9 @@ export function SearchableSelect({
             setQuery(e.target.value);
             setHighlight(0);
             if (!open) setOpen(true);
-            // Typing an exact (case-insensitive) match commits it immediately.
-            const exact = options.find((o) => o.toLowerCase() === e.target.value.trim().toLowerCase());
-            if (exact) onChange(exact);
+            // Typing an exact (case-insensitive) match on an option's label commits its value.
+            const exact = norm.find((o) => o.label.toLowerCase() === e.target.value.trim().toLowerCase());
+            if (exact) onChange(exact.value);
           }}
           onKeyDown={onKeyDown}
         />
@@ -160,13 +204,13 @@ export function SearchableSelect({
             <li className="px-3 py-2 text-sm text-gray-400">No matches</li>
           ) : (
             filtered.map((option, i) => {
-              const selected = option === value;
+              const selected = option.value === value;
               return (
                 <li
-                  key={option}
+                  key={option.value}
                   role="option"
                   aria-selected={selected}
-                  data-testid={`${testIdPrefix}-option-${option}`}
+                  data-testid={`${testIdPrefix}-option-${option.value}`}
                   onMouseDown={(e) => { e.preventDefault(); commit(option); }}
                   onMouseEnter={() => setHighlight(i)}
                   className={cn(
@@ -174,7 +218,7 @@ export function SearchableSelect({
                     i === highlight ? 'bg-[var(--brand-primary)]/5 text-[var(--brand-primary)]' : 'text-gray-700',
                   )}
                 >
-                  <span>{option}</span>
+                  <span>{option.label}</span>
                   {selected && <Check className="h-4 w-4" />}
                 </li>
               );
