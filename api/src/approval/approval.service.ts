@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -12,6 +13,34 @@ import { readMediaValue } from '../capture/visibility-types';
 import { ListRecceQueueDto } from './dto/list-recce-queue.dto';
 import { RejectRecceDto } from './dto/reject-recce.dto';
 import { BulkApproveDto } from './dto/bulk-approve.dto';
+import { RecordsQueryDto, RecordsStage } from './dto/records-query.dto';
+
+/** One row of the per-tile drill-down list (lightweight — no media/photo payloads). */
+export interface RecordItem {
+  id: string;
+  outletCode: string;
+  outletName: string;
+  town: string | null;
+  /** Set for recce-based stages (FE links to /review/recces/:id); null for outlets/installed. */
+  recceId: string | null;
+  status: string | null;
+}
+
+/** An element-type line-count bucket in the drill-down breakdown. */
+export interface ElementTypeCount {
+  code: string;
+  name: string;
+  count: number;
+}
+
+/** The scoped, paginated drill-down response for a dashboard tile. */
+export interface RecordsResult {
+  items: RecordItem[];
+  byElementType: ElementTypeCount[];
+  total: number;
+  page: number;
+  limit: number;
+}
 
 /** JSON-safe snapshot for AuditLog (Dates → ISO; strips undefined). */
 const toJson = (v: unknown): Prisma.InputJsonValue =>
@@ -383,31 +412,219 @@ export class ApprovalService {
 
   /**
    * The stage-funnel counts, scoped to the caller: total sites (universe) / recced /
-   * ASM-approved / HO-approved / installed / audited. An ASM sees only their territory;
+   * ASM-approved / HO-approved / pending-install / installed / audited, plus element-level
+   * totals (elementsRecced / elementsInstalled). An ASM sees only their territory;
    * CLIENT_ADMIN their tenant; an un-assumed GIFSY_ADMIN the whole platform.
    *
    * `approved` = ASM-approved (status APPROVED, regardless of HO). `hoApproved` = the subset
    * that HO has ALSO signed off (status APPROVED && hoReviewStatus APPROVED) — i.e. the
    * installable recces. The two are reported side-by-side so a stakeholder never mistakes an
    * ASM-approved recce for an installable one.
+   *
+   * `pendingInstall` = installable recces (HO-approved) whose SITE has no installation yet —
+   * work that is cleared to install but still outstanding. All counts reuse the SAME scope
+   * helpers, so the ASM-territory / tenant / platform confinement holds identically.
    */
   async waterfall(user: JwtPayload) {
     const siteWhere = this.siteWhere(user);
     const recceWhere = this.recceWhere(user);
     const installWhere = this.installWhere(user);
 
-    const [totalSites, recced, approved, hoApproved, installed, audited] = await Promise.all([
-      this.prisma.site.count({ where: siteWhere }),
-      this.prisma.recce.count({ where: recceWhere }),
-      // ASM-approved: status APPROVED (regardless of the HO review stage).
-      this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED' } }),
-      // HO-approved / installable: ASM-approved AND signed off by HO.
-      this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
-      this.prisma.installation.count({ where: installWhere }),
-      this.prisma.installation.count({ where: { ...installWhere, status: 'AUDIT_APPROVED' } }),
+    const [totalSites, recced, approved, hoApproved, installed, audited, pendingInstall] =
+      await Promise.all([
+        this.prisma.site.count({ where: siteWhere }),
+        this.prisma.recce.count({ where: recceWhere }),
+        // ASM-approved: status APPROVED (regardless of the HO review stage).
+        this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED' } }),
+        // HO-approved / installable: ASM-approved AND signed off by HO.
+        this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
+        this.prisma.installation.count({ where: installWhere }),
+        this.prisma.installation.count({ where: { ...installWhere, status: 'AUDIT_APPROVED' } }),
+        // Pending-install: HO-approved recces whose site has no installation yet (installable but
+        // still outstanding). The ASM site-territory pin is MERGED into the site filter, never
+        // overwritten, so an ASM still sees only their own outlets.
+        this.prisma.recce.count({ where: this.pendingInstallWhere(user) }),
+      ]);
+
+    // DISTINCT-OUTLET coverage for the dashboard % — recced/installed count rows (a site can have
+    // several recces / an install per recce), so a raw recced/totalSites could exceed 100%. The %
+    // tiles want "what share of outlets have a recce / an install", which is distinct siteIds.
+    const [recceSites, installSites] = await Promise.all([
+      this.prisma.recce.findMany({ where: recceWhere, distinct: ['siteId'], select: { siteId: true } }),
+      this.prisma.installation.findMany({ where: installWhere, distinct: ['siteId'], select: { siteId: true } }),
     ]);
 
-    return { totalSites, recced, approved, hoApproved, installed, audited };
+    return {
+      totalSites, recced, approved, hoApproved, installed, audited, pendingInstall,
+      sitesRecced: recceSites.length,
+      sitesInstalled: installSites.length,
+    };
+  }
+
+  /**
+   * The scoped `where` for "pending install" recces — HO-approved (installable) but whose SITE
+   * still has NO installation. Shared by the waterfall count and the `pending-install` records
+   * drill-down so the tile and its list can never diverge. "Pending" is a per-RECCE question:
+   * an installation is recce-keyed (`Installation.recceId @unique`, `Recce.installation?`), so we
+   * test `installation: null` on the RECCE — NOT `site.installs: none`, which would wrongly drop a
+   * second pending recce at a site that already has one other recce installed (manual recces are
+   * unlimited per outlet). The ASM site-territory pin from `recceWhere` is preserved untouched.
+   */
+  private pendingInstallWhere(user: JwtPayload): Prisma.RecceWhereInput {
+    return {
+      ...this.recceWhere(user),
+      status: 'APPROVED',
+      hoReviewStatus: 'APPROVED',
+      installation: null,
+    };
+  }
+
+  // ── Records drill-down (per-tile item lists) ───────────────────────────────────
+
+  /**
+   * A scoped, paginated drill-down behind each dashboard tile. Every stage reuses the SAME
+   * scope helpers as the waterfall (`siteWhere` / `recceWhere` / `installWhere` / the shared
+   * `pendingInstallWhere`), so an out-of-scope caller sees nothing (fail-closed) — identical
+   * confinement to the counts. Newest-first; lightweight (no media/photo payloads).
+   *
+   * `recceId` is set for the recce-based stages (so the FE can link to /review/recces/:id) and
+   * null for `outlets` / `installed`, where a row maps to no single recce. (Like the waterfall
+   * counts, the recce stages do not filter by recceMode, so the list total matches its tile.)
+   *
+   * `byElementType` is the element-LINE breakdown grouped by PosmType (code + name, line count,
+   * busiest-first) across ALL matched records for the stage — NOT just the current page — so the
+   * FE can show an element mix alongside the paginated list. It is `[]` for `outlets` (no
+   * elements at the outlet stage) and reuses the same scope helpers (via the parent relation),
+   * so it carries the identical ASM-territory / tenant / platform confinement.
+   */
+  async records(user: JwtPayload, q: RecordsQueryDto): Promise<RecordsResult> {
+    const page = Math.max(1, q.page ?? 1);
+    const limit = Math.min(200, Math.max(1, q.limit ?? 50));
+    const skip = (page - 1) * limit;
+    const siteSelect = { code: true, name: true, town: true } as const;
+
+    if (q.stage === RecordsStage.OUTLETS) {
+      const where = this.siteWhere(user);
+      const [rows, total] = await Promise.all([
+        this.prisma.site.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+          select: { id: true, code: true, name: true, town: true, status: true },
+        }),
+        this.prisma.site.count({ where }),
+      ]);
+      const items = rows.map((s) => ({
+        id: s.id,
+        outletCode: s.code,
+        outletName: s.name,
+        town: s.town,
+        recceId: null,
+        status: s.status,
+      }));
+      // The outlet stage has no element lines.
+      return { items, byElementType: [], total, page, limit };
+    }
+
+    if (q.stage === RecordsStage.INSTALLED) {
+      const where = this.installWhere(user);
+      const [rows, total, byElementType] = await Promise.all([
+        this.prisma.installation.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+          select: { id: true, status: true, site: { select: siteSelect } },
+        }),
+        this.prisma.installation.count({ where }),
+        // Installed element lines grouped by element type: ReccePosm rows that HAVE a linked
+        // InstallPosm whose installation is in scope — reuses `installWhere` verbatim.
+        this.elementBreakdown({ installPosm: { installation: where } }),
+      ]);
+      const items = rows.map((i) => ({
+        id: i.id,
+        outletCode: i.site.code,
+        outletName: i.site.name,
+        town: i.site.town,
+        recceId: null,
+        status: i.status,
+      }));
+      return { items, byElementType, total, page, limit };
+    }
+
+    // Recce-based stages (recce / asm-approved / ho-approved / pending-install).
+    const where = this.recceRecordsWhere(user, q.stage);
+    const [rows, total, byElementType] = await Promise.all([
+      this.prisma.recce.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: { id: true, status: true, recceMode: true, site: { select: siteSelect } },
+      }),
+      this.prisma.recce.count({ where }),
+      // ReccePosm lines of the matched recces, grouped by element type — the stage's scoped
+      // recce `where` reached through the parent relation (same scope, no new surface).
+      this.elementBreakdown({ recce: where }),
+    ]);
+    const items = rows.map((r) => ({
+      id: r.id,
+      outletCode: r.site.code,
+      outletName: r.site.name,
+      town: r.site.town,
+      // Only APP recces have an ASM detail page (GET /recces/:id 404s a MANUAL recce); a manual
+      // recce still appears in the list (so the count matches its tile) but renders un-linked.
+      recceId: r.recceMode === RecceMode.APP ? r.id : null,
+      status: r.status,
+    }));
+    return { items, byElementType, total, page, limit };
+  }
+
+  /**
+   * Group ReccePosm element lines matching `where` by their PosmType, returning
+   * `{ code, name, count }` per type, busiest-first. Scope rides the `where` (the parent recce
+   * / installPosm→installation relation), so confinement is inherited — never a new query
+   * surface. A `groupBy` on posmTypeId + one id→name lookup, bounded to the types present.
+   */
+  private async elementBreakdown(
+    where: Prisma.ReccePosmWhereInput,
+  ): Promise<ElementTypeCount[]> {
+    const groups = await this.prisma.reccePosm.groupBy({
+      by: ['posmTypeId'],
+      where,
+      _count: { _all: true },
+    });
+    if (groups.length === 0) return [];
+    const types = await this.prisma.posmType.findMany({
+      where: { id: { in: groups.map((g) => g.posmTypeId) } },
+      select: { id: true, code: true, name: true },
+    });
+    const byId = new Map(types.map((t) => [t.id, t]));
+    return groups
+      .map((g) => {
+        const t = byId.get(g.posmTypeId);
+        return { code: t?.code ?? '', name: t?.name ?? '', count: g._count._all };
+      })
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /** The scoped Recce `where` for a recce-based records stage (all reuse `recceWhere`). */
+  private recceRecordsWhere(user: JwtPayload, stage: RecordsStage): Prisma.RecceWhereInput {
+    switch (stage) {
+      case RecordsStage.RECCE:
+        return this.recceWhere(user);
+      case RecordsStage.ASM_APPROVED:
+        return { ...this.recceWhere(user), status: 'APPROVED' };
+      case RecordsStage.HO_APPROVED:
+        return { ...this.recceWhere(user), status: 'APPROVED', hoReviewStatus: 'APPROVED' };
+      case RecordsStage.PENDING_INSTALL:
+        return this.pendingInstallWhere(user);
+      default:
+        // Unreachable: `stage` is enum-validated by RecordsQueryDto. Fail closed on any
+        // unexpected value rather than returning an unscoped list.
+        throw new BadRequestException('Unknown records stage');
+    }
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────────

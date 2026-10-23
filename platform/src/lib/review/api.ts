@@ -107,8 +107,46 @@ export interface Waterfall {
   approved: number;
   /** HO-approved / installable: status APPROVED && hoReviewStatus APPROVED (subset of `approved`). */
   hoApproved: number;
+  /** HO-approved but not yet installed — the "waiting for the installer" bucket. */
+  pendingInstall: number;
   installed: number;
   audited: number;
+  /** Distinct outlets with ≥1 recce / ≥1 installation — the base for the coverage % tiles
+   *  (recced/installed count rows, which can exceed the outlet count, so they can't drive a %). */
+  sitesRecced: number;
+  sitesInstalled: number;
+}
+
+/**
+ * One row of the per-stage records drill-down: an outlet that reached that stage. `recceId` is
+ * the recce that carries the evidence (null when the stage isn't recce-backed — e.g. an outlet
+ * with no recce yet), and is what the UI uses to deep-link into the recce detail view.
+ */
+export interface ApprovalRecord {
+  id: string;
+  outletCode: string;
+  outletName: string;
+  town: string | null;
+  recceId: string | null;
+  status: string | null;
+}
+
+/**
+ * Per-element-type rollup for a records drill-down (e.g. "GSB × 5"). Summarises WHICH elements
+ * the stage's outlets carry, surfaced above the outlet list in the drill-down sheet.
+ */
+export interface ElementTypeBreakdown {
+  code: string;
+  name: string;
+  count: number;
+}
+
+export interface RecordsResult {
+  items: ApprovalRecord[];
+  byElementType: ElementTypeBreakdown[];
+  total: number;
+  page: number;
+  limit: number;
 }
 
 export interface BulkApproveResult {
@@ -295,6 +333,40 @@ export function fetchQueue(filters: QueueFilters = {}): Promise<ApiResponse<Queu
 /** GET the stage-funnel counts scoped to the caller. */
 export function fetchWaterfall(): Promise<ApiResponse<Waterfall>> {
   return api.get<Waterfall>('/api/approval/waterfall');
+}
+
+/**
+ * The records-drill-down stages. `outlets` is the full outlet set; the rest mirror the funnel
+ * tiles. Kept as a widened `string` on the public `fetchRecords` signature (the backend is the
+ * authority on valid stages), but documented here for the dashboard call sites.
+ */
+export type RecordsStage =
+  | 'outlets'
+  | 'recce'
+  | 'asm-approved'
+  | 'ho-approved'
+  | 'pending-install'
+  | 'installed';
+
+/** Serialise the records query (`stage` is always present; page/limit optional). */
+function recordsQueryString(stage: string, opts: { limit?: number; page?: number } = {}): string {
+  const params = new URLSearchParams();
+  params.set('stage', stage);
+  if (opts.page != null) params.set('page', String(opts.page));
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  return `?${params.toString()}`;
+}
+
+/**
+ * GET the outlet records behind a funnel stage, scoped to the caller. Backs the metric
+ * drill-down sheet; returns the paginated `items`, a `byElementType` rollup, and the server-wide
+ * `total` (so pagination stays correct — never a client-side single-page narrowing).
+ */
+export function fetchRecords(
+  stage: string,
+  opts: { limit?: number; page?: number } = {},
+): Promise<ApiResponse<RecordsResult>> {
+  return api.get<RecordsResult>(`/api/approval/records${recordsQueryString(stage, opts)}`);
 }
 
 /**

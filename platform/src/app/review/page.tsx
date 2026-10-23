@@ -4,9 +4,13 @@
  * ASM dashboard: how many recces await review, the site-execution funnel (waterfall), and a
  * quick link into the approval queue. Every panel has its own loading / error state; the funnel
  * degrades gracefully if only one of the two calls fails.
+ *
+ * Every funnel tile is a button that opens the shared `MetricDrilldownSheet` for that stage — the
+ * sheet lists the underlying outlet records (scoped server-side) and a per-element-type rollup,
+ * and deep-links recce-backed rows into the recce detail view.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ClipboardCheck,
@@ -14,18 +18,33 @@ import {
   CheckCircle2,
   Hammer,
   ShieldCheck,
+  Clock,
   ArrowRight,
+  ChevronRight,
   RefreshCw,
   AlertTriangle,
 } from 'lucide-react';
-import { fetchWaterfall, fetchQueue, type Waterfall } from '@/lib/review/api';
+import { fetchWaterfall, fetchQueue, fetchRecords, type Waterfall, type ApprovalRecord } from '@/lib/review/api';
 import { Spinner } from '@/components/ui/spinner';
+import { MetricDrilldownSheet } from '@/components/ui/metric-drilldown-sheet';
 
 interface DashboardState {
   loading: boolean;
   error: string | null;
   waterfall: Waterfall | null;
   pending: number | null;
+}
+
+/** The active drill-down target (which funnel stage the sheet is showing), or null when closed. */
+interface DrillTarget {
+  stage: string;
+  title: string;
+}
+
+/** Whole-number percentage of `value` against `total`, or null when there's no denominator. */
+function pctOf(value: number, total: number): number | null {
+  if (!total || total <= 0) return null;
+  return Math.round((value / total) * 100);
 }
 
 export default function ReviewDashboardPage() {
@@ -35,6 +54,7 @@ export default function ReviewDashboardPage() {
     waterfall: null,
     pending: null,
   });
+  const [drill, setDrill] = useState<DrillTarget | null>(null);
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -51,6 +71,17 @@ export default function ReviewDashboardPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A recce-backed row deep-links into the recce detail; non-recce rows stay plain.
+  const itemHref = useCallback(
+    (item: ApprovalRecord) => (item.recceId ? `/review/recces/${item.recceId}` : null),
+    [],
+  );
+  // Rebuilt when the target stage changes (so the sheet re-fetches the right stage).
+  const fetcher = useMemo(
+    () => () => fetchRecords(drill?.stage ?? 'outlets', { limit: 200 }),
+    [drill?.stage],
+  );
 
   return (
     <div className="space-y-6 fade-in">
@@ -105,17 +136,61 @@ export default function ReviewDashboardPage() {
             </div>
           </Link>
 
-          {/* Execution funnel */}
+          {/* Execution funnel — every tile opens the per-stage drill-down sheet */}
           <div>
             <h2 className="text-sm font-semibold text-gray-700 mb-2">Execution funnel</h2>
             {state.waterfall ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <FunnelCard icon={<MapPin className="h-5 w-5" />} label="Outlets" value={state.waterfall.totalSites} tone="gray" />
-                <FunnelCard icon={<ClipboardCheck className="h-5 w-5" />} label="Recce" value={state.waterfall.recced} tone="blue" />
-                <FunnelCard icon={<CheckCircle2 className="h-5 w-5" />} label="ASM approved" value={state.waterfall.approved} tone="indigo" />
-                <FunnelCard icon={<ShieldCheck className="h-5 w-5" />} label="HO approved" value={state.waterfall.hoApproved} tone="green" />
-                <FunnelCard icon={<Hammer className="h-5 w-5" />} label="Installed" value={state.waterfall.installed} tone="amber" />
-                <FunnelCard icon={<ShieldCheck className="h-5 w-5" />} label="Audited" value={state.waterfall.audited} tone="purple" />
+                <FunnelCard
+                  icon={<MapPin className="h-5 w-5" />}
+                  label="Outlets"
+                  value={state.waterfall.totalSites}
+                  tone="gray"
+                  stage="outlets"
+                  onOpen={(stage) => setDrill({ stage, title: 'Outlets' })}
+                />
+                <FunnelCard
+                  icon={<ClipboardCheck className="h-5 w-5" />}
+                  label="Recce"
+                  value={state.waterfall.recced}
+                  pct={pctOf(state.waterfall.sitesRecced, state.waterfall.totalSites)}
+                  tone="blue"
+                  stage="recce"
+                  onOpen={(stage) => setDrill({ stage, title: 'Recce' })}
+                />
+                <FunnelCard
+                  icon={<CheckCircle2 className="h-5 w-5" />}
+                  label="ASM approved"
+                  value={state.waterfall.approved}
+                  tone="indigo"
+                  stage="asm-approved"
+                  onOpen={(stage) => setDrill({ stage, title: 'ASM approved' })}
+                />
+                <FunnelCard
+                  icon={<ShieldCheck className="h-5 w-5" />}
+                  label="HO approved"
+                  value={state.waterfall.hoApproved}
+                  tone="green"
+                  stage="ho-approved"
+                  onOpen={(stage) => setDrill({ stage, title: 'HO approved' })}
+                />
+                <FunnelCard
+                  icon={<Clock className="h-5 w-5" />}
+                  label="Pending install"
+                  value={state.waterfall.pendingInstall}
+                  tone="orange"
+                  stage="pending-install"
+                  onOpen={(stage) => setDrill({ stage, title: 'Pending install' })}
+                />
+                <FunnelCard
+                  icon={<Hammer className="h-5 w-5" />}
+                  label="Installed"
+                  value={state.waterfall.installed}
+                  pct={pctOf(state.waterfall.sitesInstalled, state.waterfall.totalSites)}
+                  tone="amber"
+                  stage="installed"
+                  onOpen={(stage) => setDrill({ stage, title: 'Installed' })}
+                />
               </div>
             ) : (
               <div className="rounded-2xl border border-gray-100 bg-white p-4 text-sm text-gray-500">
@@ -125,6 +200,14 @@ export default function ReviewDashboardPage() {
           </div>
         </>
       )}
+
+      <MetricDrilldownSheet
+        open={drill !== null}
+        title={drill?.title ?? ''}
+        onClose={() => setDrill(null)}
+        fetcher={fetcher}
+        onItemHref={itemHref}
+      />
     </div>
   );
 }
@@ -134,27 +217,45 @@ const toneStyles: Record<string, string> = {
   blue: 'text-blue-600 bg-blue-50',
   indigo: 'text-indigo-600 bg-indigo-50',
   green: 'text-emerald-600 bg-emerald-50',
+  orange: 'text-orange-600 bg-orange-50',
   amber: 'text-amber-600 bg-amber-50',
-  purple: 'text-purple-600 bg-purple-50',
 };
 
 function FunnelCard({
   icon,
   label,
   value,
+  pct,
   tone,
+  stage,
+  onOpen,
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
+  pct?: number | null;
   tone: keyof typeof toneStyles;
+  stage: string;
+  onOpen: (stage: string) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-      <div className={`inline-flex rounded-lg p-2 ${toneStyles[tone]}`}>{icon}</div>
-      <p className="text-2xl font-black text-gray-900 mt-2 leading-none">{value}</p>
+    <button
+      type="button"
+      onClick={() => onOpen(stage)}
+      data-testid={`funnel-tile-${stage}`}
+      aria-label={`${label}: ${value}${pct != null ? ` (${pct}%)` : ''} — open records`}
+      className="group relative text-left rounded-2xl border border-gray-100 bg-white p-4 shadow-sm hover:border-gray-200 hover:shadow-md active:scale-[0.98] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)]"
+    >
+      <div className="flex items-start justify-between">
+        <div className={`inline-flex rounded-lg p-2 ${toneStyles[tone]}`}>{icon}</div>
+        <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-gray-400 transition-colors" aria-hidden />
+      </div>
+      <p className="text-2xl font-black text-gray-900 mt-2 leading-none">
+        {value}
+        {pct != null && <span className="ml-1 text-sm font-bold text-gray-400">({pct}%)</span>}
+      </p>
       <p className="text-xs text-gray-500 mt-1">{label}</p>
-    </div>
+    </button>
   );
 }
 

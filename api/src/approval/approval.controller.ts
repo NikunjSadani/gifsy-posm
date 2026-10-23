@@ -15,6 +15,7 @@ import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { ListRecceQueueDto } from './dto/list-recce-queue.dto';
 import { RejectRecceDto } from './dto/reject-recce.dto';
 import { BulkApproveDto } from './dto/bulk-approve.dto';
+import { RecordsQueryDto } from './dto/records-query.dto';
 
 /**
  * ASM approval console — Wave 2 REVIEW lane.
@@ -38,6 +39,16 @@ export class ApprovalController {
   @Get('waterfall')
   waterfall(@CurrentUser() user: JwtPayload) {
     return this.approval.waterfall(user);
+  }
+
+  /**
+   * GET /v1/approval/records?stage=<stage>&page=<n>&limit=<n> — the scoped, paginated
+   * drill-down list behind a dashboard tile (plus its element-type breakdown). Same @Roles
+   * floor + same scope confinement as the waterfall.
+   */
+  @Get('records')
+  records(@CurrentUser() user: JwtPayload, @Query() query: RecordsQueryDto) {
+    return this.approval.records(user, query);
   }
 
   /** GET /v1/approval/recces/:id — one scoped recce for the detail view (any status). */

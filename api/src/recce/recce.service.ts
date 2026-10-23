@@ -505,7 +505,7 @@ export class RecceService {
     // there until HO finalises + approves the outlet.
     const hasGsb = posmTypes.some((p) => (p.code ?? '').toUpperCase() === 'GSB');
     if (hasGsb && site.gsbAllowed !== true) {
-      throw new BadRequestException('The GSB element can only be recced at outlets approved for GSB.');
+      throw new BadRequestException('You can only recce the GSB element at outlets approved for GSB.');
     }
 
     // Media keys must belong to THIS tenant's media folder (key-ownership guard), AND no two POSM

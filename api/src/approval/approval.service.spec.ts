@@ -4,6 +4,7 @@ import { plainToInstance } from 'class-transformer';
 import { Prisma } from '@prisma/client';
 import { ApprovalService } from './approval.service';
 import { RejectRecceDto } from './dto/reject-recce.dto';
+import { RecordsStage } from './dto/records-query.dto';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
 
@@ -28,8 +29,11 @@ function makePrisma() {
       update: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
-    site: { count: jest.fn().mockResolvedValue(0) },
-    installation: { count: jest.fn().mockResolvedValue(0) },
+    site: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+    installation: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+    reccePosm: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
+    installPosm: { count: jest.fn().mockResolvedValue(0) },
+    posmType: { findMany: jest.fn().mockResolvedValue([]) },
     imageHash: { findMany: jest.fn().mockResolvedValue([]) },
     auditLog: { create: jest.fn().mockResolvedValue({}), createMany: jest.fn().mockResolvedValue({}) },
   };
@@ -380,23 +384,37 @@ describe('ApprovalService.waterfall — scoped counts', () => {
     expect(fns.recce.count.mock.calls[2][0].where).toEqual({
       clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', hoReviewStatus: 'APPROVED',
     });
+    // Pending-install: HO-approved recces with no installation of THEIR OWN (recce-level
+    // `installation: null`, not site-level) — the ASM site-territory pin survives untouched.
+    expect(fns.recce.count.mock.calls[3][0].where).toEqual({
+      clientId: 'c1',
+      site: { asmUserId: 'asm-7' },
+      status: 'APPROVED',
+      hoReviewStatus: 'APPROVED',
+      installation: null,
+    });
     expect(fns.installation.count.mock.calls[1][0].where).toMatchObject({ status: 'AUDIT_APPROVED' });
   });
 
   it('reports ASM-approved (approved) and HO-approved (hoApproved) as DISTINCT counts', async () => {
     const { prisma, fns } = makePrisma();
     fns.site.count.mockResolvedValue(10);
-    // recce.count order: recced, approved (ASM), hoApproved (installable).
+    // recce.count order: recced, approved (ASM), hoApproved (installable), pendingInstall.
     fns.recce.count
       .mockResolvedValueOnce(8) // recced
       .mockResolvedValueOnce(6) // ASM-approved (status APPROVED)
-      .mockResolvedValueOnce(4); // HO-approved (status APPROVED && hoReviewStatus APPROVED)
+      .mockResolvedValueOnce(4) // HO-approved (status APPROVED && hoReviewStatus APPROVED)
+      .mockResolvedValueOnce(1); // pendingInstall (HO-approved, no installation yet)
     fns.installation.count
       .mockResolvedValueOnce(3) // installed
       .mockResolvedValueOnce(2); // audited
     const svc = new ApprovalService(prisma);
     const res = await svc.waterfall(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
-    expect(res).toEqual({ totalSites: 10, recced: 8, approved: 6, hoApproved: 4, installed: 3, audited: 2 });
+    expect(res).toEqual({
+      totalSites: 10, recced: 8, approved: 6, hoApproved: 4, installed: 3, audited: 2, pendingInstall: 1,
+      // Distinct-outlet coverage for the % tiles (findMany defaults to [] → 0 here).
+      sitesRecced: 0, sitesInstalled: 0,
+    });
     // hoApproved (4) is a strict subset of approved (6) — never conflated.
     expect(res.hoApproved).toBeLessThanOrEqual(res.approved);
   });
@@ -445,5 +463,121 @@ describe('ApprovalService — R3: the ASM lane excludes MANUAL recces', () => {
     const svc = new ApprovalService(prisma);
     await svc.bulkApprove(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { ids: ['x'] });
     expect(fns.recce.findMany.mock.calls[0][0].where.recceMode).toBe('APP');
+  });
+});
+
+describe('ApprovalService.records — scoped per-tile drill-down', () => {
+  it('outlets: scoped site.findMany (ASM-territory pin) + empty byElementType + null recceId', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.findMany.mockResolvedValue([
+      { id: 's1', code: 'A1', name: 'Site A1', town: 'Pune', status: 'ACTIVE' },
+    ]);
+    fns.site.count.mockResolvedValue(1);
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.OUTLETS });
+    expect(fns.site.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', asmUserId: 'asm-7' });
+    expect(res.items).toEqual([
+      { id: 's1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: null, status: 'ACTIVE' },
+    ]);
+    expect(res.byElementType).toEqual([]);
+    expect(res).toMatchObject({ total: 1, page: 1, limit: 50 });
+    // The outlet stage never touches the element breakdown query.
+    expect(fns.reccePosm.groupBy).not.toHaveBeenCalled();
+  });
+
+  it('recce: scoped recce.findMany (any status), recceId set only for APP (manual un-linked), newest-first', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([
+      { id: 'r1', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'A1', name: 'Site A1', town: 'Pune' } },
+      { id: 'rM', status: 'SUBMITTED', recceMode: 'MANUAL', site: { code: 'A2', name: 'Site A2', town: null } },
+    ]);
+    fns.recce.count.mockResolvedValue(2);
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.RECCE });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
+    expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual({ createdAt: 'desc' });
+    expect(res.items).toEqual([
+      // APP recce → linkable; MANUAL recce still listed (counts toward the tile) but recceId null.
+      { id: 'r1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: 'r1', status: 'SUBMITTED' },
+      { id: 'rM', outletCode: 'A2', outletName: 'Site A2', town: null, recceId: null, status: 'SUBMITTED' },
+    ]);
+  });
+
+  it('asm-approved: adds status APPROVED onto the scope', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.ASM_APPROVED });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED' });
+  });
+
+  it('ho-approved: adds status APPROVED && hoReviewStatus APPROVED', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: RecordsStage.HO_APPROVED });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
+  });
+
+  it('pending-install: recce-level installation:null with the ASM site pin preserved; breakdown rides the same where', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.PENDING_INSTALL });
+    const where = {
+      clientId: 'c1', site: { asmUserId: 'asm-7' },
+      status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: null,
+    };
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual(where);
+    // The element breakdown is grouped over the SAME scoped recce where (via the parent relation).
+    expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({ recce: where });
+  });
+
+  it('installed: scoped installation.findMany; recceId null; breakdown rides installPosm→installation scope', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findMany.mockResolvedValue([
+      { id: 'i1', status: 'SUBMITTED', site: { code: 'A1', name: 'Site A1', town: 'Pune' } },
+    ]);
+    fns.installation.count.mockResolvedValue(1);
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.INSTALLED });
+    const installWhere = { clientId: 'c1', site: { asmUserId: 'asm-7' } };
+    expect(fns.installation.findMany.mock.calls[0][0].where).toEqual(installWhere);
+    expect(res.items).toEqual([
+      { id: 'i1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: null, status: 'SUBMITTED' },
+    ]);
+    // Installed element lines = ReccePosm rows with a linked InstallPosm whose installation is in scope.
+    expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({ installPosm: { installation: installWhere } });
+  });
+
+  it('byElementType: groups element lines by PosmType (code+name, line count) busiest-first', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.reccePosm.groupBy.mockResolvedValue([
+      { posmTypeId: 't1', _count: { _all: 2 } },
+      { posmTypeId: 't2', _count: { _all: 5 } },
+    ]);
+    fns.posmType.findMany.mockResolvedValue([
+      { id: 't1', code: 'A', name: 'Board' },
+      { id: 't2', code: 'B', name: 'Shelf' },
+    ]);
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: RecordsStage.RECCE });
+    expect(res.byElementType).toEqual([
+      { code: 'B', name: 'Shelf', count: 5 },
+      { code: 'A', name: 'Board', count: 2 },
+    ]);
+  });
+
+  it('pagination: defaults page 1 / limit 50 and caps limit at 200', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: RecordsStage.RECCE, limit: 9999 });
+    expect(res.limit).toBe(200);
+    expect(res.page).toBe(1);
+    expect(fns.recce.findMany.mock.calls[0][0]).toMatchObject({ skip: 0, take: 200 });
+  });
+
+  it('un-assumed GIFSY_ADMIN: platform-wide (no clientId filter) on a records stage', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    await svc.records(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), { stage: RecordsStage.RECCE });
+    expect(fns.recce.findMany.mock.calls[0][0].where.clientId).toBeUndefined();
   });
 });
