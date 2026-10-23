@@ -7,6 +7,25 @@ import { readMediaValue } from '../capture/visibility-types';
 import { buildXlsx } from '../common/xlsx';
 import { GeoQueryDto } from './dto/geo-query.dto';
 import { RecordsQueryDto } from './dto/records-query.dto';
+import { DrilldownMetric, DrilldownQueryDto } from './dto/drilldown-query.dto';
+
+/** One row of the sheet-shaped per-tile drill-down (lightweight — no media payloads). */
+export interface DrilldownItem {
+  id: string;
+  outletCode: string;
+  outletName: string;
+  town: string | null;
+  /** The recce id ONLY for an APP recce-based metric (manual recces are listed but un-linkable). */
+  recceId: string | null;
+  status: string | null;
+}
+
+/** An element-type line-count bucket in the drill-down breakdown. */
+export interface ElementTypeCount {
+  code: string;
+  name: string;
+  count: number;
+}
 
 /**
  * A resolved read-scope for the caller, applied UNIFORMLY to every analytics query. It is the
@@ -147,9 +166,12 @@ export class AnalyticsService {
     ] = await Promise.all([
       this.prisma.site.count({ where: s.site }),
       this.prisma.recce.count({ where: s.recce }),
-      // ASM-approved: status APPROVED (regardless of HO). Includes HO-approved manual recces, whose
-      // approve sets status APPROVED as well — so the funnel never undercounts manual progress.
-      this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED' } }),
+      // ASM-approved: APP recces at status APPROVED. Filtered to APP because MANUAL recces skip the
+      // ASM stage entirely (they reach APPROVED via HO), so they were never ASM-approved — consistent
+      // with the ASM dashboard + the `asm-approved` drill-down. NOTE: because manual recces enter at
+      // HO, `hoApproved` (all modes) can exceed this APP-only `approved`; the funnel "% of prev" is
+      // clamped to 100% (buildFunnel) since the two recce paths aren't a strict nesting.
+      this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', recceMode: 'APP' } }),
       // HO-approved / installable: status APPROVED AND hoReviewStatus APPROVED.
       this.prisma.recce.count({ where: { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
       this.prisma.recce.count({ where: { ...s.recce, status: 'REJECTED' } }),
@@ -283,7 +305,7 @@ export class AnalyticsService {
     // EXACT per-site aggregates via groupBy (NO row cap) — attributed to vendors via siteToVendor.
     const [recceByStatus, recceByGeo, recceHoApproved, installByStatus, turnaroundRows] = await Promise.all([
       this.prisma.recce.groupBy({
-        by: ['siteId', 'status'],
+        by: ['siteId', 'status', 'recceMode'],
         where: s.recce,
         _count: { _all: true },
       }),
@@ -342,7 +364,8 @@ export class AnalyticsService {
       if (!b) continue;
       const n = g._count._all;
       b.recced += n;
-      if (g.status === 'APPROVED') b.approved += n;
+      // ASM-approved = APP recces at APPROVED (manual recces skip ASM — consistent with summary).
+      if (g.status === 'APPROVED' && g.recceMode === 'APP') b.approved += n;
       else if (g.status === 'REJECTED') b.rejectedRecce += n;
     }
     // HO-approved / installable per site (status APPROVED && hoReviewStatus APPROVED).
@@ -575,6 +598,204 @@ export class AnalyticsService {
       photos: this.viewPaths(r.posms.map((p) => p.photo)),
     }));
     return { items, total, page, limit };
+  }
+
+  // ── Drill-down (sheet-shaped per-tile record list) ───────────────────────────────
+
+  /**
+   * The sheet-shaped drill-down behind every drillable Analytics tile: list the underlying
+   * records for one `metric`, plus the element-type line breakdown. Each metric's `where` is
+   * built to reproduce the EXACT count its summary tile shows (same resolveScope fragment AND,
+   * same status/mode predicates — see {@link summary}). Mirrors the approval-service sheet shape
+   * but is built entirely from the analytics scope (never calls the approval service).
+   *
+   * Scope + fail-closed are IDENTICAL to the rest of analytics (resolveScope): an out-of-scope
+   * caller, or a vendor with no vendorId, gets nothing (a 403 from resolveScope) — never a leak.
+   * The admin-only `vendorId` narrows further (ignored for VENDOR_HO/ASM, exactly like records()).
+   */
+  async drilldown(user: JwtPayload, q: DrilldownQueryDto) {
+    const s = this.resolveScope(user); // throws (fail-closed) for a vendor with no vendorId
+    const page = Math.max(1, q.page ?? 1);
+    const limit = Math.min(200, Math.max(1, q.limit ?? 50));
+    const skip = (page - 1) * limit;
+    // Admin-only vendor narrowing (vendor-scorecard-row click). IGNORED for VENDOR_HO/ASM — that
+    // caller stays confined by resolveScope, so it can NEVER surface a foreign fleet.
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
+    const drillVendorId = isAdmin ? q.vendorId?.trim() || undefined : undefined;
+
+    const siteSelect = { code: true, name: true, town: true } as const;
+
+    // ── Site-based metric ──────────────────────────────────────────────────────────
+    if (q.metric === DrilldownMetric.TOTAL_OUTLETS) {
+      const where: Prisma.SiteWhereInput = { ...s.site };
+      if (drillVendorId) where.vendorId = drillVendorId;
+      const [rows, total] = await Promise.all([
+        this.prisma.site.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+          select: { id: true, code: true, name: true, town: true, status: true },
+        }),
+        this.prisma.site.count({ where }),
+      ]);
+      const items: DrilldownItem[] = rows.map((r) => ({
+        id: r.id,
+        outletCode: r.code,
+        outletName: r.name,
+        town: r.town,
+        recceId: null,
+        status: r.status,
+      }));
+      return { items, byElementType: [] as ElementTypeCount[], total, page, limit };
+    }
+
+    // ── Installation-based metrics ───────────────────────────────────────────────────
+    const installStatus = this.installMetricStatus(q.metric);
+    if (installStatus !== undefined) {
+      const where: Prisma.InstallationWhereInput = { ...s.install };
+      if (installStatus) where.status = installStatus;
+      if (drillVendorId) {
+        where.site = { ...(where.site as Prisma.SiteWhereInput | undefined), vendorId: drillVendorId };
+      }
+      const [rows, total, byElementType] = await Promise.all([
+        this.prisma.installation.findMany({
+          where,
+          orderBy: { receivedAt: 'desc' },
+          skip,
+          take: limit,
+          select: { id: true, status: true, site: { select: siteSelect } },
+        }),
+        this.prisma.installation.count({ where }),
+        // Installed element lines: ReccePosm rows with a linked InstallPosm whose installation is
+        // in scope — reuses `where` verbatim through the back-relation (same scope, no new surface).
+        this.elementBreakdown({ installPosm: { installation: where } }),
+      ]);
+      const items: DrilldownItem[] = rows.map((i) => ({
+        id: i.id,
+        outletCode: i.site.code,
+        outletName: i.site.name,
+        town: i.site.town,
+        recceId: null,
+        status: i.status,
+      }));
+      return { items, byElementType, total, page, limit };
+    }
+
+    // ── Recce-based metrics ──────────────────────────────────────────────────────────
+    const where: Prisma.RecceWhereInput = { ...s.recce, ...this.recceMetricWhere(q.metric) };
+    if (drillVendorId) {
+      where.site = { ...(where.site as Prisma.SiteWhereInput | undefined), vendorId: drillVendorId };
+    }
+    const [rows, total, byElementType] = await Promise.all([
+      this.prisma.recce.findMany({
+        where,
+        orderBy: { receivedAt: 'desc' },
+        skip,
+        take: limit,
+        select: { id: true, status: true, recceMode: true, site: { select: siteSelect } },
+      }),
+      this.prisma.recce.count({ where }),
+      // ReccePosm lines of the matched recces grouped by element type — the stage's scoped recce
+      // `where` reached through the parent relation (same scope, no new surface).
+      this.elementBreakdown({ recce: where }),
+    ]);
+    const items: DrilldownItem[] = rows.map((r) => ({
+      id: r.id,
+      outletCode: r.site.code,
+      outletName: r.site.name,
+      town: r.site.town,
+      // Only an APP recce has an ASM detail page; a MANUAL recce is listed (so the count matches
+      // its tile) but rendered un-linked — mirrors approval.records.
+      recceId: r.recceMode === 'APP' ? r.id : null,
+      status: r.status,
+    }));
+    return { items, byElementType, total, page, limit };
+  }
+
+  /**
+   * For an installation-based metric, the InstallationStatus to pin (or `''` for no status
+   * filter). Returns `undefined` when the metric is NOT installation-based, so the caller can
+   * fall through to the recce lane. Mirrors the summary's install counts EXACTLY.
+   */
+  private installMetricStatus(
+    metric: DrilldownMetric,
+  ): Prisma.InstallationWhereInput['status'] | '' | undefined {
+    switch (metric) {
+      case DrilldownMetric.INSTALLED:
+        return ''; // all scoped installations (summary `installed`)
+      case DrilldownMetric.AUDITED:
+        return 'AUDIT_APPROVED'; // summary `audited`
+      case DrilldownMetric.PENDING_INSTALL_AUDIT:
+        return 'SUBMITTED'; // summary `pendingInstallAudit`
+      case DrilldownMetric.REJECTED_INSTALL:
+        return 'AUDIT_REJECTED'; // summary `rejectedInstall`
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * The recce-metric predicate ANDed onto the scoped recce `where`. Each case reproduces the
+   * matching summary tile's recce count EXACTLY (see {@link summary}).
+   */
+  private recceMetricWhere(metric: DrilldownMetric): Prisma.RecceWhereInput {
+    switch (metric) {
+      case DrilldownMetric.RECCE:
+        return {}; // all scoped recces (summary `recced`)
+      case DrilldownMetric.ASM_APPROVED:
+        // APP-only: a MANUAL recce skips ASM, so it was never ASM-approved (Phase-1 semantics).
+        return { status: 'APPROVED', recceMode: 'APP' };
+      case DrilldownMetric.HO_APPROVED:
+        return { status: 'APPROVED', hoReviewStatus: 'APPROVED' }; // summary `hoApproved`
+      case DrilldownMetric.PENDING_ASM_REVIEW:
+        // APP-only ASM queue (manual skips ASM) — summary `pendingRecceReview`.
+        return { status: 'SUBMITTED', recceMode: 'APP' };
+      case DrilldownMetric.PENDING_HO_REVIEW:
+        // The HO queue, mirroring summary `pendingHoReview`: APP ASM-approved+HO-pending OR MANUAL
+        // SUBMITTED+HO-pending.
+        return {
+          hoReviewStatus: 'PENDING',
+          OR: [{ status: 'APPROVED' }, { recceMode: 'MANUAL', status: 'SUBMITTED' }],
+        };
+      case DrilldownMetric.REJECTED_RECCE:
+        return { status: 'REJECTED' }; // summary `rejectedRecce`
+      case DrilldownMetric.RECCES_APP:
+        return { recceMode: 'APP' }; // byRecceMode.app
+      case DrilldownMetric.RECCES_MANUAL:
+        return { recceMode: 'MANUAL' }; // byRecceMode.manual
+      default:
+        // Unreachable: `metric` is enum-validated by the DTO, and every non-recce metric is
+        // handled above. Fail closed rather than returning an unscoped list.
+        throw new ForbiddenException('Unknown drill-down metric');
+    }
+  }
+
+  /**
+   * Group ReccePosm element lines matching `where` by their PosmType → `{ code, name, count }`
+   * per type, busiest-first. Scope rides the `where` (the parent recce / installPosm→installation
+   * relation), so confinement is inherited — never a new query surface.
+   */
+  private async elementBreakdown(
+    where: Prisma.ReccePosmWhereInput,
+  ): Promise<ElementTypeCount[]> {
+    const groups = await this.prisma.reccePosm.groupBy({
+      by: ['posmTypeId'],
+      where,
+      _count: { _all: true },
+    });
+    if (groups.length === 0) return [];
+    const types = await this.prisma.posmType.findMany({
+      where: { id: { in: groups.map((g) => g.posmTypeId) } },
+      select: { id: true, code: true, name: true },
+    });
+    const byId = new Map(types.map((t) => [t.id, t]));
+    return groups
+      .map((g) => {
+        const t = byId.get(g.posmTypeId);
+        return { code: t?.code ?? '', name: t?.name ?? '', count: g._count._all };
+      })
+      .sort((a, b) => b.count - a.count);
   }
 
   // ── Export (xlsx) ────────────────────────────────────────────────────────────────

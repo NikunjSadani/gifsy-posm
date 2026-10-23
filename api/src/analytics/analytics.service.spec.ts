@@ -31,6 +31,8 @@ function makePrisma() {
     vendor: { findMany: jest.fn().mockResolvedValue([]) },
     manualTask: { count: jest.fn().mockResolvedValue(0) },
     manualTaskSubmission: { count: jest.fn().mockResolvedValue(0) },
+    reccePosm: { groupBy: jest.fn().mockResolvedValue([]) },
+    posmType: { findMany: jest.fn().mockResolvedValue([]) },
   };
   return { prisma: fns as unknown as PrismaService, fns };
 }
@@ -200,9 +202,9 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     // recce.groupBy call order: #1 by status, #2 by geoFenceOk, #3 the HO-approved (installable) count.
     fns.recce.groupBy
       .mockResolvedValueOnce([
-        { siteId: 's1', status: 'APPROVED', _count: { _all: 1 } },
-        { siteId: 's2', status: 'REJECTED', _count: { _all: 1 } },
-        { siteId: 's3', status: 'SUBMITTED', _count: { _all: 1 } },
+        { siteId: 's1', status: 'APPROVED', recceMode: 'APP', _count: { _all: 1 } },
+        { siteId: 's2', status: 'REJECTED', recceMode: 'APP', _count: { _all: 1 } },
+        { siteId: 's3', status: 'SUBMITTED', recceMode: 'APP', _count: { _all: 1 } },
       ])
       .mockResolvedValueOnce([
         { siteId: 's1', geoFenceOk: true, _count: { _all: 1 } },
@@ -247,8 +249,8 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
     // would have undercounted; the groupBy _count carries the true total.
     fns.recce.groupBy
       .mockResolvedValueOnce([
-        { siteId: 's1', status: 'APPROVED', _count: { _all: 25_000 } },
-        { siteId: 's2', status: 'REJECTED', _count: { _all: 5_000 } },
+        { siteId: 's1', status: 'APPROVED', recceMode: 'APP', _count: { _all: 25_000 } },
+        { siteId: 's2', status: 'REJECTED', recceMode: 'APP', _count: { _all: 5_000 } },
       ])
       .mockResolvedValueOnce([
         { siteId: 's1', geoFenceOk: true, _count: { _all: 25_000 } },
@@ -382,6 +384,205 @@ describe('AnalyticsService.records — scoping, any-status, media → view paths
     const where = fns.recce.findMany.mock.calls[0][0].where;
     expect(where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
     expect(JSON.stringify(where)).not.toContain('v-OTHER');
+  });
+});
+
+describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', () => {
+  it('total-outlets: lists scoped SITES (site fragment), recceId null, byElementType []', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.findMany.mockResolvedValue([
+      { id: 's1', code: 'C1', name: 'N1', town: 'Pune', status: 'ACTIVE' },
+    ]);
+    fns.site.count.mockResolvedValue(1);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'total-outlets' } as any);
+
+    expect(fns.site.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
+    expect(res.items[0]).toEqual({ id: 's1', outletCode: 'C1', outletName: 'N1', town: 'Pune', recceId: null, status: 'ACTIVE' });
+    expect(res.byElementType).toEqual([]);
+    expect(res).toMatchObject({ total: 1, page: 1, limit: 50 });
+    // No recce/install query runs for a site metric.
+    expect(fns.recce.findMany).not.toHaveBeenCalled();
+    expect(fns.installation.findMany).not.toHaveBeenCalled();
+  });
+
+  it('recce: all scoped recces; APP recce links (recceId set), MANUAL listed un-linked', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([
+      { id: 'r1', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'C1', name: 'N1', town: 't' } },
+      { id: 'r2', status: 'SUBMITTED', recceMode: 'MANUAL', site: { code: 'C2', name: 'N2', town: null } },
+    ]);
+    fns.recce.count.mockResolvedValue(2);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
+    expect(res.items[0]).toEqual({ id: 'r1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: 'r1', status: 'SUBMITTED' });
+    // MANUAL recce: listed (count matches tile) but recceId null (un-linkable).
+    expect(res.items[1]).toMatchObject({ id: 'r2', recceId: null });
+  });
+
+  it('asm-approved: APPROVED app recces only (APP-only — manual skips ASM)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'asm-approved' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', recceMode: 'APP' });
+  });
+
+  it('ho-approved: APPROVED && hoReviewStatus APPROVED', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'ho-approved' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
+  });
+
+  it('pending-asm-review: SUBMITTED app recces (the ASM queue)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'pending-asm-review' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'SUBMITTED', recceMode: 'APP' });
+  });
+
+  it('pending-ho-review: HO-pending — APP ASM-approved OR MANUAL SUBMITTED (mirrors summary)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'pending-ho-review' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({
+      clientId: 'c1',
+      hoReviewStatus: 'PENDING',
+      OR: [{ status: 'APPROVED' }, { recceMode: 'MANUAL', status: 'SUBMITTED' }],
+    });
+  });
+
+  it('rejected-recce / recces-app / recces-manual pin the expected recce predicate', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'rejected-recce' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'REJECTED' });
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recces-app' } as any);
+    expect(fns.recce.findMany.mock.calls[1][0].where).toEqual({ clientId: 'c1', recceMode: 'APP' });
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recces-manual' } as any);
+    expect(fns.recce.findMany.mock.calls[2][0].where).toEqual({ clientId: 'c1', recceMode: 'MANUAL' });
+  });
+
+  it('installed / audited / pending-install-audit / rejected-install pin the install status', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    const u = user({ role: 'CLIENT_ADMIN', clientId: 'c1' });
+    await svc.drilldown(u, { metric: 'installed' } as any);
+    // `installed` = all scoped installations (no status filter).
+    expect(fns.installation.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
+    await svc.drilldown(u, { metric: 'audited' } as any);
+    expect(fns.installation.findMany.mock.calls[1][0].where).toEqual({ clientId: 'c1', status: 'AUDIT_APPROVED' });
+    await svc.drilldown(u, { metric: 'pending-install-audit' } as any);
+    expect(fns.installation.findMany.mock.calls[2][0].where).toEqual({ clientId: 'c1', status: 'SUBMITTED' });
+    await svc.drilldown(u, { metric: 'rejected-install' } as any);
+    expect(fns.installation.findMany.mock.calls[3][0].where).toEqual({ clientId: 'c1', status: 'AUDIT_REJECTED' });
+  });
+
+  it('install-based metric: recceId null + element breakdown via the installPosm back-relation', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findMany.mockResolvedValue([
+      { id: 'i1', status: 'AUDIT_APPROVED', site: { code: 'C1', name: 'N1', town: 't' } },
+    ]);
+    fns.installation.count.mockResolvedValue(1);
+    fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 2 } }]);
+    fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'GSB', name: 'Glow Sign Board' }]);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
+
+    expect(res.items[0]).toEqual({ id: 'i1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: null, status: 'AUDIT_APPROVED' });
+    // Breakdown rides the install scope through the back-relation (no new query surface).
+    expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({
+      installPosm: { installation: { clientId: 'c1', status: 'AUDIT_APPROVED' } },
+    });
+    expect(res.byElementType).toEqual([{ code: 'GSB', name: 'Glow Sign Board', count: 2 }]);
+  });
+
+  it('recce-based element breakdown is busiest-first and rides the recce scope', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([]);
+    fns.recce.count.mockResolvedValue(0);
+    fns.reccePosm.groupBy.mockResolvedValue([
+      { posmTypeId: 'p1', _count: { _all: 1 } },
+      { posmTypeId: 'p2', _count: { _all: 5 } },
+    ]);
+    fns.posmType.findMany.mockResolvedValue([
+      { id: 'p1', code: 'A', name: 'Alpha' },
+      { id: 'p2', code: 'B', name: 'Beta' },
+    ]);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+    expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({ recce: { clientId: 'c1' } });
+    expect(res.byElementType).toEqual([
+      { code: 'B', name: 'Beta', count: 5 },
+      { code: 'A', name: 'Alpha', count: 1 },
+    ]);
+  });
+
+  it('VENDOR_HO: recce metric confined to their fleet via the site relation', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }), { metric: 'recce' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
+  });
+
+  it('CLIENT_ADMIN drill-down: an explicit vendorId narrows the site relation (recce + install + site)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    const u = user({ role: 'CLIENT_ADMIN', clientId: 'c1' });
+    await svc.drilldown(u, { metric: 'recce', vendorId: 'v-9' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-9' } });
+    await svc.drilldown(u, { metric: 'installed', vendorId: 'v-9' } as any);
+    expect(fns.installation.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-9' } });
+    await svc.drilldown(u, { metric: 'total-outlets', vendorId: 'v-9' } as any);
+    expect(fns.site.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', vendorId: 'v-9' });
+  });
+
+  it('VENDOR_HO passing a FOREIGN vendorId still only gets their OWN fleet (drill-down ignored)', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(
+      user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }),
+      { metric: 'recce', vendorId: 'v-OTHER' } as any,
+    );
+    const where = fns.recce.findMany.mock.calls[0][0].where;
+    expect(where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
+    expect(JSON.stringify(where)).not.toContain('v-OTHER');
+  });
+
+  it('ASM: recce metric territory-pinned (site.asmUserId); admin vendorId ignored for ASM', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }), { metric: 'recce', vendorId: 'v-9' } as any);
+    const where = fns.recce.findMany.mock.calls[0][0].where;
+    expect(where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-3' } });
+    expect(JSON.stringify(where)).not.toContain('v-9');
+  });
+
+  it('un-assumed GIFSY_ADMIN: platform-wide (no clientId) on a recce metric', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), { metric: 'recce' } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({});
+  });
+
+  it('VENDOR_HO with NO vendorId: FAILS CLOSED (403), never runs a query', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await expect(
+      svc.drilldown(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined }), { metric: 'recce' } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(fns.recce.findMany).not.toHaveBeenCalled();
+    expect(fns.installation.findMany).not.toHaveBeenCalled();
+    expect(fns.site.findMany).not.toHaveBeenCalled();
+  });
+
+  it('limit is capped at 200', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', limit: 5000 } as any);
+    expect(fns.recce.findMany.mock.calls[0][0].take).toBe(200);
   });
 });
 

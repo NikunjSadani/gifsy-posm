@@ -10,6 +10,12 @@
 ─────────────────────────────────────────────────────────────────────────────── */
 
 import { api, type ApiResponse } from '@/lib/api-client';
+import type { ApprovalRecord, ElementTypeBreakdown } from '@/lib/review/api';
+
+// Re-export the drill-down record shapes so analytics call sites (and the shared
+// MetricDrilldownSheet) can import them from one place. The backend's
+// `/v1/analytics/drilldown` rows are byte-identical to the approval records.
+export type { ApprovalRecord, ElementTypeBreakdown };
 
 // ─── Domain types (mirror the AnalyticsService response shapes) ────────────────
 
@@ -129,6 +135,35 @@ export interface RecordsResult {
 
 export type AnalyticsStage = 'recce' | 'install';
 
+/**
+ * The drill-down metric vocabulary for the unified analytics drill-down sheet. Every drillable
+ * tile on the admin/vendor analytics dashboard maps to exactly one of these, which the backend
+ * `/v1/analytics/drilldown` endpoint resolves to the underlying outlet records (role-scoped).
+ */
+export type AnalyticsMetric =
+  | 'total-outlets'
+  | 'recce'
+  | 'asm-approved'
+  | 'ho-approved'
+  | 'installed'
+  | 'audited'
+  | 'pending-asm-review'
+  | 'pending-ho-review'
+  | 'pending-install-audit'
+  | 'rejected-recce'
+  | 'rejected-install'
+  | 'recces-app'
+  | 'recces-manual';
+
+/** GET /api/analytics/drilldown — one page of outlet records behind a metric (+ element rollup). */
+export interface AnalyticsDrilldownResult {
+  items: ApprovalRecord[];
+  byElementType: ElementTypeBreakdown[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 // ─── Stage presentation (colours + labels) ─────────────────────────────────────
 
 /**
@@ -187,7 +222,11 @@ export function formatPct(pct: number | null | undefined): string {
  */
 export function conversionPct(numerator: number, denominator: number): number | null {
   if (!denominator || denominator <= 0) return null;
-  return (numerator / denominator) * 100;
+  // Clamp at 100%: a funnel bar can't exceed full width, and a step conversion can't honestly
+  // exceed the prior stage. The POSM recce funnel has two paths (APP: recce→ASM→HO; MANUAL:
+  // recce→HO, skipping ASM), so e.g. HO-approved (all modes) can exceed ASM-approved (APP-only) —
+  // showing ">100% of prev" would read as broken, so we cap the displayed conversion at 100%.
+  return Math.min(100, (numerator / denominator) * 100);
 }
 
 /** Format an average-turnaround value in days. Null / NaN → "—"; otherwise "N.N d". */
@@ -214,8 +253,8 @@ export interface FunnelStage {
   pctOfTotal: number | null;
   /** Conversion % from the immediately-previous stage; null for the first stage / 0 prev. */
   conversionFromPrev: number | null;
-  /** Which records to open when this stage is clicked (null = not drillable, e.g. total). */
-  drill: { stage: AnalyticsStage; status?: string } | null;
+  /** The drill-down metric this stage opens — every funnel stage is now drillable via the sheet. */
+  metric: AnalyticsMetric;
 }
 
 /**
@@ -223,7 +262,9 @@ export interface FunnelStage {
  * total sites) and step-to-step conversion percentages. The funnel order is
  * Total sites → Recced → ASM approved → HO approved → Installed → Audited, so an ASM-approved
  * recce is never conflated with an installable (HO-approved) one. Pure + deterministic so the
- * admin and vendor funnels render identically.
+ * admin and vendor funnels render identically. Every stage carries the drill-down `metric` the
+ * unified sheet opens — including HO approved, which the dedicated `/drilldown` endpoint now
+ * resolves correctly (the old records endpoint had no hoReviewStatus lens, so it was dead before).
  */
 export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
   const total = w.totalSites;
@@ -235,7 +276,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
       count: w.totalSites,
       pctOfTotal: total > 0 ? 100 : null,
       conversionFromPrev: null,
-      drill: null,
+      metric: 'total-outlets',
     },
     {
       key: 'recced',
@@ -243,7 +284,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
       count: w.recced,
       pctOfTotal: pctOfTotal(w.recced),
       conversionFromPrev: conversionPct(w.recced, w.totalSites),
-      drill: { stage: 'recce' },
+      metric: 'recce',
     },
     {
       key: 'approved',
@@ -251,8 +292,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
       count: w.approved,
       pctOfTotal: pctOfTotal(w.approved),
       conversionFromPrev: conversionPct(w.approved, w.recced),
-      // Drills to all APPROVED recces (the ASM-approved set).
-      drill: { stage: 'recce', status: 'APPROVED' },
+      metric: 'asm-approved',
     },
     {
       key: 'hoApproved',
@@ -260,10 +300,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
       count: w.hoApproved,
       pctOfTotal: pctOfTotal(w.hoApproved),
       conversionFromPrev: conversionPct(w.hoApproved, w.approved),
-      // The records endpoint filters by `status` only (no hoReviewStatus lens), so this stage is
-      // not independently drillable — a drill-down here would misleadingly show every ASM-approved
-      // recce, not only the HO-approved ones.
-      drill: null,
+      metric: 'ho-approved',
     },
     {
       key: 'installed',
@@ -272,7 +309,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
       pctOfTotal: pctOfTotal(w.installed),
       // Conversion is measured from HO approved (the installable set), not ASM approved.
       conversionFromPrev: conversionPct(w.installed, w.hoApproved),
-      drill: { stage: 'install' },
+      metric: 'installed',
     },
     {
       key: 'audited',
@@ -280,7 +317,7 @@ export function buildFunnel(w: SummaryWaterfall): FunnelStage[] {
       count: w.audited,
       pctOfTotal: pctOfTotal(w.audited),
       conversionFromPrev: conversionPct(w.audited, w.installed),
-      drill: { stage: 'install', status: 'AUDITED' },
+      metric: 'audited',
     },
   ];
 }
@@ -367,6 +404,36 @@ export function fetchVendorScorecards(): Promise<ApiResponse<VendorScorecardsRes
 /** GET geo points for the map, coloured by furthest stage, for the given stage lens. */
 export function fetchGeo(stage: AnalyticsStage): Promise<ApiResponse<GeoResult>> {
   return api.get<GeoResult>(`/api/analytics/geo?stage=${encodeURIComponent(stage)}`);
+}
+
+/**
+ * Serialise a drill-down query to a query string (leading `?`). `metric` is always present; an
+ * optional `vendorId` narrows the list SERVER-SIDE to one vendor (admin scorecard-row drill-down)
+ * so `total`/pagination stay correct. Blank vendorId is dropped; page 0 is preserved (not absent).
+ */
+export function drilldownQueryString(
+  metric: string,
+  opts: { vendorId?: string; page?: number; limit?: number } = {},
+): string {
+  const params = new URLSearchParams();
+  params.set('metric', metric);
+  const vendorId = opts.vendorId?.trim();
+  if (vendorId) params.set('vendorId', vendorId);
+  if (opts.page != null) params.set('page', String(opts.page));
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  return `?${params.toString()}`;
+}
+
+/**
+ * GET one page of the unified metric drill-down (role-scoped server-side). Backs the shared
+ * MetricDrilldownSheet across every drillable tile on the analytics dashboards; returns the
+ * paginated `items`, a `byElementType` rollup, and the server-wide `total`.
+ */
+export function fetchAnalyticsDrilldown(
+  metric: string,
+  opts: { vendorId?: string; page?: number; limit?: number } = {},
+): Promise<ApiResponse<AnalyticsDrilldownResult>> {
+  return api.get<AnalyticsDrilldownResult>(`/api/analytics/drilldown${drilldownQueryString(metric, opts)}`);
 }
 
 /** GET a paginated page of drill-down evidence records. */

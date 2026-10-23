@@ -17,7 +17,7 @@ import {
   stageColor,
   type SummaryWaterfall,
   type FunnelStage,
-  type AnalyticsStage,
+  type AnalyticsMetric,
 } from '@/lib/analytics/api';
 
 // Bar colour per funnel stage, aligned to the map heatmap where a stage maps cleanly.
@@ -41,7 +41,7 @@ export function WaterfallFunnel({
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
-  onStageClick?: (drill: { stage: AnalyticsStage; status?: string }, label: string) => void;
+  onStageClick?: (metric: AnalyticsMetric, label: string) => void;
 }) {
   if (loading) {
     return (
@@ -86,7 +86,7 @@ export function WaterfallFunnel({
         <ul className="space-y-3">
           {stages.map((s) => {
             const width = s.pctOfTotal == null ? 0 : Math.max(s.pctOfTotal, 2); // keep a sliver visible
-            const clickable = !!(s.drill && onStageClick);
+            const clickable = !!onStageClick;
             const Row = (
               <div className="w-full">
                 <div className="flex items-center justify-between gap-2 mb-1">
@@ -111,7 +111,8 @@ export function WaterfallFunnel({
                 {clickable ? (
                   <button
                     type="button"
-                    onClick={() => onStageClick!(s.drill!, s.label)}
+                    onClick={() => onStageClick!(s.metric, s.label)}
+                    data-testid={`funnel-stage-${s.key}`}
                     className="w-full text-left rounded-xl px-1 py-1 -mx-1 hover:bg-gray-50 active:scale-[0.99] transition-all cursor-pointer"
                     aria-label={`View ${s.label} records`}
                   >

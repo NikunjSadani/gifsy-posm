@@ -8,6 +8,7 @@ import {
   geoFenceLabel,
   exportUrl,
   recordsQueryString,
+  drilldownQueryString,
   toAnalyticsMediaUrl,
   STAGE_COLORS,
   STAGE_LABELS,
@@ -98,15 +99,13 @@ describe('buildFunnel', () => {
     expect(stages[5].conversionFromPrev).toBe(50); // audited 20/40
   });
 
-  it('gives drill targets except the total universe and the HO-approved stage', () => {
+  it('maps every stage to a drill-down metric — including Total outlets and HO approved', () => {
     const stages = buildFunnel(w);
-    expect(stages[0].drill).toBeNull();
-    expect(stages[1].drill).toEqual({ stage: 'recce' });
-    expect(stages[2].drill).toEqual({ stage: 'recce', status: 'APPROVED' }); // ASM approved
-    // HO approved is not drillable — the records endpoint has no hoReviewStatus lens.
-    expect(stages[3].drill).toBeNull();
-    expect(stages[4].drill).toEqual({ stage: 'install' });
-    expect(stages[5].drill).toEqual({ stage: 'install', status: 'AUDITED' });
+    // Every funnel stage is now drillable via the unified sheet (the dedicated /drilldown endpoint
+    // resolves HO approved correctly, so it is no longer dead, and Total outlets is drillable too).
+    expect(stages.map((s) => s.metric)).toEqual([
+      'total-outlets', 'recce', 'asm-approved', 'ho-approved', 'installed', 'audited',
+    ]);
   });
 
   it('degrades honestly when there are zero sites (no divide-by-zero, no fake 0%)', () => {
@@ -182,6 +181,22 @@ describe('recordsQueryString', () => {
   });
   it('serialises page (including 0) and limit', () => {
     expect(recordsQueryString({ stage: 'install', page: 0, limit: 20 })).toBe('?stage=install&page=0&limit=20');
+  });
+});
+
+// ─── drilldownQueryString ───────────────────────────────────────────────────
+
+describe('drilldownQueryString', () => {
+  it('always includes the required metric', () => {
+    expect(drilldownQueryString('ho-approved')).toBe('?metric=ho-approved');
+    expect(drilldownQueryString('pending-asm-review')).toBe('?metric=pending-asm-review');
+  });
+  it('serialises an optional vendorId (admin scorecard-row drill-down) and drops a blank one', () => {
+    expect(drilldownQueryString('recce', { vendorId: 'v-9' })).toBe('?metric=recce&vendorId=v-9');
+    expect(drilldownQueryString('recce', { vendorId: '  ' })).toBe('?metric=recce');
+  });
+  it('serialises page (including 0) and limit', () => {
+    expect(drilldownQueryString('installed', { page: 0, limit: 200 })).toBe('?metric=installed&page=0&limit=200');
   });
 });
 

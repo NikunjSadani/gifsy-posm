@@ -157,6 +157,7 @@ export function VendorScorecards({
               {sorted.map((r) => (
                 <tr
                   key={r.vendorId}
+                  data-testid={`vendor-row-${r.vendorId}`}
                   className={cn(
                     'border-b border-gray-100 last:border-0 transition-colors',
                     onVendorClick ? 'hover:bg-gray-50/70 cursor-pointer' : '',

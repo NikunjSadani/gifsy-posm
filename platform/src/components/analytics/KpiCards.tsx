@@ -18,9 +18,16 @@ import {
   UserCheck,
   Smartphone,
   PencilLine,
+  ChevronRight,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
-import { formatPct, formatDays, type SummaryKpis, type SummaryByRecceMode } from '@/lib/analytics/api';
+import {
+  formatPct,
+  formatDays,
+  type SummaryKpis,
+  type SummaryByRecceMode,
+  type AnalyticsMetric,
+} from '@/lib/analytics/api';
 
 interface Tile {
   label: string;
@@ -28,6 +35,11 @@ interface Tile {
   icon: typeof CheckCircle2;
   tone: 'good' | 'warn' | 'bad' | 'neutral';
   hint?: string;
+  /**
+   * The drill-down metric this tile opens, when it has a natural underlying list. Rate/average
+   * tiles (approval rates, geo-fence, turnaround) have no list, so they omit this and stay plain.
+   */
+  metric?: AnalyticsMetric;
 }
 
 const TONE: Record<Tile['tone'], string> = {
@@ -39,21 +51,23 @@ const TONE: Record<Tile['tone'], string> = {
 
 function tilesFor(k: SummaryKpis, byRecceMode?: SummaryByRecceMode | null): Tile[] {
   const tiles: Tile[] = [
+    // Rate / average tiles have no natural underlying list → no `metric`, stay non-clickable.
     { label: 'ASM approval rate', value: formatPct(k.recceApprovalRatePct), icon: CheckCircle2, tone: 'good' },
     { label: 'Install audit pass rate', value: formatPct(k.installAuditApprovalRatePct), icon: ShieldCheck, tone: 'good' },
     { label: 'Geo-fence pass rate', value: formatPct(k.geoFencePassRatePct), icon: MapPin, tone: 'good' },
     { label: 'Avg turnaround', value: formatDays(k.avgTurnaroundDays), icon: Clock, tone: 'neutral' },
-    { label: 'Pending ASM review', value: String(k.pendingRecceReview), icon: Hourglass, tone: k.pendingRecceReview > 0 ? 'warn' : 'neutral' },
-    { label: 'Pending HO approval', value: String(k.pendingHoReview ?? 0), icon: UserCheck, tone: (k.pendingHoReview ?? 0) > 0 ? 'warn' : 'neutral' },
-    { label: 'Pending install audit', value: String(k.pendingInstallAudit), icon: ClipboardCheck, tone: k.pendingInstallAudit > 0 ? 'warn' : 'neutral' },
-    { label: 'Rejected recces', value: String(k.rejectedRecce), icon: XCircle, tone: k.rejectedRecce > 0 ? 'bad' : 'neutral' },
-    { label: 'Rejected installs', value: String(k.rejectedInstall), icon: XCircle, tone: k.rejectedInstall > 0 ? 'bad' : 'neutral' },
+    // Count tiles are list-drillable → each maps to a drill-down metric.
+    { label: 'Pending ASM review', value: String(k.pendingRecceReview), icon: Hourglass, tone: k.pendingRecceReview > 0 ? 'warn' : 'neutral', metric: 'pending-asm-review' },
+    { label: 'Pending HO approval', value: String(k.pendingHoReview ?? 0), icon: UserCheck, tone: (k.pendingHoReview ?? 0) > 0 ? 'warn' : 'neutral', metric: 'pending-ho-review' },
+    { label: 'Pending install audit', value: String(k.pendingInstallAudit), icon: ClipboardCheck, tone: k.pendingInstallAudit > 0 ? 'warn' : 'neutral', metric: 'pending-install-audit' },
+    { label: 'Rejected recces', value: String(k.rejectedRecce), icon: XCircle, tone: k.rejectedRecce > 0 ? 'bad' : 'neutral', metric: 'rejected-recce' },
+    { label: 'Rejected installs', value: String(k.rejectedInstall), icon: XCircle, tone: k.rejectedInstall > 0 ? 'bad' : 'neutral', metric: 'rejected-install' },
   ];
   // Recce entry-path split (App vs Manual) — the owner's "how was the recce done" classification.
   if (byRecceMode) {
     tiles.push(
-      { label: 'Recces via app', value: String(byRecceMode.app ?? 0), icon: Smartphone, tone: 'neutral' },
-      { label: 'Recces via manual', value: String(byRecceMode.manual ?? 0), icon: PencilLine, tone: 'neutral' },
+      { label: 'Recces via app', value: String(byRecceMode.app ?? 0), icon: Smartphone, tone: 'neutral', metric: 'recces-app' },
+      { label: 'Recces via manual', value: String(byRecceMode.manual ?? 0), icon: PencilLine, tone: 'neutral', metric: 'recces-manual' },
     );
   }
   return tiles;
@@ -65,12 +79,15 @@ export function KpiCards({
   loading,
   error,
   onRetry,
+  onMetricClick,
 }: {
   kpis: SummaryKpis | null;
   byRecceMode?: SummaryByRecceMode | null;
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
+  /** Opens the shared drill-down sheet for a list-drillable tile; rate/average tiles never call it. */
+  onMetricClick?: (metric: AnalyticsMetric, label: string) => void;
 }) {
   if (loading) {
     return (
@@ -106,15 +123,40 @@ export function KpiCards({
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       {tilesFor(kpis, byRecceMode).map((t) => {
         const Icon = t.icon;
-        return (
-          <div key={t.label} className="rounded-2xl border border-gray-200 bg-white p-4">
+        const clickable = !!(t.metric && onMetricClick);
+        const body = (
+          <>
             <div className="flex items-center justify-between gap-2">
               <span className={`p-2 rounded-xl ${TONE[t.tone]}`}>
                 <Icon className="h-4 w-4" />
               </span>
+              {clickable && (
+                <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-gray-400 transition-colors" aria-hidden />
+              )}
             </div>
             <p className="mt-3 text-2xl font-black text-gray-900 tabular-nums">{t.value}</p>
             <p className="text-xs font-medium text-gray-500 mt-0.5">{t.label}</p>
+          </>
+        );
+
+        if (clickable) {
+          return (
+            <button
+              key={t.label}
+              type="button"
+              onClick={() => onMetricClick!(t.metric!, t.label)}
+              data-testid={`kpi-tile-${t.metric}`}
+              aria-label={`View ${t.label} records`}
+              className="group text-left rounded-2xl border border-gray-200 bg-white p-4 hover:border-gray-300 hover:shadow-md active:scale-[0.98] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)]"
+            >
+              {body}
+            </button>
+          );
+        }
+
+        return (
+          <div key={t.label} className="rounded-2xl border border-gray-200 bg-white p-4">
+            {body}
           </div>
         );
       })}

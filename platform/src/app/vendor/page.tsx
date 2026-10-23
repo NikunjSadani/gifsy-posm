@@ -8,22 +8,24 @@
  * downloads the vendor's own fleet data (backend-scoped). Every widget loads/errors on its own.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { KpiCards } from '@/components/analytics/KpiCards';
 import { WaterfallFunnel } from '@/components/analytics/WaterfallFunnel';
 import { GeoMap } from '@/components/analytics/GeoMap';
 import { VendorScorecards } from '@/components/analytics/VendorScorecards';
 import { ExportButton } from '@/components/analytics/ExportButton';
-import { DrillDownPanel, type DrillTarget } from '@/components/analytics/DrillDownPanel';
+import { MetricDrilldownSheet } from '@/components/ui/metric-drilldown-sheet';
 import {
   fetchSummary,
   fetchVendorScorecards,
   fetchGeo,
+  fetchAnalyticsDrilldown,
   type AnalyticsSummary,
   type VendorScorecard,
   type GeoResult,
   type AnalyticsStage,
+  type AnalyticsMetric,
 } from '@/lib/analytics/api';
 
 interface Widget<T> {
@@ -33,6 +35,13 @@ interface Widget<T> {
 }
 
 const initial = <T,>(): Widget<T> => ({ loading: true, error: null, data: null });
+
+/** The active drill-down target for the shared sheet, or null when closed. */
+interface DrillTarget {
+  metric: AnalyticsMetric;
+  title: string;
+  vendorId?: string;
+}
 
 export default function VendorDashboardPage() {
   const [summary, setSummary] = useState<Widget<AnalyticsSummary>>(initial);
@@ -74,6 +83,12 @@ export default function VendorDashboardPage() {
     void loadGeo(stage);
   };
 
+  // One fetcher for the single shared sheet; rebuilt when the target metric/vendor changes.
+  const drillFetcher = useMemo(
+    () => () => fetchAnalyticsDrilldown(drill?.metric ?? 'total-outlets', { vendorId: drill?.vendorId, limit: 200 }),
+    [drill?.metric, drill?.vendorId],
+  );
+
   return (
     <div className="space-y-6 fade-in">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -92,7 +107,13 @@ export default function VendorDashboardPage() {
         </div>
       </div>
 
-      <KpiCards kpis={summary.data?.kpis ?? null} loading={summary.loading} error={summary.error} onRetry={loadSummary} />
+      <KpiCards
+        kpis={summary.data?.kpis ?? null}
+        loading={summary.loading}
+        error={summary.error}
+        onRetry={loadSummary}
+        onMetricClick={(metric, label) => setDrill({ metric, title: label })}
+      />
 
       <div className="grid lg:grid-cols-2 gap-4">
         <WaterfallFunnel
@@ -100,7 +121,7 @@ export default function VendorDashboardPage() {
           loading={summary.loading}
           error={summary.error}
           onRetry={loadSummary}
-          onStageClick={(d, label) => setDrill({ ...d, title: label })}
+          onStageClick={(metric, label) => setDrill({ metric, title: label })}
         />
         <GeoMap
           points={geo.data?.points ?? null}
@@ -120,10 +141,16 @@ export default function VendorDashboardPage() {
         error={scorecards.error}
         onRetry={loadScorecards}
         title="Your scorecard"
-        onVendorClick={(v) => setDrill({ stage, vendorId: v.vendorId, title: `${v.vendorName} — records` })}
+        onVendorClick={(v) => setDrill({ metric: 'recce', vendorId: v.vendorId, title: `${v.vendorName} — records` })}
       />
 
-      <DrillDownPanel target={drill} onClose={() => setDrill(null)} />
+      {/* Unified drill-down sheet for every drillable tile (fleet-scoped server-side). */}
+      <MetricDrilldownSheet
+        open={drill !== null}
+        title={drill?.title ?? ''}
+        onClose={() => setDrill(null)}
+        fetcher={drillFetcher}
+      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { GeoQueryDto } from './dto/geo-query.dto';
 import { RecordsQueryDto } from './dto/records-query.dto';
+import { DrilldownQueryDto } from './dto/drilldown-query.dto';
 
 /**
  * Analytics console — read-only reporting over the POSM pipeline, serving BOTH the admin
@@ -44,6 +45,13 @@ export class AnalyticsController {
   @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO', 'ASM')
   records(@CurrentUser() user: JwtPayload, @Query() query: RecordsQueryDto) {
     return this.analytics.records(user, query);
+  }
+
+  /** GET /v1/analytics/drilldown?metric=… — sheet-shaped per-tile record list + element mix, scoped. */
+  @Get('drilldown')
+  @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO', 'ASM')
+  drilldown(@CurrentUser() user: JwtPayload, @Query() query: DrilldownQueryDto) {
+    return this.analytics.drilldown(user, query);
   }
 
   /** GET /v1/analytics/export — Summary + Vendor-Scorecards xlsx (attachment), scoped. */
