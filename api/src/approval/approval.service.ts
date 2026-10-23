@@ -434,8 +434,9 @@ export class ApprovalService {
       await Promise.all([
         this.prisma.site.count({ where: siteWhere }),
         this.prisma.recce.count({ where: recceWhere }),
-        // ASM-approved: status APPROVED (regardless of the HO review stage).
-        this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED' } }),
+        // ASM-approved: APP recces at status APPROVED. Filtered to APP because MANUAL recces skip
+        // the ASM stage entirely (they reach APPROVED via HO), so they were never ASM-approved.
+        this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', recceMode: RecceMode.APP } }),
         // HO-approved / installable: ASM-approved AND signed off by HO.
         this.prisma.recce.count({ where: { ...recceWhere, status: 'APPROVED', hoReviewStatus: 'APPROVED' } }),
         this.prisma.installation.count({ where: installWhere }),
@@ -615,7 +616,8 @@ export class ApprovalService {
       case RecordsStage.RECCE:
         return this.recceWhere(user);
       case RecordsStage.ASM_APPROVED:
-        return { ...this.recceWhere(user), status: 'APPROVED' };
+        // APP-only: a MANUAL recce skips ASM (approved via HO), so it was never ASM-approved.
+        return { ...this.recceWhere(user), status: 'APPROVED', recceMode: RecceMode.APP };
       case RecordsStage.HO_APPROVED:
         return { ...this.recceWhere(user), status: 'APPROVED', hoReviewStatus: 'APPROVED' };
       case RecordsStage.PENDING_INSTALL:

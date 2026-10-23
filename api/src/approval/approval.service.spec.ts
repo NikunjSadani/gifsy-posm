@@ -378,8 +378,8 @@ describe('ApprovalService.waterfall — scoped counts', () => {
     await svc.waterfall(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }));
     expect(fns.site.count.mock.calls[0][0].where).toEqual({ clientId: 'c1', asmUserId: 'asm-7' });
     expect(fns.recce.count.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
-    // ASM-approved recce count adds status APPROVED on top of the same scope (regardless of HO)
-    expect(fns.recce.count.mock.calls[1][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED' });
+    // ASM-approved recce count = APP recces at status APPROVED (manual recces skip ASM).
+    expect(fns.recce.count.mock.calls[1][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', recceMode: 'APP' });
     // HO-approved / installable count also pins hoReviewStatus APPROVED — the subset that is installable.
     expect(fns.recce.count.mock.calls[2][0].where).toEqual({
       clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', hoReviewStatus: 'APPROVED',
@@ -503,11 +503,11 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     ]);
   });
 
-  it('asm-approved: adds status APPROVED onto the scope', async () => {
+  it('asm-approved: APP recces at status APPROVED (manual recces excluded — they skip ASM)', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new ApprovalService(prisma);
     await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.ASM_APPROVED });
-    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED' });
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' }, status: 'APPROVED', recceMode: 'APP' });
   });
 
   it('ho-approved: adds status APPROVED && hoReviewStatus APPROVED', async () => {
