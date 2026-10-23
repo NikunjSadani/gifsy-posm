@@ -34,7 +34,13 @@ ALLOWED_HOSTS   = "uat-posm.<DOMAIN>"
 [env.production]
 name = "posm-edge-prod"
 routes = [
-  { pattern = "kwalityvisibility.gifsy.in", custom_domain = true },
+  # More-specific than the loyalty zone's `*.gifsy.in/*` wildcard, so THIS host wins and
+  # routes to POSM, while every other *.gifsy.in host still goes to the loyalty worker
+  # untouched. Exactly how opshub-proxy binds `opshub.gifsy.in/*`. Edge TLS is the zone's
+  # `*.gifsy.in` Universal SSL and DNS is the zone's proxied `*.gifsy.in` wildcard (the host
+  # already resolves — that's why it currently 404s via the loyalty frontend), so NO
+  # custom_domain / per-host DNS provisioning is needed — just deploying this worker.
+  { pattern = "kwalityvisibility.gifsy.in/*", zone_name = "gifsy.in" },
 ]
 
 [env.production.vars]
