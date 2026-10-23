@@ -62,16 +62,14 @@ export function SiteSheet({ site, onClose }: { site: Site | null; onClose: () =>
               {site.rsCode && <span className="text-gray-400"> · RS {site.rsCode}</span>}
             </span>
           </div>
-          <div className="flex items-start gap-3">
-            <Phone className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
-            {site.phone ? (
+          {site.phone && (
+            <div className="flex items-start gap-3">
+              <Phone className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
               <a href={`tel:${site.phone}`} className="text-[var(--brand-primary)] font-medium">
                 {site.phone}
               </a>
-            ) : (
-              <span className="text-gray-400">No phone on record</span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
