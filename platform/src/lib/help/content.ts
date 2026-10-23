@@ -137,9 +137,9 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
       'You review the recces captured by field vendors in your territory. Approving a recce unlocks the installation for that outlet; rejecting it sends the vendor back to re-capture.',
     topics: [
       {
-        title: 'Work the recce approval queue',
+        title: 'Work your pending recce approvals',
         steps: [
-          'Open “Approval Queue” to see the recces waiting for your approval.',
+          'Open “Approval Pending” to see the recces waiting for your approval.',
           'You only see outlets in your own territory.',
           'Tap a recce to open it and review every Element photo.',
         ],

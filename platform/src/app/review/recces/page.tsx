@@ -135,7 +135,7 @@ export default function ReviewQueuePage() {
     <div className="space-y-4 fade-in">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Approval queue</h1>
+          <h1 className="text-xl font-bold text-gray-900">Approval pending</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {total} recce{total === 1 ? '' : 's'} awaiting review
             {flaggedOnPageLabel(summary.flagged) && <> · {flaggedOnPageLabel(summary.flagged)}</>}

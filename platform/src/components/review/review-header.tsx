@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
  */
 const NAV = [
   { href: '/review', label: 'Dashboard', icon: LayoutDashboard, exact: true },
-  { href: '/review/recces', label: 'Approval Queue', icon: ClipboardCheck, exact: false },
+  { href: '/review/recces', label: 'Approval Pending', icon: ClipboardCheck, exact: false },
 ];
 
 export function ReviewHeader() {
