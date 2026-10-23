@@ -34,9 +34,9 @@ ALLOWED_HOSTS   = "uat-posm.<DOMAIN>"
 [env.production]
 name = "posm-edge-prod"
 routes = [
-  { pattern = "posm.<DOMAIN>", custom_domain = true },
+  { pattern = "kwalityvisibility.gifsy.in", custom_domain = true },
 ]
 
 [env.production.vars]
-UPSTREAM_ORIGIN = "https://posm-frontend-prod-<HASH>.asia-south1.run.app"
-ALLOWED_HOSTS   = "posm.<DOMAIN>"
+UPSTREAM_ORIGIN = "https://posm-frontend-prod-vebsp775za-el.a.run.app"
+ALLOWED_HOSTS   = "kwalityvisibility.gifsy.in"
