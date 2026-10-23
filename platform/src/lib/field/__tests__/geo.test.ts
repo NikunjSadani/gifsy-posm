@@ -33,13 +33,13 @@ describe('geoErrorMessage — every code has honest, non-empty copy', () => {
 });
 
 describe('formatFix — display of a GPS fix', () => {
-  it('includes rounded accuracy when present', () => {
-    expect(formatFix({ lat: 19.076, lng: 72.8777, accuracy: 12.4 })).toBe('19.07600, 72.87770 · ±12 m');
+  it('shows lat/lng only — accuracy is NOT displayed to the field user', () => {
+    expect(formatFix({ lat: 19.076, lng: 72.8777, accuracy: 12.4 })).toBe('19.07600, 72.87770');
   });
-  it('omits accuracy when absent', () => {
+  it('shows lat/lng when accuracy is absent', () => {
     expect(formatFix({ lat: 19.076, lng: 72.8777 })).toBe('19.07600, 72.87770');
   });
-  it('omits accuracy when non-finite', () => {
+  it('shows lat/lng when accuracy is non-finite', () => {
     expect(formatFix({ lat: 1, lng: 2, accuracy: NaN })).toBe('1.00000, 2.00000');
   });
 });

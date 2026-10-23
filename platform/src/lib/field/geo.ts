@@ -69,14 +69,12 @@ export function mapPositionError(err: { code?: number } | null | undefined): Geo
 }
 
 /**
- * Format a fix for display, e.g. `19.07600, 72.87770 · ±12 m` (pure — unit-tested).
- * Accuracy is omitted when absent.
+ * Format a fix for display, e.g. `19.07600, 72.87770` (pure — unit-tested). The raw accuracy
+ * is intentionally NOT shown to the field user (it's still captured + submitted in the geo data
+ * and used server-side for the fence/quality checks — the rep just doesn't need the ±N m number).
  */
 export function formatFix(fix: { lat: number; lng: number; accuracy?: number }): string {
-  const base = `${fix.lat.toFixed(5)}, ${fix.lng.toFixed(5)}`;
-  return fix.accuracy != null && Number.isFinite(fix.accuracy)
-    ? `${base} · ±${Math.round(fix.accuracy)} m`
-    : base;
+  return `${fix.lat.toFixed(5)}, ${fix.lng.toFixed(5)}`;
 }
 
 export interface UseGeoResult {
