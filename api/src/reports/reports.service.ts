@@ -99,9 +99,12 @@ const OUTLET_REPORT_INCLUDE_RECCE = {
 
 /**
  * The INSTALLED-mode include — the recce include PLUS the per-recce installation (status, dates, the
- * installer's promoterCode, the install auditor) AND, on each recce POSM, its 1:1 InstallPosm (photo,
- * geo, distance). Kept SEPARATE from the recce include so recce-mode queries stay lean (they never
- * load the install relations).
+ * installer's promoterCode, the install auditor AND the HO reviewer) AND, on each recce POSM, its 1:1
+ * InstallPosm (photo, geo, distance). Kept SEPARATE from the recce include so recce-mode queries stay
+ * lean (they never load the install relations). The installation `include` returns ALL its scalars —
+ * `status`, `hoReviewStatus`, `auditedAt`, `hoReviewedAt` — so the Audit-Status and the independent
+ * HO-override columns both resolve; only the USER relations (installer, auditor, HO reviewer) are
+ * pulled explicitly.
  */
 const OUTLET_REPORT_INCLUDE_INSTALLED = {
   vendor: { select: { name: true } },
@@ -116,6 +119,7 @@ const OUTLET_REPORT_INCLUDE_INSTALLED = {
         include: {
           submittedBy: { select: { promoterCode: true } },
           auditedBy: { select: { name: true } },
+          hoReviewedBy: { select: { name: true } },
         },
       },
     },

@@ -115,6 +115,9 @@ export const INSTALL_COLUMNS: ReportColumn[] = [
   { key: 'installDate', label: 'Install Date', group: 'install' },
   { key: 'installer', label: 'Installer ID', group: 'install' },
   { key: 'auditStatus', label: 'Audit Status', group: 'install' },
+  // HO override outcome — read INDEPENDENTLY of `auditStatus` (the auditor verdict). An auditor-
+  // rejected-then-HO-accepted install shows a red "Audit rejected" here AND a green "HO approved".
+  { key: 'installHoStatus', label: 'Install HO Review', group: 'install' },
   { key: 'beforeAfterGeo', label: 'Before/After Geo', group: 'install' },
 ];
 
@@ -122,6 +125,8 @@ export const INSTALL_COLUMNS: ReportColumn[] = [
 export const INSTALL_AUDIT_COLUMNS: ReportColumn[] = [
   { key: 'installAuditedBy', label: 'Install Audited By', group: 'audit', excelOnly: true },
   { key: 'installAuditedOn', label: 'Install Audited On', group: 'audit', excelOnly: true },
+  { key: 'installHoReviewedBy', label: 'Install HO Reviewed By', group: 'audit', excelOnly: true },
+  { key: 'installHoReviewedOn', label: 'Install HO Reviewed On', group: 'audit', excelOnly: true },
 ];
 
 /**
@@ -174,6 +179,16 @@ export interface RepInstallation {
   submittedBy: { promoterCode: string | null } | null; // the installer (VENDOR_FIELD)
   auditedBy?: { name: string | null } | null;
   auditedAt?: Date | string | null;
+  /**
+   * The HO/Admin escalation outcome, ORTHOGONAL to `status`. On an audit REJECT the row escalates to
+   * HO and `status` stays AUDIT_REJECTED while this moves PENDING → APPROVED/REJECTED — so the report
+   * must surface it INDEPENDENTLY of the auditor verdict (see {@link installHoStatusCell}). NONE =
+   * not escalated (auditor approved / not yet audited). Optional so recce-mode fixtures can omit it.
+   */
+  hoReviewStatus?: string | null; // NONE | PENDING | APPROVED | REJECTED
+  /** The HO/Admin reviewer (install HO-override audit trail). Prefers `name`, falls back to promoterCode. */
+  hoReviewedBy?: { name?: string | null; promoterCode?: string | null } | null;
+  hoReviewedAt?: Date | string | null;
 }
 export interface RepRecce {
   id: string;
@@ -346,6 +361,37 @@ export function installAuditStatusCell(inst: RepInstallation | null | undefined)
 }
 
 /**
+ * The install HO-override chip (installed mode) — the SECOND, independent axis next to
+ * {@link installAuditStatusCell}. `hoReviewStatus` is orthogonal to `status`: an auditor-rejected
+ * install that HO overrules keeps `status = AUDIT_REJECTED` (so `auditStatus` still reads red "Audit
+ * rejected") while THIS reads green "HO approved" — the two columns read side by side, honouring the
+ * schema contract that Audit Status and HO Approval Status are shown independently.
+ *   APPROVED → green "HO approved"; PENDING → amber "HO review pending"; REJECTED → red "HO rejected";
+ *   NONE / not escalated → neutral "Not escalated"; no installation → empty.
+ */
+export function installHoStatusCell(inst: RepInstallation | null | undefined): Cell {
+  if (!inst) return { t: 'empty' };
+  switch (inst.hoReviewStatus) {
+    case 'APPROVED':
+      return { t: 'status', v: 'HO approved', tone: 'approved' };
+    case 'PENDING':
+      return { t: 'status', v: 'HO review pending', tone: 'pending' };
+    case 'REJECTED':
+      return { t: 'status', v: 'HO rejected', tone: 'rejected' };
+    default: // NONE / undefined — not escalated to HO
+      return { t: 'status', v: 'Not escalated', tone: 'neutral' };
+  }
+}
+
+/** A reviewer's display name — `name` preferred, promoterCode as fallback, "" when neither. */
+export function reviewerLabel(
+  r: { name?: string | null; promoterCode?: string | null } | null | undefined,
+): string {
+  if (!r) return '';
+  return (r.name ?? '').trim() || (r.promoterCode ?? '').trim() || '';
+}
+
+/**
  * The before↔after geo summary: "<distance> m" + the geo-fence verdict ("Geo-fence pass"/"fail"),
  * joined with " · ". "" when the install posm is absent or carries neither datum (a null geoFenceOk
  * means unverifiable, so no verdict is shown).
@@ -354,7 +400,8 @@ export function beforeAfterGeoLabel(ip: RepInstallPosm | null | undefined): stri
   if (!ip) return '';
   const parts: string[] = [];
   const d = num(ip.distanceFromRecce);
-  if (d != null) parts.push(`${d} m`);
+  // Round to 1 dp (like the lat/lng displays) so a raw Decimal/float never renders as e.g. "3.19999 m".
+  if (d != null) parts.push(`${d.toFixed(1)} m`);
   if (ip.geoFenceOk === true) parts.push('Geo-fence pass');
   else if (ip.geoFenceOk === false) parts.push('Geo-fence fail');
   return parts.join(' · ');
@@ -512,6 +559,8 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: Repor
     cells.installDate = inst ? text(fmtDateTime(inst.capturedAt ?? inst.receivedAt)) : empty();
     cells.installer = inst ? text(inst.submittedBy?.promoterCode) : empty();
     cells.auditStatus = installAuditStatusCell(inst);
+    // HO override axis — independent of the auditor verdict above (see installHoStatusCell).
+    cells.installHoStatus = installHoStatusCell(inst);
     cells.beforeAfterGeo = text(beforeAfterGeoLabel(repIp));
     // Excel-only install audit trail: the auditor relation is set on BOTH approve and reject, so gate
     // the pair on a terminal audit outcome (not still-SUBMITTED).
@@ -519,6 +568,12 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: Repor
       !!inst?.auditedBy && (inst.status === 'AUDIT_APPROVED' || inst.status === 'AUDIT_REJECTED');
     cells.installAuditedBy = installAudited ? text(inst!.auditedBy?.name) : empty();
     cells.installAuditedOn = installAudited ? text(fmtDateTime(inst!.auditedAt ?? null)) : empty();
+    // Excel-only HO-override audit trail: the HO reviewer relation is set on BOTH approve and reject,
+    // so gate the pair on a terminal HO outcome (APPROVED / REJECTED), blank for PENDING / NONE.
+    const installHoReviewed =
+      inst?.hoReviewStatus === 'APPROVED' || inst?.hoReviewStatus === 'REJECTED';
+    cells.installHoReviewedBy = installHoReviewed ? text(reviewerLabel(inst!.hoReviewedBy)) : empty();
+    cells.installHoReviewedOn = installHoReviewed ? text(fmtDateTime(inst!.hoReviewedAt ?? null)) : empty();
   }
 
   return {

@@ -28,7 +28,10 @@ import { watermarkImage } from './watermark.util';
  * small evidence watermark is composited ON THE FLY before streaming; the stored object is never
  * modified, so the anti-fraud controls above are unaffected.
  *
- * NOTE (for the pipeline audit): viewMedia scopes by TENANT only, not by vendor — unchanged here.
+ * NOTE (for the pipeline audit): viewMedia enforces the TENANT boundary AND, on a recce/install
+ * EVIDENCE photo, confines a vendor caller to their OWN fleet (a vendor can't stream another vendor's
+ * evidence within the same tenant); tenant-shared media with no owning recce/install stays
+ * tenant-viewable, and admin/ASM/auditor/GIFSY are not vendor-confined. Unchanged here.
  */
 @Controller('media')
 @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN', 'ASM', 'AUDITOR', 'VENDOR_HO', 'VENDOR_FIELD')

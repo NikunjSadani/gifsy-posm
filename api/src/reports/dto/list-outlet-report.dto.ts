@@ -38,7 +38,8 @@ export class ListOutletReportDto {
   /**
    * The report variant: `recce` (default) is the original recce report; `installed` adds the
    * per-element install status + photo, install metadata and the install audit trail (JSON + .xlsx),
-   * and the before/after slide (.pptx). Anything else is treated as `recce` by the service.
+   * and the before/after slide (.pptx). `@IsIn` rejects any OTHER value with a 400 — only an OMITTED
+   * `mode` defaults to `recce` (the service's `reportMode` normalises `undefined` → `recce`).
    */
   @IsOptional()
   @IsIn(['recce', 'installed'])

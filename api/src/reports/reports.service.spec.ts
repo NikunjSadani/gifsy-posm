@@ -1034,10 +1034,12 @@ describe('ReportsService.outletExecution (installed mode)', () => {
     expect(res.columns.map((c) => c.key)).toContain('el1InstallStatus');
     expect(res.columns.map((c) => c.key)).toContain('installAuditedBy');
 
-    // The Site query is restricted to outlets with an installed recce, with the install include.
+    // The Site query is restricted to outlets with an installed recce, with the install include —
+    // which loads the installation's HO reviewer relation so the independent HO-override axis resolves.
     const call = fns.site.findMany.mock.calls[0][0];
     expect(call.where.recces).toEqual({ some: { installation: { isNot: null } } });
     expect(call.include.recces.include.installation).toBeDefined();
+    expect(call.include.recces.include.installation.include.hoReviewedBy).toBeDefined();
     expect(call.include.recces.include.posms.include.installPosm).toBe(true);
 
     const { cells } = res.rows[0];
@@ -1045,7 +1047,27 @@ describe('ReportsService.outletExecution (installed mode)', () => {
     expect(cells.el1InstallPhoto).toEqual({ t: 'photo', key: 'i1', viewPath: '/v1/media/view?key=i1', lat: 19.2402, lng: 73.1302 });
     expect(cells.installer).toEqual({ t: 'text', v: 'INST9' });
     expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+    // The HO-override axis reads independently — a never-escalated install is neutral "Not escalated".
+    expect(cells.installHoStatus).toEqual({ t: 'status', v: 'Not escalated', tone: 'neutral' });
     expect(cells.beforeAfterGeo).toEqual({ t: 'text', v: '3.2 m · Geo-fence pass' });
+  });
+
+  it('surfaces an auditor-rejected-then-HO-approved install on BOTH axes (status + HO independently)', async () => {
+    const { service, fns } = makeService();
+    const site = installedSampleSite();
+    site.recces[0].installation = {
+      status: 'AUDIT_REJECTED',
+      capturedAt: new Date('2026-09-02T04:00:00Z'), receivedAt: new Date('2026-09-02T04:00:00Z'),
+      submittedBy: { promoterCode: 'INST9' }, auditedBy: { name: 'Auditor A' }, auditedAt: new Date('2026-09-03T04:00:00Z'),
+      hoReviewStatus: 'APPROVED', hoReviewedBy: { name: 'Hari HO' }, hoReviewedAt: new Date('2026-09-04T04:00:00Z'),
+    };
+    fns.site.findMany.mockResolvedValue([site]);
+    fns.site.count.mockResolvedValue(1);
+
+    const res = await service.outletExecution(admin(), { mode: 'installed' });
+    const { cells } = res.rows[0];
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audit rejected', tone: 'rejected' });
+    expect(cells.installHoStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
   });
 
   it('recce mode is lean: no install filter on the where, no install include', async () => {
@@ -1070,7 +1092,7 @@ describe('ReportsService.outletExecutionXlsxStream (installed mode)', () => {
     const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
     const header = aoa[0];
 
-    for (const label of ['Element 1 Install', 'Element 1 Install Image', 'Install Date', 'Installer ID', 'Audit Status', 'Before/After Geo', 'Install Audited By']) {
+    for (const label of ['Element 1 Install', 'Element 1 Install Image', 'Install Date', 'Installer ID', 'Audit Status', 'Install HO Review', 'Before/After Geo', 'Install Audited By', 'Install HO Reviewed By', 'Install HO Reviewed On']) {
       expect(header).toContain(label);
     }
     const instImgCol = header.indexOf('Element 1 Install Image');

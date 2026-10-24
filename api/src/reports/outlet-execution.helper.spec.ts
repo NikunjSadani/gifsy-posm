@@ -11,6 +11,8 @@ import {
   recceStatusCell,
   elementInstallStatusCell,
   installAuditStatusCell,
+  installHoStatusCell,
+  reviewerLabel,
   beforeAfterGeoLabel,
   rsLabel,
   sourceLabel,
@@ -475,9 +477,20 @@ describe('columnsForMode — the installed column contract', () => {
     const installKeys = INSTALL_COLUMNS.map((c) => c.key);
     const recceIdx = keys.indexOf('recceStatus');
     expect(keys.slice(recceIdx - installKeys.length, recceIdx)).toEqual(installKeys);
-    // The install audit columns are the final two, excel-only, in the audit group.
-    expect(keys.slice(-2)).toEqual(['installAuditedBy', 'installAuditedOn']);
-    expect(cols.slice(-2).every((c) => c.group === 'audit' && c.excelOnly === true)).toBe(true);
+    // The install audit columns are the final four, excel-only, in the audit group (the auditor pair
+    // THEN the independent HO-override reviewer pair).
+    expect(keys.slice(-4)).toEqual([
+      'installAuditedBy',
+      'installAuditedOn',
+      'installHoReviewedBy',
+      'installHoReviewedOn',
+    ]);
+    expect(cols.slice(-4).every((c) => c.group === 'audit' && c.excelOnly === true)).toBe(true);
+    // The install HO-override chip sits in the `install` group next to auditStatus, NOT excel-only.
+    expect(cols.find((c) => c.key === 'installHoStatus')).toMatchObject({ group: 'install', label: 'Install HO Review' });
+    expect(cols.find((c) => c.key === 'installHoStatus')?.excelOnly).toBeFalsy();
+    // auditStatus is immediately followed by installHoStatus (the two independent axes, side by side).
+    expect(keys[keys.indexOf('auditStatus') + 1]).toBe('installHoStatus');
     // Every install-group column is in the `install` group and NOT excel-only (the FE table renders them).
     expect(INSTALL_COLUMNS.every((c) => c.group === 'install' && !c.excelOnly)).toBe(true);
     // All recce columns are still present (superset).
@@ -507,9 +520,29 @@ describe('installed-mode cell helpers', () => {
   it('beforeAfterGeoLabel joins distance + geo-fence verdict (null verdict omitted)', () => {
     expect(beforeAfterGeoLabel(null)).toBe('');
     expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 3.2, geoFenceOk: true })).toBe('3.2 m · Geo-fence pass');
-    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 12, geoFenceOk: false })).toBe('12 m · Geo-fence fail');
+    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 12, geoFenceOk: false })).toBe('12.0 m · Geo-fence fail');
     expect(beforeAfterGeoLabel({ photo: {}, geoFenceOk: null })).toBe(''); // unverifiable → nothing
-    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 5 })).toBe('5 m'); // distance only
+    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 5 })).toBe('5.0 m'); // distance only, rounded
+    // A raw float is rounded to 1 dp (not emitted verbatim).
+    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 3.19999, geoFenceOk: true })).toBe('3.2 m · Geo-fence pass');
+  });
+
+  it('installHoStatusCell maps the HO-override outcome independently, empty when no installation', () => {
+    expect(installHoStatusCell(null)).toEqual({ t: 'empty' });
+    expect(installHoStatusCell({ status: 'AUDIT_REJECTED', hoReviewStatus: 'APPROVED' } as RepInstallation)).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+    expect(installHoStatusCell({ status: 'AUDIT_REJECTED', hoReviewStatus: 'PENDING' } as RepInstallation)).toEqual({ t: 'status', v: 'HO review pending', tone: 'pending' });
+    expect(installHoStatusCell({ status: 'AUDIT_REJECTED', hoReviewStatus: 'REJECTED' } as RepInstallation)).toEqual({ t: 'status', v: 'HO rejected', tone: 'rejected' });
+    // NONE / undefined — never escalated to HO → neutral.
+    expect(installHoStatusCell({ status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' } as RepInstallation)).toEqual({ t: 'status', v: 'Not escalated', tone: 'neutral' });
+    expect(installHoStatusCell({ status: 'AUDIT_APPROVED' } as RepInstallation)).toEqual({ t: 'status', v: 'Not escalated', tone: 'neutral' });
+  });
+
+  it('reviewerLabel prefers name, falls back to promoterCode, else blank', () => {
+    expect(reviewerLabel({ name: 'Hari HO' })).toBe('Hari HO');
+    expect(reviewerLabel({ name: null, promoterCode: 'HO9' })).toBe('HO9');
+    expect(reviewerLabel({ name: '  ', promoterCode: 'HO9' })).toBe('HO9');
+    expect(reviewerLabel(null)).toBe('');
+    expect(reviewerLabel({})).toBe('');
   });
 });
 
@@ -554,12 +587,53 @@ describe('buildRecceRow — installed cells', () => {
 
   it('recce mode does NOT add any install keys (byte-identical to before)', () => {
     const { cells } = buildRecceRow(installedSite(), installedRecce(), 'recce');
-    for (const k of ['el1InstallStatus', 'el1InstallPhoto', 'installDate', 'installer', 'auditStatus', 'beforeAfterGeo', 'installAuditedBy']) {
+    for (const k of ['el1InstallStatus', 'el1InstallPhoto', 'installDate', 'installer', 'auditStatus', 'installHoStatus', 'beforeAfterGeo', 'installAuditedBy', 'installHoReviewedBy', 'installHoReviewedOn']) {
       expect(cells[k]).toBeUndefined();
     }
     // The recce cells themselves are unchanged.
     expect(cells.recceStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
     expect(Object.keys(cells).sort()).toEqual(CURATED_COLUMNS.map((c) => c.key).sort());
+  });
+});
+
+describe('buildRecceRow — install HO-override reads INDEPENDENTLY of the auditor verdict', () => {
+  it('auditor-rejected THEN HO-approved: auditStatus red "Audit rejected" AND installHoStatus green "HO approved"', () => {
+    // The exact schema contract: status stays AUDIT_REJECTED while hoReviewStatus becomes APPROVED.
+    const recce = installedRecce({
+      installation: sampleInstallation({
+        status: 'AUDIT_REJECTED',
+        hoReviewStatus: 'APPROVED',
+        hoReviewedBy: { name: 'Hari HO' },
+        hoReviewedAt: now,
+      }),
+    });
+    const { cells } = buildRecceRow({ ...installedSite(), recces: [recce] }, recce, 'installed');
+    // Two independent axes — the auditor's red verdict is untouched; the HO override reads green beside it.
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audit rejected', tone: 'rejected' });
+    expect(cells.installHoStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+    // Excel-only HO-override audit trail is filled on a terminal HO outcome.
+    expect(cells.installHoReviewedBy).toEqual({ t: 'text', v: 'Hari HO' });
+    expect(cells.installHoReviewedOn).toEqual({ t: 'text', v: fmtDateTime(now) });
+  });
+
+  it('auditor-rejected, HO still PENDING: installHoStatus amber "HO review pending", audit trail blank', () => {
+    const recce = installedRecce({
+      installation: sampleInstallation({ status: 'AUDIT_REJECTED', hoReviewStatus: 'PENDING', hoReviewedBy: null, hoReviewedAt: null }),
+    });
+    const { cells } = buildRecceRow({ ...installedSite(), recces: [recce] }, recce, 'installed');
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audit rejected', tone: 'rejected' });
+    expect(cells.installHoStatus).toEqual({ t: 'status', v: 'HO review pending', tone: 'pending' });
+    expect(cells.installHoReviewedBy).toEqual({ t: 'empty' });
+    expect(cells.installHoReviewedOn).toEqual({ t: 'empty' });
+  });
+
+  it('plain audited install (never escalated): auditStatus green "Audited" + installHoStatus neutral "Not escalated"', () => {
+    // The default sampleInstallation: AUDIT_APPROVED, hoReviewStatus undefined/NONE.
+    const { cells } = buildRecceRow(installedSite(), installedRecce(), 'installed');
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+    expect(cells.installHoStatus).toEqual({ t: 'status', v: 'Not escalated', tone: 'neutral' });
+    expect(cells.installHoReviewedBy).toEqual({ t: 'empty' });
+    expect(cells.installHoReviewedOn).toEqual({ t: 'empty' });
   });
 });
 
