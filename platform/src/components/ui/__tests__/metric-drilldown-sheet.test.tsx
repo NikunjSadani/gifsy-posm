@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
-import { MetricDrilldownSheet } from '../metric-drilldown-sheet';
+import { MetricDrilldownSheet, type DrilldownPage } from '../metric-drilldown-sheet';
 import type { ApprovalRecord } from '@/lib/review/api';
+import type { ApiResponse } from '@/lib/api-client';
 
 afterEach(cleanup);
 
@@ -142,5 +143,117 @@ describe('MetricDrilldownSheet', () => {
     await screen.findByText('Shop One');
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+});
+
+// A compact record factory for the pagination tests (unique id → unique outlet name).
+const rec = (id: string): ApprovalRecord => ({
+  id,
+  outletCode: id,
+  outletName: `Shop ${id}`,
+  town: 'Pune',
+  recceId: null,
+  status: 'APPROVED',
+  recceDate: null,
+  vendorName: null,
+  elementSummary: null,
+  dimensions: null,
+  statusLabel: 'HO approved',
+});
+
+describe('MetricDrilldownSheet — pagination', () => {
+  it('loads page 2 on demand, appends without duplicates, stops at total, and does not re-sum byElementType', async () => {
+    const fetcher = vi.fn((page: number) =>
+      Promise.resolve({
+        success: true as const,
+        data:
+          page === 1
+            ? { items: [rec('r1'), rec('r2')], byElementType: [{ code: 'GSB', name: 'GSB', count: 5 }], total: 4 }
+            : // page 2 carries a DIFFERENT element count to prove the sheet keeps page 1's rollup.
+              { items: [rec('r3'), rec('r4')], byElementType: [{ code: 'GSB', name: 'GSB', count: 99 }], total: 4 },
+      }),
+    );
+    render(<MetricDrilldownSheet open title="Recce" onClose={() => {}} fetcher={fetcher} />);
+
+    // Page 1 only, with the server-wide total in the header and the page-1 element rollup (×5).
+    await screen.findByText('Shop r1');
+    expect(screen.getByText('Shop r2')).toBeInTheDocument();
+    expect(screen.queryByText('Shop r3')).toBeNull();
+    expect(screen.getByText('4 records')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+
+    // Scroll fallback: the explicit button fetches page 2 and APPENDS.
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    expect(await screen.findByText('Shop r3')).toBeInTheDocument();
+    expect(screen.getByText('Shop r4')).toBeInTheDocument();
+    // All four rows, each rendered exactly once (no duplicates / overlap).
+    expect(screen.getAllByText(/^Shop r[1-4]$/)).toHaveLength(4);
+    // Reached total → no more loading affordance.
+    expect(screen.queryByRole('button', { name: /load more/i })).toBeNull();
+    // byElementType is NOT re-summed from page 2 — still ×5, never ×99 or ×104.
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.queryByText('99')).toBeNull();
+    expect(screen.queryByText('104')).toBeNull();
+    // Paged through: page 1 then page 2.
+    expect(fetcher).toHaveBeenNthCalledWith(1, 1);
+    expect(fetcher).toHaveBeenNthCalledWith(2, 2);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not append a stale page after the metric (title) changes mid-fetch', async () => {
+    let resolveP2!: (v: ApiResponse<DrilldownPage>) => void;
+    const fetcherA = vi.fn(
+      (page: number): Promise<ApiResponse<DrilldownPage>> =>
+        page === 1
+          ? Promise.resolve({ success: true, data: { items: [rec('a1'), rec('a2')], byElementType: [], total: 4 } })
+          : new Promise<ApiResponse<DrilldownPage>>((res) => {
+              resolveP2 = res;
+            }),
+    );
+    const fetcherB = vi.fn(
+      (): Promise<ApiResponse<DrilldownPage>> =>
+        Promise.resolve({ success: true, data: { items: [rec('b1')], byElementType: [], total: 1 } }),
+    );
+
+    const { rerender } = render(
+      <MetricDrilldownSheet open title="Metric A" onClose={() => {}} fetcher={fetcherA} />,
+    );
+    await screen.findByText('Shop a1');
+
+    // Kick off page 2 for metric A (its promise is held open).
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+    expect(await screen.findByText('Loading more…')).toBeInTheDocument();
+
+    // Metric switches (title changes) before page 2 resolves → the sheet resets to metric B page 1.
+    rerender(<MetricDrilldownSheet open title="Metric B" onClose={() => {}} fetcher={fetcherB} />);
+    await screen.findByText('Shop b1');
+    expect(screen.queryByText('Shop a1')).toBeNull();
+
+    // The now-stale metric-A page 2 arrives — it must be dropped, never appended to metric B.
+    resolveP2({ success: true, data: { items: [rec('a3'), rec('a4')], byElementType: [], total: 4 } });
+    await waitFor(() => expect(screen.queryByText('Shop a3')).toBeNull());
+    expect(screen.queryByText('Shop a4')).toBeNull();
+    expect(screen.getByText('Shop b1')).toBeInTheDocument();
+  });
+
+  it('surfaces a "load more" error and retries the same page', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, data: { items: [rec('r1')], byElementType: [], total: 2 } })
+      .mockResolvedValueOnce({ success: false, error: 'Network down' })
+      .mockResolvedValueOnce({ success: true, data: { items: [rec('r2')], byElementType: [], total: 2 } });
+    render(<MetricDrilldownSheet open title="Recce" onClose={() => {}} fetcher={fetcher} />);
+    await screen.findByText('Shop r1');
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+    expect(await screen.findByText("Couldn't load more records.")).toBeInTheDocument();
+    // The already-loaded page 1 row is untouched by the failed page-2 fetch.
+    expect(screen.getByText('Shop r1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(await screen.findByText('Shop r2')).toBeInTheDocument();
+    expect(fetcher).toHaveBeenNthCalledWith(2, 2);
+    expect(fetcher).toHaveBeenNthCalledWith(3, 2); // retry re-requests page 2, not page 3
   });
 });

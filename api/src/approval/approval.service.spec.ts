@@ -553,7 +553,9 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     const svc = new ApprovalService(prisma);
     const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.RECCE });
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
-    expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual({ createdAt: 'desc' });
+    // STABLE composite order: createdAt (newest-first) + an `id` tiebreaker so pagination is
+    // deterministic (no row straddles two pages / gets skipped on page≥2).
+    expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     // APP recce → linkable; MANUAL recce still listed (counts toward the tile) but recceId null.
     expect(res.items[0]).toMatchObject({ id: 'r1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: 'r1', status: 'SUBMITTED', statusLabel: 'Submitted' });
     expect(res.items[1]).toMatchObject({ id: 'rM', outletCode: 'A2', outletName: 'Site A2', town: null, recceId: null, status: 'SUBMITTED' });

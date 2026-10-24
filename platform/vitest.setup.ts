@@ -34,6 +34,26 @@ Object.defineProperty(globalThis.HTMLVideoElement.prototype, 'pause', {
 // jsdom does not implement scrollIntoView — stub it
 Element.prototype.scrollIntoView = vi.fn();
 
+// jsdom does not implement IntersectionObserver. The metric drill-down sheet instantiates one
+// for its infinite-scroll sentinel; stub it as an inert no-op (it never auto-fires) so the
+// component renders, and tests drive pagination through the explicit "Load more" button.
+class _NoopIntersectionObserver implements IntersectionObserver {
+  readonly root: Element | Document | null = null;
+  readonly rootMargin: string = '';
+  readonly thresholds: ReadonlyArray<number> = [];
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
+Object.defineProperty(globalThis, 'IntersectionObserver', {
+  value: _NoopIntersectionObserver,
+  configurable: true,
+  writable: true,
+});
+
 Object.defineProperty(globalThis.navigator, 'geolocation', {
   value: { getCurrentPosition: vi.fn() },
   configurable: true,

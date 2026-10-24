@@ -77,9 +77,11 @@ export default function ReviewDashboardPage() {
     (item: ApprovalRecord) => (item.recceId ? `/review/recces/${item.recceId}` : null),
     [],
   );
-  // Rebuilt when the target stage changes (so the sheet re-fetches the right stage).
+  // Rebuilt when the target stage changes (so the sheet re-fetches the right stage). The sheet owns
+  // paging and passes the 1-based page; `limit: 200` is the per-page size it walks through
+  // (infinite scroll) to reach ALL records for the stage.
   const fetcher = useMemo(
-    () => () => fetchRecords(drill?.stage ?? 'outlets', { limit: 200 }),
+    () => (page: number) => fetchRecords(drill?.stage ?? 'outlets', { page, limit: 200 }),
     [drill?.stage],
   );
 

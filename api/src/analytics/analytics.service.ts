@@ -641,7 +641,10 @@ export class AnalyticsService {
       const [rows, total] = await Promise.all([
         this.prisma.site.findMany({
           where,
-          orderBy: { createdAt: 'desc' },
+          // STABLE order for deterministic pagination: the primary key (createdAt) is not unique,
+          // so an `id` tiebreaker guarantees a total order — a row never straddles two pages or
+          // gets skipped as the FE walks page≥2 (matches the xlsx cursor's id ordering).
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           skip,
           take: limit,
           select: AnalyticsService.SITE_DRILL_SELECT,
@@ -658,7 +661,9 @@ export class AnalyticsService {
       const [rows, total, byElementType] = await Promise.all([
         this.prisma.installation.findMany({
           where,
-          orderBy: { receivedAt: 'desc' },
+          // STABLE order (see the site branch): receivedAt is non-unique (and nullable), so the
+          // `id` tiebreaker makes the order total — no duplicate/skipped row across pages.
+          orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
           skip,
           take: limit,
           select: AnalyticsService.INSTALL_DRILL_SELECT,
@@ -677,7 +682,9 @@ export class AnalyticsService {
     const [rows, total, byElementType] = await Promise.all([
       this.prisma.recce.findMany({
         where,
-        orderBy: { receivedAt: 'desc' },
+        // STABLE order (see the site branch): receivedAt is non-unique (and nullable), so the
+        // `id` tiebreaker makes the order total — no duplicate/skipped row across pages.
+        orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
         select: AnalyticsService.RECCE_DRILL_SELECT,

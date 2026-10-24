@@ -7,8 +7,14 @@
  * open the same sheet against their own endpoints.
  *
  * Behaviour:
- *   • opens on `open` → calls `fetcher()` once, shows a spinner, then the list;
- *   • `byElementType` (when non-empty) renders as a compact chip row ABOVE the outlet list;
+ *   • opens on `open` → calls `fetcher(1)` once, shows a spinner, then the list;
+ *   • INFINITE SCROLL: an IntersectionObserver sentinel at the bottom of the list fetches the next
+ *     page and APPENDS it as it scrolls into view (a "Load more" button is the manual fallback and
+ *     the a11y affordance), until every record is loaded (`items.length >= total`). A small
+ *     "Loading more…" row shows while a page is in flight; overlapping/duplicate fetches are guarded
+ *     by an in-flight ref, and a stale page (the metric changed or the sheet closed mid-fetch) is
+ *     dropped via a generation token so wrong-metric rows are never appended;
+ *   • `byElementType` is a WHOLE-METRIC total — taken from page 1 only, never re-summed per page;
  *   • each row shows outlet code + name + town + a status badge; a row whose `onItemHref` returns
  *     a non-null href is a `Link`, otherwise a plain row;
  *   • honest empty + error states (with retry), header with title + server-wide total + close.
@@ -36,8 +42,13 @@ export interface MetricDrilldownSheetProps {
   open: boolean;
   title: string;
   onClose: () => void;
-  /** Resolves to one records page. Kept generic so other dashboards can supply their own call. */
-  fetcher: () => Promise<ApiResponse<DrilldownPage>>;
+  /**
+   * Resolves to ONE records page (1-based `page`). Kept generic so other dashboards can supply
+   * their own call. The sheet owns paging: it calls `fetcher(1)` on open and `fetcher(n+1)` as the
+   * list scrolls, appending each page's `items`. `total` is the server-wide count (drives the
+   * stop condition) and `byElementType` is read from page 1 only (a whole-metric total).
+   */
+  fetcher: (page: number) => Promise<ApiResponse<DrilldownPage>>;
   /** Optional per-row deep link; a non-null return makes the row a `Link`, else it's plain. */
   onItemHref?: (item: ApprovalRecord) => string | null;
   /**
@@ -161,9 +172,17 @@ export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref
   const [items, setItems] = useState<ApprovalRecord[]>([]);
   const [breakdown, setBreakdown] = useState<ElementTypeBreakdown[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
+  // Defensive stop flag: set when a subsequent page returns 0 rows although `items.length < total`
+  // (a data shift) so the sentinel can never drive an endless fetch loop.
+  const [reachedEnd, setReachedEnd] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const panelRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   // Keep the latest fetcher/onClose without re-running the load/focus effects when the parent
   // passes a fresh inline closure on every render.
   const fetcherRef = useRef(fetcher);
@@ -173,18 +192,32 @@ export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref
     onCloseRef.current = onClose;
   });
 
-  // Load on open (and when the title/stage changes, or a retry is requested).
+  // In-flight guard (no overlapping page fetches) + a generation token: every reset bumps it, so a
+  // page resolving AFTER the metric changed / the sheet closed is dropped (never appended).
+  const inFlightRef = useRef(false);
+  const loadGenRef = useRef(0);
+  // Mirror the latest state for the stable `loadMore` callback (so the IntersectionObserver
+  // callback and the button read fresh values without re-creating the callback each render).
+  const stateRef = useRef({ loading, error, items, total, page, reachedEnd });
+  stateRef.current = { loading, error, items, total, page, reachedEnd };
+
+  // Load page 1 on open (and when the title/metric changes, or a retry is requested).
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    const gen = ++loadGenRef.current;
+    inFlightRef.current = true;
     setLoading(true);
     setError(null);
     setItems([]);
     setBreakdown([]);
     setTotal(0);
+    setPage(1);
+    setLoadingMore(false);
+    setMoreError(false);
+    setReachedEnd(false);
     void (async () => {
-      const res = await fetcherRef.current();
-      if (cancelled) return;
+      const res = await fetcherRef.current(1);
+      if (loadGenRef.current !== gen) return; // stale: metric changed / closed mid-fetch
       if (res.success) {
         setItems(res.data.items);
         setBreakdown(res.data.byElementType ?? []);
@@ -193,11 +226,65 @@ export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref
         setError(res.error);
       }
       setLoading(false);
+      inFlightRef.current = false;
     })();
     return () => {
-      cancelled = true;
+      // Invalidate any in-flight page and release the guard so the next open can fetch.
+      loadGenRef.current++;
+      inFlightRef.current = false;
     };
   }, [open, title, reloadNonce]);
+
+  // Fetch and APPEND the next page. Stable (no deps) — reads live state via stateRef. Guards against
+  // overlapping fetches (inFlightRef) and drops a stale page (generation mismatch).
+  const loadMore = useCallback(() => {
+    const s = stateRef.current;
+    if (inFlightRef.current || s.loading || s.error || s.reachedEnd) return;
+    if (s.items.length >= s.total) return; // everything is loaded
+    const gen = loadGenRef.current;
+    const nextPage = s.page + 1;
+    const prevLen = s.items.length;
+    inFlightRef.current = true;
+    setLoadingMore(true);
+    setMoreError(false);
+    void (async () => {
+      const res = await fetcherRef.current(nextPage);
+      inFlightRef.current = false;
+      if (loadGenRef.current !== gen) return; // stale: metric changed / closed → do NOT append
+      if (res.success) {
+        setItems((prev) => [...prev, ...res.data.items]);
+        setPage(nextPage);
+        setTotal(res.data.total);
+        // byElementType is a whole-metric total — taken from page 1 only, never re-summed here.
+        if (res.data.items.length === 0 || prevLen + res.data.items.length >= res.data.total) {
+          setReachedEnd(true);
+        }
+      } else {
+        setMoreError(true);
+      }
+      setLoadingMore(false);
+    })();
+  }, []);
+
+  // There is another page to load iff the first load resolved cleanly and not every row is in yet.
+  const hasMore = !loading && !error && !reachedEnd && items.length < total;
+
+  // Infinite scroll: observe the bottom sentinel within the body scroll container. Re-created when
+  // the loaded count changes so a sentinel that is STILL on-screen after an append re-triggers
+  // (a viewport taller than one page). A no-op in jsdom (stubbed) — tests use the Load more button.
+  useEffect(() => {
+    if (!open || !hasMore) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMore();
+      },
+      { root: scrollRef.current ?? null, rootMargin: '150px' },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [open, hasMore, items.length, loadMore]);
 
   // Lock body scroll while open; restore the prior value on close (never hard-reset).
   useEffect(() => {
@@ -309,7 +396,7 @@ export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-5">
           {loading ? (
             <div className="flex justify-center py-16">
               <Spinner size="lg" />
@@ -360,10 +447,44 @@ export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref
                   {items.map((item) => (
                     <RecordRow key={item.id} item={item} href={onItemHref ? onItemHref(item) : null} />
                   ))}
-                  {total > items.length && (
-                    <p className="py-3 text-center text-xs text-gray-400">
-                      Showing the first {items.length.toLocaleString()} of {total.toLocaleString()}.
-                    </p>
+
+                  {/* Infinite-scroll footer: a loading row while a page is in flight, an error row
+                      with retry, else the sentinel + a manual "Load more" fallback. */}
+                  {loadingMore ? (
+                    <div className="flex items-center justify-center gap-2 py-4 text-xs text-gray-500">
+                      <Spinner size="sm" />
+                      <span>Loading more…</span>
+                    </div>
+                  ) : moreError ? (
+                    <div className="py-4 text-center">
+                      <p className="text-xs text-gray-500">Couldn&apos;t load more records.</p>
+                      <button
+                        onClick={loadMore}
+                        className="mt-1 text-sm font-medium text-[var(--brand-primary)] hover:underline"
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  ) : hasMore ? (
+                    <div className="py-3 text-center">
+                      {/* Observed sentinel — zero-height, carries the auto-load trigger. */}
+                      <div ref={sentinelRef} aria-hidden className="h-px w-full" />
+                      <button
+                        onClick={loadMore}
+                        className="text-sm font-medium text-[var(--brand-primary)] hover:underline"
+                      >
+                        Load more
+                      </button>
+                      <p className="mt-1 text-xs text-gray-400">
+                        Showing {items.length.toLocaleString()} of {total.toLocaleString()}.
+                      </p>
+                    </div>
+                  ) : (
+                    total > 0 && (
+                      <p className="py-3 text-center text-xs text-gray-400">
+                        All {total.toLocaleString()} record{total === 1 ? '' : 's'} loaded.
+                      </p>
+                    )
                   )}
                 </div>
               )}

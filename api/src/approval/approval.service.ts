@@ -512,7 +512,10 @@ export class ApprovalService {
       const [rows, total] = await Promise.all([
         this.prisma.site.findMany({
           where,
-          orderBy: { createdAt: 'desc' },
+          // STABLE order for deterministic pagination: createdAt is not unique, so an `id`
+          // tiebreaker gives a total order — a row never straddles two pages or gets skipped as
+          // the FE walks page≥2 (matches the xlsx cursor's id ordering).
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           skip,
           take: limit,
           select: ApprovalService.SITE_DRILL_SELECT,
@@ -529,7 +532,9 @@ export class ApprovalService {
       const [rows, total, byElementType] = await Promise.all([
         this.prisma.installation.findMany({
           where,
-          orderBy: { createdAt: 'desc' },
+          // STABLE order (see the site branch): createdAt is non-unique, so the `id` tiebreaker
+          // makes the order total — no duplicate/skipped row across pages.
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           skip,
           take: limit,
           select: ApprovalService.INSTALL_DRILL_SELECT,
@@ -548,7 +553,9 @@ export class ApprovalService {
     const [rows, total, byElementType] = await Promise.all([
       this.prisma.recce.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        // STABLE order (see the site branch): createdAt is non-unique, so the `id` tiebreaker
+        // makes the order total — no duplicate/skipped row across pages.
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
         select: ApprovalService.RECCE_DRILL_SELECT,

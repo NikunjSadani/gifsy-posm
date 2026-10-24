@@ -84,9 +84,12 @@ export default function VendorDashboardPage() {
     void loadGeo(stage);
   };
 
-  // One fetcher for the single shared sheet; rebuilt when the target metric/vendor changes.
+  // One fetcher for the single shared sheet; rebuilt when the target metric/vendor changes. The
+  // sheet owns paging and passes the 1-based page; `limit: 200` is the per-page size it walks
+  // through (infinite scroll) to reach ALL records.
   const drillFetcher = useMemo(
-    () => () => fetchAnalyticsDrilldown(drill?.metric ?? 'total-outlets', { vendorId: drill?.vendorId, limit: 200 }),
+    () => (page: number) =>
+      fetchAnalyticsDrilldown(drill?.metric ?? 'total-outlets', { vendorId: drill?.vendorId, page, limit: 200 }),
     [drill?.metric, drill?.vendorId],
   );
 
