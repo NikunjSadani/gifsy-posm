@@ -16,6 +16,7 @@ import { istDateOnlyUtc, istHour } from './reports.time';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { Msg91Service } from '../notifications/msg91.service';
+import type { PosmMediaService } from '../capture/posm-media.service';
 
 /** A Prisma unique-constraint error — what the ledger create hits on a same-day double-fire. */
 const uniqueError = () =>
@@ -61,11 +62,26 @@ function makeMsg91() {
   return { msg91: { sendEmail } as unknown as Msg91Service, sendEmail };
 }
 
+/** A valid 8×4 PNG (jimp-generated) — genuinely decodable, so the slide's image-embed BUILD path runs. */
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAYAAACzzX7wAAAAG0lEQVR4AWP8z8DwnwEPYGIgAJgYCAAmBgIAAASgAgY+zGOXAAAAAElFTkSuQmCC',
+  'base64',
+);
+
+function makePosmMedia() {
+  // viewMedia returns raw bytes + content-type (tenant enforcement lives inside it in prod).
+  const viewMedia = jest
+    .fn()
+    .mockResolvedValue({ bytes: TINY_PNG, contentType: 'image/png', inline: true });
+  return { posmMedia: { viewMedia } as unknown as PosmMediaService, viewMedia };
+}
+
 function makeService() {
   const { prisma, fns } = makePrisma();
   const { msg91, sendEmail } = makeMsg91();
-  const service = new ReportsService(prisma, msg91);
-  return { service, fns, sendEmail };
+  const { posmMedia, viewMedia } = makePosmMedia();
+  const service = new ReportsService(prisma, msg91, posmMedia);
+  return { service, fns, sendEmail, viewMedia };
 }
 
 const admin = (over: Partial<JwtPayload> = {}): JwtPayload => ({
@@ -733,3 +749,135 @@ describe('ReportsService.outletExecutionXlsxStream', () => {
     expect((ws[addr] as XLSX.CellObject).l?.Target).toBe('/v1/media/view?key=r1');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recce Report PowerPoint export — validation + per-outlet slide generation
+//
+// JEST NOTE: pptxgenjs's `write()` media encoder does `await import('node:fs')` per embedded image,
+// which throws under the CommonJS Jest VM (the ESM-under-Jest hazard `media/watermark.util` documents).
+// So the structural assertions below inspect the BUILT deck object (`buildRecceDeck`, import-safe),
+// and the `write()`→Buffer path is only exercised for an IMAGE-FREE deck (where the encoder's
+// fire-and-forget import never awaits). A full write WITH embedded images is covered by the standalone
+// node smoke (`scripts/pptx-boot-smoke.mjs`), which runs under real Node.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The in-memory objects pptxgenjs stored on a slide (images are `_type:'image'`; a rect box is a
+ *  shape: `_type:'text'` with a `shape` name and `text:null`; header/caption are text objects). */
+const slideObjects = (slide: unknown): any[] => (slide as any)._slideObjects ?? [];
+const hasImage = (slide: unknown): boolean => slideObjects(slide).some((o) => o._type === 'image');
+// A stroked BOX is a shape (`shape:'rect'`, `text:null`); text boxes ALSO default to `shape:'rect'`
+// but carry a `text` array, so the `text == null` check isolates the real element-placement box.
+const hasRectBox = (slide: unknown): boolean =>
+  slideObjects(slide).some((o) => o.shape === 'rect' && o.text == null);
+const slideText = (slide: unknown): string =>
+  slideObjects(slide)
+    .filter((o) => o._type === 'text' && o.text)
+    .map((o) => (Array.isArray(o.text) ? o.text.map((t: any) => t.text).join('') : String(o.text)))
+    .join(' | ');
+
+const pptxSite = (over: Partial<RepSite> = {}): RepSite => ({
+  id: 'siteA', code: 'A8', name: 'Kalyan Mega Mart',
+  town: 'Kalyan', state: 'MH', rsCode: 'WB2.09', rsName: 'Das', channel: 'GT',
+  vendor: { name: 'Prime Fleet' },
+  recces: [
+    {
+      id: 'recA', recceMode: 'APP', status: 'APPROVED', hoReviewStatus: 'APPROVED',
+      capturedAt: new Date('2026-08-28T02:30:00Z'), receivedAt: new Date('2026-08-28T02:30:00Z'),
+      captureLat: 19.24, captureLng: 73.13,
+      reviewedAt: null, hoReviewedAt: null,
+      submittedBy: { promoterCode: 'P100' }, approvedBy: null, hoReviewedBy: null,
+      posms: [
+        {
+          id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' },
+          dimensions: { width: 24, height: 12, unit: 'in' },
+          photo: { key: 'r1', geo: { lat: 19.2401, lng: 73.1301 } },
+          markup: { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] },
+        },
+      ],
+    } as RepRecce,
+  ],
+  ...over,
+});
+
+describe('ReportsService.outletExecutionPptx (validation)', () => {
+  it('400s with the owner message when 0 outlet codes are given', async () => {
+    const { service } = makeService();
+    await expect(service.outletExecutionPptx(admin(), '')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.outletExecutionPptx(admin(), undefined)).rejects.toThrow('Select 1–3 outlets for a PPT export.');
+  });
+
+  it('400s when more than 3 distinct outlet codes are given', async () => {
+    const { service } = makeService();
+    await expect(service.outletExecutionPptx(admin(), 'A1,A2,A3,A4')).rejects.toThrow(
+      'Select 1–3 outlets for a PPT export.',
+    );
+  });
+
+  it('accepts 1–3 codes (de-duped) and does not 400', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([]);
+    // Duplicate collapses to one distinct code → still valid; the Site query is keyed by the de-duped set.
+    await expect(service.buildRecceDeck(admin(), 'A8, A8')).resolves.toBeDefined();
+    expect(fns.site.findMany.mock.calls[0][0].where.code).toEqual({ in: ['A8'] });
+    await expect(service.buildRecceDeck(admin(), 'A1,A2,A3')).resolves.toBeDefined();
+  });
+});
+
+describe('ReportsService.buildRecceDeck (slides)', () => {
+  it('produces one slide per requested outlet, embeds each recce photo + draws the markup box, tenant-scoped', async () => {
+    const { service, fns, viewMedia } = makeService();
+    fns.site.findMany.mockResolvedValue([
+      pptxSite({ id: 's1', code: 'A1', name: 'Alpha' }),
+      pptxSite({ id: 's2', code: 'A2', name: 'Beta' }),
+    ]);
+
+    const deck: any = await service.buildRecceDeck(admin(), 'A1,A2');
+    expect(deck.slides).toHaveLength(2);
+    // Each slide embeds the decoded photo AND strokes the element-placement box from the markup rect.
+    expect(hasImage(deck.slides[0])).toBe(true);
+    expect(hasRectBox(deck.slides[0])).toBe(true);
+    expect(slideText(deck.slides[0])).toContain('Alpha'); // header identity line
+
+    // Tenant-scoped Site query by the requested codes.
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.clientId).toBe('c1');
+    expect(where.code).toEqual({ in: ['A1', 'A2'] });
+
+    // Photo bytes were read through the media service (NOT an HTTP call), keyed by the posm photo key.
+    expect(viewMedia).toHaveBeenCalled();
+    expect(viewMedia.mock.calls.every((c: any[]) => c[1] === 'r1')).toBe(true);
+  });
+
+  it('renders a "No recce captured" slide (no image) for an outlet with no recce', async () => {
+    const { service, fns, viewMedia } = makeService();
+    fns.site.findMany.mockResolvedValue([pptxSite({ recces: [] })]);
+    const deck: any = await service.buildRecceDeck(admin(), 'A8');
+    expect(deck.slides).toHaveLength(1);
+    expect(hasImage(deck.slides[0])).toBe(false);
+    expect(slideText(deck.slides[0])).toContain('No recce captured');
+    expect(viewMedia).not.toHaveBeenCalled(); // no photo to embed
+  });
+
+  it('degrades a slide to a caption (no image, no box) when the photo cannot be decoded', async () => {
+    const { service, fns, viewMedia } = makeService();
+    viewMedia.mockResolvedValue({ bytes: Buffer.from('not-an-image'), contentType: 'image/png', inline: true });
+    fns.site.findMany.mockResolvedValue([pptxSite()]);
+    const deck: any = await service.buildRecceDeck(admin(), 'A8');
+    expect(deck.slides).toHaveLength(1);
+    expect(hasImage(deck.slides[0])).toBe(false);
+    expect(hasRectBox(deck.slides[0])).toBe(false); // box rides on the image; no image → no box
+    expect(slideText(deck.slides[0])).toContain('image unavailable');
+  });
+
+  it('un-assumed GIFSY_ADMIN is platform-wide (no clientId pin on the Site query)', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([pptxSite()]);
+    await service.buildRecceDeck(admin({ role: 'GIFSY_ADMIN', clientId: undefined as never }), 'A8');
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.clientId).toBeUndefined();
+  });
+});
+
+// NOTE: the actual `write()` → .pptx-zip path (incl. embedded-image media encoding) is NOT asserted
+// here — pptxgenjs's media encoder `import()`s node built-ins, which the CommonJS Jest VM cannot run.
+// It is covered end-to-end by the standalone node smoke (`scripts/pptx-boot-smoke.mjs`) under real Node.

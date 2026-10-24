@@ -104,6 +104,9 @@ export interface RepReccePosm {
   posmType: RepPosmType | null;
   dimensions: unknown; // {width,height,unit} entered by the rep
   photo: unknown; // MediaValue { key, geo? }
+  /** The normalised on-image install-area annotation (rect/path, 0..1). Only read by the PPT export;
+   *  the xlsx/table paths ignore it. Optional so pure fixtures can omit it. */
+  markup?: unknown;
 }
 export interface RepRecce {
   id: string;
@@ -113,6 +116,10 @@ export interface RepRecce {
   hoReviewStatus: string;
   capturedAt: Date | string | null;
   receivedAt: Date | string | null;
+  /** Representative capture geotag (Prisma Decimal | number | null). PPT export GPS-link fallback
+   *  when a photo carries no geo. Optional so pure fixtures can omit it. */
+  captureLat?: unknown;
+  captureLng?: unknown;
   // Approval audit stamps (for the excel-only audit group).
   reviewedAt: Date | string | null;
   hoReviewedAt: Date | string | null;

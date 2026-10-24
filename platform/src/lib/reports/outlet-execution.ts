@@ -108,6 +108,9 @@ export function gpsMapsUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps?q=${lat},${lng}`;
 }
 
+/** Hard cap on outlets per PowerPoint export (mirrors the backend 1–3 rule). */
+export const PPTX_MAX_OUTLETS = 3;
+
 /**
  * An IST (Asia/Kolkata) `YYYY-MM-DD` stamp for the download filename, so it matches the IST dates
  * shown everywhere in the report (NOT UTC `toISOString()`, which rolls a day early for late-evening
@@ -154,6 +157,43 @@ export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Pro
     a.click();
     a.remove();
     // Revoke on the next tick so the click has consumed the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    return null;
+  } catch {
+    return 'Could not download the report. Please try again.';
+  }
+}
+
+/**
+ * Download the Recce Report as a PowerPoint (.pptx) for the SELECTED outlets — one slide per outlet,
+ * 1–3 outlets. Fetches the auth-gated stream (cookie injected by the /api proxy) into a blob and
+ * triggers a browser save. Returns an error string on failure, else null. The 1–3 bound is validated
+ * both here (fast feedback) and on the backend (authoritative 400).
+ */
+export async function downloadOutletReportPptx(outletCodes: string[]): Promise<string | null> {
+  const codes = Array.from(new Set(outletCodes.map((c) => c.trim()).filter(Boolean)));
+  if (codes.length === 0) return 'Select at least one outlet for a PPT export.';
+  if (codes.length > PPTX_MAX_OUTLETS) return 'PPT export is limited to 3 outlets.';
+  const p = new URLSearchParams();
+  p.set('outletCodes', codes.join(','));
+  try {
+    const res = await fetch(`/api/reports/outlet-execution.pptx?${p.toString()}`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      if (res.status === 403) return 'You are not allowed to download this report.';
+      if (res.status === 400) return 'Select 1–3 outlets for a PPT export.';
+      return `Download failed (${res.status}).`;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `recce-report-${istDateStamp()}.pptx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
     return null;
   } catch {

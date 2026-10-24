@@ -83,4 +83,24 @@ export class ReportsController {
       disposition: `attachment; filename="recce-report-${stamp}.xlsx"`,
     });
   }
+
+  /**
+   * GET /v1/reports/outlet-execution.pptx?outletCodes=CODE1,CODE2,CODE3 — the Recce Report as a
+   * PowerPoint, ONE SLIDE PER OUTLET (1–3 outlets; a 0/4+ selection 400s in the service). Tenant-
+   * scoped + admin-gated like the rest of the report. Photo bytes are read server-side through the
+   * media driver and embedded; the whole (bounded) deck is built in memory and returned as a
+   * StreamableFile attachment.
+   */
+  @Get('outlet-execution.pptx')
+  async outletExecutionPptx(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: ListOutletReportDto,
+  ): Promise<StreamableFile> {
+    const buf = await this.reports.outletExecutionPptx(user, query.outletCodes);
+    const stamp = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    return new StreamableFile(buf, {
+      type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      disposition: `attachment; filename="recce-report-${stamp}.pptx"`,
+    });
+  }
 }

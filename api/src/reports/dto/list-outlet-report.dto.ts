@@ -28,6 +28,14 @@ export class ListOutletReportDto {
   vendorId?: string;
 
   /**
+   * Comma-separated outlet codes for the PPT export (GET /v1/reports/outlet-execution.pptx) — 1–3
+   * codes, validated in the service (else 400). Ignored by the JSON table + xlsx paths.
+   */
+  @IsOptional()
+  @IsString()
+  outletCodes?: string;
+
+  /**
    * The caller's browser origin (`window.location.origin`), sent ONLY by the .xlsx download so the
    * backend — which sits behind the Next proxy and can't know the public origin — can build ABSOLUTE
    * photo hyperlinks (`<origin>/api/media/view?key=…`) that open from Excel. Validated as a plausible

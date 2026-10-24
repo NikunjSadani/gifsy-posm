@@ -1,8 +1,20 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import PptxGenJS from 'pptxgenjs';
+import { Jimp, defaultFormats } from 'jimp';
 import { PrismaService } from '../prisma/prisma.service';
 import { Msg91Service } from '../notifications/msg91.service';
+import { PosmMediaService } from '../capture/posm-media.service';
+import { sniffImageMime } from '../media/watermark.util';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import {
+  DEFAULT_SLIDE_LAYOUT,
+  planRecceSlide,
+  pptxDimsLabel,
+  type PlanElementInput,
+  type SlidePlan,
+} from './outlet-pptx.helper';
+import { readPhoto, type RepRecce } from './outlet-execution.helper';
 import {
   EmailReportsConfig,
   DEFAULT_ASM_RECCE_REMINDER,
@@ -26,6 +38,32 @@ import {
 
 /** Rows pulled per DB round-trip while streaming the xlsx — bounds peak memory, not the total. */
 const OUTLET_EXPORT_BATCH = 1_000;
+
+/** The header band colour (a clean brand-ish green) for the Recce Report PPT slides. */
+const PPTX_HEADER_GREEN = '1F7A3D';
+/** Max outlets per PPT export (owner spec) — keeps full-res base64 images bounded in memory. */
+const PPTX_MAX_OUTLETS = 3;
+
+/**
+ * jimp image decoders, built ONCE from jimp's bundled default formats and used DIRECTLY (not via
+ * `Jimp.read`, which lazily `import()`s the pure-ESM `file-type` — throwing under the CommonJS Jest
+ * VM). Mirrors the decode path in `media/watermark.util`. A webp / PDF / corrupt buffer has no
+ * decoder → the element renders caption-only rather than crashing the export.
+ */
+let PPTX_DECODERS: Map<
+  string,
+  (buffer: Buffer) => Promise<{ data: Buffer; width: number; height: number }>
+> | null = null;
+function pptxDecoders() {
+  if (!PPTX_DECODERS) {
+    PPTX_DECODERS = new Map();
+    for (const make of defaultFormats) {
+      const fmt = make();
+      if (fmt.decode) PPTX_DECODERS.set(fmt.mime, fmt.decode as never);
+    }
+  }
+  return PPTX_DECODERS;
+}
 
 /**
  * Prisma include that feeds the curated Recce Report row builder. ONE ROW PER RECCE: load ALL of the
@@ -91,6 +129,7 @@ export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly msg91: Msg91Service,
+    private readonly posmMedia: PosmMediaService,
   ) {}
 
   // ── Config (tenant-scoped by the caller's clientId) ───────────────────────────────
@@ -808,5 +847,279 @@ export class ReportsService {
       headers: CURATED_COLUMNS.map((c) => c.label),
       nextBatch,
     });
+  }
+
+  // ── Recce Report PowerPoint export (owner spec 2026-10-24) ──────────────────────────
+
+  /**
+   * GET /v1/reports/outlet-execution.pptx — a PowerPoint with ONE SLIDE PER OUTLET (1–3 outlets).
+   * Each slide has a wide green header band (identity + "(W X H) - date - GPS", GPS linking to Google
+   * Maps) and, on the LEFT, the recce element photo(s) at natural aspect with the element-placement
+   * box drawn as a thin green rectangle mapped from the stored markup. The right half is left as the
+   * seam for the future INSTALLED variant (Phase C).
+   *
+   * Tenant-scoped like the rest of the report (a CLIENT_ADMIN / assumed operator is pinned to their
+   * tenant; an un-assumed GIFSY_ADMIN is platform-wide). Photo bytes are read SERVER-SIDE through the
+   * same media/storage driver the `/v1/media/view` endpoint uses (never an HTTP call to our own API),
+   * embedded as base64 JPEG. Bounded memory: capped at 3 outlets × ≤2 elements of full-res images.
+   */
+  async outletExecutionPptx(user: JwtPayload, outletCodesRaw: string | undefined): Promise<Buffer> {
+    const pptx = await this.buildRecceDeck(user, outletCodesRaw);
+    // nodebuffer output → a Node Buffer ready for StreamableFile. (The media-encode step inside
+    // `write` does a dynamic `import('node:fs')`, which only works under real Node — see the deck
+    // builder's unit tests + the standalone boot smoke for why the two are split.)
+    return (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
+  }
+
+  /**
+   * Build the Recce Report deck (validate → load sites tenant-scoped → one slide per outlet), WITHOUT
+   * writing it. Split out from {@link outletExecutionPptx} so the slide structure is unit-testable:
+   * building (addSlide/addText/addImage/addShape) is pure in-memory bookkeeping, whereas `write()`
+   * invokes pptxgenjs's media encoder, which `import()`s node built-ins (fine under real Node, but it
+   * throws under the CommonJS Jest VM). Returns the populated PptxGenJS instance.
+   */
+  async buildRecceDeck(user: JwtPayload, outletCodesRaw: string | undefined): Promise<PptxGenJS> {
+    const codes = this.parsePptxOutletCodes(outletCodesRaw);
+
+    // Tenant scope, mirroring outletReportWhere: pin clientId unless the caller is platform-wide.
+    const where: Prisma.SiteWhereInput = { code: { in: codes } };
+    const scope = tenantScope(user);
+    if (scope !== undefined) where.clientId = scope;
+
+    const sites = (await this.prisma.site.findMany({
+      where,
+      orderBy: [{ code: 'asc' }, { id: 'asc' }],
+      include: OUTLET_REPORT_INCLUDE,
+    })) as unknown as RepSite[];
+
+    // Order the slides by the caller's requested code order (nice UX); a platform-wide GIFSY read can
+    // match the same code in >1 tenant, so there may be more than `codes.length` sites — keep them all
+    // (still bounded: ≤3 codes, images fetched + released one element at a time).
+    const ordered: RepSite[] = [];
+    for (const code of codes) {
+      for (const s of sites) if (s.code === code) ordered.push(s);
+    }
+
+    const pptx = new PptxGenJS();
+    pptx.defineLayout({ name: 'RECCE_WIDE', width: DEFAULT_SLIDE_LAYOUT.slideW, height: DEFAULT_SLIDE_LAYOUT.slideH });
+    pptx.layout = 'RECCE_WIDE';
+
+    for (const site of ordered) {
+      const plan = await this.buildOutletSlidePlan(user, site);
+      this.renderRecceSlide(pptx, plan);
+    }
+    return pptx;
+  }
+
+  /**
+   * Parse + validate the `outletCodes` query (comma-separated). 1–3 distinct non-empty codes, else a
+   * 400 with the owner's exact message. De-dupes (case-sensitively — outlet codes are exact keys).
+   */
+  private parsePptxOutletCodes(raw: string | undefined): string[] {
+    const codes = [...new Set((raw ?? '').split(',').map((c) => c.trim()).filter(Boolean))];
+    if (codes.length < 1 || codes.length > PPTX_MAX_OUTLETS) {
+      throw new BadRequestException('Select 1–3 outlets for a PPT export.');
+    }
+    return codes;
+  }
+
+  /**
+   * Build the pure slide plan for one outlet: pick its recce (APP first, else oldest manual), resolve
+   * each present element's photo bytes (via the media service), and hand the decoded elements to the
+   * pure {@link planRecceSlide}. An outlet with no recce — or a recce with no usable element photo —
+   * yields an `empty` plan (a "No recce captured" slide), never a crash.
+   */
+  private async buildOutletSlidePlan(user: JwtPayload, site: RepSite): Promise<SlidePlan> {
+    const recce = this.pickPrimaryRecce(site);
+    if (!recce) {
+      return planRecceSlide({
+        outletName: site.name,
+        town: site.town,
+        state: site.state,
+        recceDate: null,
+        geo: null,
+        elements: [],
+      });
+    }
+
+    // Present elements in slot order (1 then 2). Each needs its photo bytes decoded for the slide.
+    const posms = [...recce.posms].sort((a, b) => a.slotNo - b.slotNo);
+    const elements: PlanElementInput[] = [];
+    for (const p of posms) {
+      const { key } = readPhoto(p.photo);
+      const image = key ? await this.decodeImageForSlide(user, key) : null;
+      elements.push({
+        slotNo: p.slotNo,
+        posmTypeName: p.posmType?.name ?? null,
+        dimsInner: pptxDimsLabel(p.dimensions),
+        markup: p.markup,
+        image: image ?? undefined,
+      });
+    }
+
+    return planRecceSlide({
+      outletName: site.name,
+      town: site.town,
+      state: site.state,
+      recceDate: recce.capturedAt ?? recce.receivedAt,
+      geo: this.resolveRecceGeo(recce),
+      elements,
+    });
+  }
+
+  /**
+   * The recce to feature on an outlet's slide: the APP recce if present (the single in-app recce),
+   * otherwise the oldest MANUAL recce. Mirrors the per-outlet grain of the report (which sorts
+   * APP-first then manual oldest-first); the PPT shows one recce per outlet, so it takes the first.
+   */
+  private pickPrimaryRecce(site: RepSite): RepRecce | null {
+    if (!site.recces || site.recces.length === 0) return null;
+    const sorted = [...site.recces].sort((a, b) => {
+      const am = a.recceMode === 'MANUAL' ? 1 : 0;
+      const bm = b.recceMode === 'MANUAL' ? 1 : 0;
+      if (am !== bm) return am - bm;
+      const at = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
+      const bt = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
+      if (at !== bt) return at - bt;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return sorted[0];
+  }
+
+  /**
+   * The capture geotag for the GPS header link: the first element photo that carries a geo, else the
+   * recce's representative capture lat/lng. Null when nothing is geotagged (the GPS link is omitted).
+   */
+  private resolveRecceGeo(recce: RepRecce): { lat: number; lng: number } | null {
+    for (const p of recce.posms ?? []) {
+      const { lat, lng } = readPhoto(p.photo);
+      if (lat != null && lng != null) return { lat, lng };
+    }
+    const lat = Number(recce.captureLat);
+    const lng = Number(recce.captureLng);
+    if (recce.captureLat != null && recce.captureLng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat, lng };
+    }
+    return null;
+  }
+
+  /**
+   * Read a photo's bytes through the SAME media service the `/v1/media/view` endpoint uses (tenant-
+   * enforced from the object key's folder; an un-assumed GIFSY reads any tenant), decode via jimp's
+   * bundled decoders to get the natural dimensions, and re-encode to a bounded JPEG base64 data URL
+   * for embedding. Returns null (caption-only element, no crash) when the photo is missing, oversized,
+   * or not a jimp-decodable image (e.g. webp/PDF). Never throws.
+   */
+  private async decodeImageForSlide(
+    user: JwtPayload,
+    key: string,
+  ): Promise<{ dataUrl: string; natW: number; natH: number } | null> {
+    try {
+      const { bytes } = await this.posmMedia.viewMedia(user, key);
+      const mime = sniffImageMime(bytes);
+      if (!mime) return null;
+      const decode = pptxDecoders().get(mime);
+      if (!decode) return null;
+      const bitmap = await decode(bytes);
+      const img = Jimp.fromBitmap(bitmap);
+      const natW = img.bitmap.width;
+      const natH = img.bitmap.height;
+      if (!(natW > 0) || !(natH > 0)) return null;
+      // Re-encode to JPEG so the embedded image is always a PowerPoint-supported format (webp/gif are
+      // normalised away), at a size close to the original photo.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jpeg: Buffer = await (img as any).getBuffer('image/jpeg');
+      return { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`, natW, natH };
+    } catch (e) {
+      this.logger.warn(`pptx: could not embed photo ${key}: ${this.reason(e)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Render one slide plan onto the deck: the green header band with the two centred title lines (the
+   * GPS run hyperlinked), then either a "No recce captured" note or, for each element, the photo at
+   * its fitted rect, the green stroke box over it (when markup exists), and the caption below.
+   */
+  private renderRecceSlide(pptx: PptxGenJS, plan: SlidePlan): void {
+    const L = DEFAULT_SLIDE_LAYOUT;
+    const slide = pptx.addSlide();
+
+    // Header band + centred title. Line 1 is bold; line 2 is a run list so the "GPS" run can be a
+    // hyperlink. The band fill is set on the text box so it spans the full slide width.
+    const hasLine2 = plan.line2.length > 0;
+    const runs: PptxGenJS.TextProps[] = [
+      { text: plan.line1, options: { bold: true, fontSize: 17, breakLine: hasLine2 } },
+    ];
+    plan.line2.forEach((seg, i) => {
+      runs.push({
+        text: seg.text,
+        options: {
+          fontSize: 13,
+          breakLine: i === plan.line2.length - 1,
+          ...(seg.link
+            ? { hyperlink: { url: seg.link, tooltip: 'Open in Google Maps' }, underline: { style: 'sng' }, color: 'FFFFFF' }
+            : {}),
+        },
+      });
+    });
+    slide.addText(runs, {
+      x: 0,
+      y: 0,
+      w: '100%',
+      h: L.headerH,
+      align: 'center',
+      valign: 'middle',
+      color: 'FFFFFF',
+      fill: { color: PPTX_HEADER_GREEN },
+    });
+
+    if (plan.empty) {
+      slide.addText('No recce captured', {
+        x: 0,
+        y: L.headerH,
+        w: '100%',
+        h: L.slideH - L.headerH,
+        align: 'center',
+        valign: 'middle',
+        fontSize: 20,
+        color: '888888',
+      });
+      return;
+    }
+
+    for (const el of plan.elements) {
+      if (el.dataUrl && el.imageRect) {
+        slide.addImage({
+          data: el.dataUrl,
+          x: el.imageRect.x,
+          y: el.imageRect.y,
+          w: el.imageRect.w,
+          h: el.imageRect.h,
+        });
+      }
+      if (el.boxRect) {
+        // The element-placement box: a thin green outline, NO fill (object-fit: contain means the box
+        // is mapped onto the fitted image rect, so it lands exactly where the on-screen overlay draws).
+        slide.addShape(pptx.ShapeType.rect, {
+          x: el.boxRect.x,
+          y: el.boxRect.y,
+          w: el.boxRect.w,
+          h: el.boxRect.h,
+          fill: { type: 'none' },
+          line: { color: PPTX_HEADER_GREEN, width: 1.5 },
+        });
+      }
+      slide.addText(el.caption, {
+        x: el.captionRect.x,
+        y: el.captionRect.y,
+        w: el.captionRect.w,
+        h: el.captionRect.h,
+        align: 'center',
+        valign: 'middle',
+        fontSize: 11,
+        color: '444444',
+      });
+    }
   }
 }

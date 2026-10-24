@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, RefreshCw, Download, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react';
+import { Search, RefreshCw, Download, ChevronLeft, ChevronRight, FileSpreadsheet, Presentation } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Lightbox } from '@/components/audit/media-image';
@@ -27,12 +27,17 @@ import { cn } from '@/lib/utils';
 import {
   fetchOutletReport,
   downloadOutletReportXlsx,
+  downloadOutletReportPptx,
+  PPTX_MAX_OUTLETS,
   type OutletReportResult,
   type OutletReportFilters,
 } from '@/lib/reports/outlet-execution';
 import { groupOutletColumns, flatColumns } from '@/lib/reports/outlet-columns';
 
 const PAGE_SIZE = 50;
+
+/** Width (px) of the leading selection (checkbox) column; the pinned columns sit to its right. */
+const SELECT_COL_W = 44;
 
 /** Pixel widths for the sticky-left pinned columns, by pin index; a further pinned column (none
  *  today) falls back to the last width. The sticky `left` offset is the sum of earlier widths.
@@ -42,8 +47,10 @@ const PAGE_SIZE = 50;
 const PIN_WIDTHS_DESKTOP = [128, 208];
 const PIN_WIDTHS_MOBILE = [96, 128];
 const pinWidth = (widths: number[], i: number) => widths[i] ?? widths[widths.length - 1] ?? 160;
+// Pinned columns sit to the RIGHT of the leading selection column, so every sticky `left` offset is
+// measured from after the checkbox column.
 const pinLeft = (widths: number[], i: number) => {
-  let left = 0;
+  let left = SELECT_COL_W;
   for (let j = 0; j < i; j++) left += pinWidth(widths, j);
   return left;
 };
@@ -91,8 +98,21 @@ export default function ExecutionReportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [exportingPptx, setExportingPptx] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+
+  // PPT export selection — BY OUTLET CODE (a multi-recce outlet has >1 row but counts once), capped at
+  // PPTX_MAX_OUTLETS. Persisted across pages/filters so a user can gather up to 3 before exporting.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const atSelectionCap = selected.size >= PPTX_MAX_OUTLETS;
+  const toggleOutlet = (code: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else if (next.size < PPTX_MAX_OUTLETS) next.add(code);
+      return next;
+    });
 
   const filters: OutletReportFilters = useMemo(
     () => ({ siteCode: siteCode.trim(), town: town.trim(), region: region.trim(), state: stateF.trim(), vendorId }),
@@ -126,6 +146,16 @@ export default function ExecutionReportPage() {
     setDownloading(false);
     if (err) toast.error(err);
     else toast.success('Report downloaded');
+  };
+
+  const onExportPptx = async () => {
+    const codes = Array.from(selected);
+    if (codes.length === 0) return;
+    setExportingPptx(true);
+    const err = await downloadOutletReportPptx(codes);
+    setExportingPptx(false);
+    if (err) toast.error(err);
+    else toast.success('PPT downloaded');
   };
 
   const columns = useMemo(() => data?.columns ?? [], [data]);
@@ -165,6 +195,15 @@ export default function ExecutionReportPage() {
             <span className="hidden sm:inline">Refresh</span>
           </button>
           <button
+            onClick={onExportPptx}
+            disabled={selected.size === 0 || exportingPptx}
+            title={selected.size === 0 ? 'Select 1–3 outlets to export a PPT' : undefined}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all"
+          >
+            {exportingPptx ? <Spinner size="sm" /> : <Presentation className="h-4 w-4" />}
+            Export PPT{selected.size > 0 ? ` (${selected.size})` : ''}
+          </button>
+          <button
             onClick={onDownload}
             disabled={downloading}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--brand-primary)] hover:bg-[var(--brand-primary-dark)] text-white px-3.5 py-2 text-sm font-semibold disabled:opacity-50 active:scale-95 transition-all"
@@ -174,6 +213,12 @@ export default function ExecutionReportPage() {
           </button>
         </div>
       </div>
+
+      {atSelectionCap && (
+        <p className="mb-3 -mt-1 text-xs font-medium text-amber-600">
+          PPT export is limited to 3 outlets — deselect one to choose a different outlet.
+        </p>
+      )}
 
       {/* Filters */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
@@ -214,11 +259,18 @@ export default function ExecutionReportPage() {
               <thead>
                 {/* Row 1 — group headers (each spans its columns). */}
                 <tr>
+                  {/* Leading selection column (spans both header rows). */}
+                  <th
+                    rowSpan={2}
+                    style={{ left: 0, width: SELECT_COL_W, minWidth: SELECT_COL_W, maxWidth: SELECT_COL_W }}
+                    className="sticky top-0 z-40 h-9 bg-gray-100 border-b border-gray-200"
+                    aria-label="Select for PPT export"
+                  />
                   {groups.map((g, gi) => (
                     <th
                       key={g.group}
                       colSpan={g.columns.length}
-                      style={g.pinned ? { left: 0 } : undefined}
+                      style={g.pinned ? { left: SELECT_COL_W } : undefined}
                       className={cn(
                         'sticky top-0 h-9 px-3 text-left text-[10px] font-bold uppercase tracking-widest text-gray-500 bg-gray-100 border-b border-gray-200 whitespace-nowrap',
                         g.pinned ? 'z-30 border-r-2 border-r-gray-200' : 'z-20',
@@ -255,8 +307,26 @@ export default function ExecutionReportPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {rows.map((r) => {
+                  const isSelected = selected.has(r.outletCode);
+                  const disableSelect = !isSelected && atSelectionCap;
+                  return (
                   <tr key={r.id} className="group hover:bg-gray-50/60">
+                    {/* Leading selection checkbox (by outlet; capped at 3). */}
+                    <td
+                      style={{ left: 0, width: SELECT_COL_W, minWidth: SELECT_COL_W, maxWidth: SELECT_COL_W }}
+                      className="sticky z-10 h-12 bg-white group-hover:bg-gray-50 border-b border-gray-50 text-center align-middle"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={disableSelect}
+                        onChange={() => toggleOutlet(r.outletCode)}
+                        title={disableSelect ? 'PPT export is limited to 3 outlets' : `Select ${r.outletCode} for PPT export`}
+                        aria-label={`Select outlet ${r.outletCode} for PPT export`}
+                        className="h-4 w-4 cursor-pointer accent-[var(--brand-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                      />
+                    </td>
                     {flat.map((c) => {
                       const pinned = c.pinIndex >= 0;
                       const cell = r.cells[c.column.key] ?? { t: 'empty' as const };
@@ -286,7 +356,8 @@ export default function ExecutionReportPage() {
                       );
                     })}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
