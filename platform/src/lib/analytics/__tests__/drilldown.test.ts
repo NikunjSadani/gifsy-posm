@@ -11,7 +11,7 @@ beforeEach(() => {
   mockGet.mockReset();
   mockGet.mockResolvedValue({
     success: true,
-    data: { items: [], byElementType: [], total: 0, page: 1, limit: 200 },
+    data: { items: [], byElementType: [], total: 0, limit: 200 },
   });
 });
 
@@ -31,9 +31,9 @@ describe('fetchAnalyticsDrilldown', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/analytics/drilldown?metric=ho-approved&limit=200');
   });
 
-  it('serialises page 0 (does not treat 0 as absent)', async () => {
-    await fetchAnalyticsDrilldown('installed', { page: 0 });
-    expect(mockGet).toHaveBeenCalledWith('/api/analytics/drilldown?metric=installed&page=0');
+  it('serialises the keyset afterId cursor for a subsequent page', async () => {
+    await fetchAnalyticsDrilldown('installed', { afterId: 'id-42', limit: 200 });
+    expect(mockGet).toHaveBeenCalledWith('/api/analytics/drilldown?metric=installed&afterId=id-42&limit=200');
   });
 
   it('passes the API response straight through', async () => {

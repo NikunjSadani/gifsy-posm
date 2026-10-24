@@ -155,12 +155,14 @@ export type AnalyticsMetric =
   | 'recces-app'
   | 'recces-manual';
 
-/** GET /api/analytics/drilldown — one page of outlet records behind a metric (+ element rollup). */
+/**
+ * GET /api/analytics/drilldown — one KEYSET page of outlet records behind a metric (+ element
+ * rollup, first page only). No `page` index: the sheet walks pages by the last row's id (`afterId`).
+ */
 export interface AnalyticsDrilldownResult {
   items: ApprovalRecord[];
   byElementType: ElementTypeBreakdown[];
   total: number;
-  page: number;
   limit: number;
 }
 
@@ -423,29 +425,32 @@ export function fetchGeo(stage: AnalyticsStage): Promise<ApiResponse<GeoResult>>
 /**
  * Serialise a drill-down query to a query string (leading `?`). `metric` is always present; an
  * optional `vendorId` narrows the list SERVER-SIDE to one vendor (admin scorecard-row drill-down)
- * so `total`/pagination stay correct. Blank vendorId is dropped; page 0 is preserved (not absent).
+ * so `total` stays correct. Paging is KEYSET: an optional `afterId` (the last row the client
+ * holds) asks the server for the next page AFTER it. Blank vendorId / afterId are dropped.
  */
 export function drilldownQueryString(
   metric: string,
-  opts: { vendorId?: string; page?: number; limit?: number } = {},
+  opts: { vendorId?: string; afterId?: string; limit?: number } = {},
 ): string {
   const params = new URLSearchParams();
   params.set('metric', metric);
   const vendorId = opts.vendorId?.trim();
   if (vendorId) params.set('vendorId', vendorId);
-  if (opts.page != null) params.set('page', String(opts.page));
+  const afterId = opts.afterId?.trim();
+  if (afterId) params.set('afterId', afterId);
   if (opts.limit != null) params.set('limit', String(opts.limit));
   return `?${params.toString()}`;
 }
 
 /**
  * GET one page of the unified metric drill-down (role-scoped server-side). Backs the shared
- * MetricDrilldownSheet across every drillable tile on the analytics dashboards; returns the
- * paginated `items`, a `byElementType` rollup, and the server-wide `total`.
+ * MetricDrilldownSheet across every drillable tile on the analytics dashboards; returns the page's
+ * `items`, a `byElementType` rollup (first page only), and the server-wide `total`. Paging is
+ * KEYSET — pass `afterId` (the last loaded row's id) to fetch the next page.
  */
 export function fetchAnalyticsDrilldown(
   metric: string,
-  opts: { vendorId?: string; page?: number; limit?: number } = {},
+  opts: { vendorId?: string; afterId?: string; limit?: number } = {},
 ): Promise<ApiResponse<AnalyticsDrilldownResult>> {
   return api.get<AnalyticsDrilldownResult>(`/api/analytics/drilldown${drilldownQueryString(metric, opts)}`);
 }

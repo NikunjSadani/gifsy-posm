@@ -43,12 +43,16 @@ export interface ElementTypeCount {
   count: number;
 }
 
-/** The scoped, paginated enriched drill-down response for a dashboard tile / funnel stage. */
+/**
+ * The scoped, KEYSET-paged enriched drill-down response for a dashboard tile / funnel stage.
+ * No `page` number: paging is by `afterId` cursor (the client walks pages by the last row's id),
+ * so a page index would be meaningless. `total` is the server-wide count (drives the FE header +
+ * stop condition) and `limit` is the page size.
+ */
 export interface DrilldownResult {
   items: DrilldownRecordItem[];
   byElementType: ElementTypeCount[];
   total: number;
-  page: number;
   limit: number;
 }
 

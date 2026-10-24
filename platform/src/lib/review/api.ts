@@ -152,11 +152,14 @@ export interface ElementTypeBreakdown {
   count: number;
 }
 
+/**
+ * One KEYSET page of records behind a funnel stage (+ element rollup, first page only). No `page`
+ * index: the sheet walks pages by the last row's id (`afterId`).
+ */
 export interface RecordsResult {
   items: ApprovalRecord[];
   byElementType: ElementTypeBreakdown[];
   total: number;
-  page: number;
   limit: number;
 }
 
@@ -359,11 +362,15 @@ export type RecordsStage =
   | 'pending-install'
   | 'installed';
 
-/** Serialise the records query (`stage` is always present; page/limit optional). */
-function recordsQueryString(stage: string, opts: { limit?: number; page?: number } = {}): string {
+/**
+ * Serialise the records query (`stage` is always present). Paging is KEYSET: an optional `afterId`
+ * (the last row the client holds) asks for the next page after it. A blank afterId is dropped.
+ */
+function recordsQueryString(stage: string, opts: { limit?: number; afterId?: string } = {}): string {
   const params = new URLSearchParams();
   params.set('stage', stage);
-  if (opts.page != null) params.set('page', String(opts.page));
+  const afterId = opts.afterId?.trim();
+  if (afterId) params.set('afterId', afterId);
   if (opts.limit != null) params.set('limit', String(opts.limit));
   return `?${params.toString()}`;
 }
@@ -379,12 +386,12 @@ export function recordsExportUrl(stage: string): string {
 
 /**
  * GET the outlet records behind a funnel stage, scoped to the caller. Backs the metric
- * drill-down sheet; returns the paginated `items`, a `byElementType` rollup, and the server-wide
- * `total` (so pagination stays correct — never a client-side single-page narrowing).
+ * drill-down sheet; returns the page's `items`, a `byElementType` rollup (first page only), and the
+ * server-wide `total`. Paging is KEYSET — pass `afterId` (the last loaded row's id) for the next page.
  */
 export function fetchRecords(
   stage: string,
-  opts: { limit?: number; page?: number } = {},
+  opts: { limit?: number; afterId?: string } = {},
 ): Promise<ApiResponse<RecordsResult>> {
   return api.get<RecordsResult>(`/api/approval/records${recordsQueryString(stage, opts)}`);
 }

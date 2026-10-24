@@ -85,13 +85,16 @@ export default function AdminAnalyticsPage() {
   };
 
   // One fetcher for the single shared sheet; rebuilt when the target metric/vendor changes so the
-  // sheet re-fetches the right slice. The sheet owns paging and passes the 1-based page; `limit:
-  // 200` is the per-page size it walks through (infinite scroll) to reach ALL records.
+  // sheet re-fetches the right slice. The sheet owns paging and passes the last loaded row's id as
+  // the KEYSET cursor (`afterId`); `limit: 200` is the per-page size it walks through (infinite
+  // scroll) to reach ALL records.
   const drillFetcher = useMemo(
-    () => (page: number) =>
-      fetchAnalyticsDrilldown(drill?.metric ?? 'total-outlets', { vendorId: drill?.vendorId, page, limit: 200 }),
+    () => (afterId?: string) =>
+      fetchAnalyticsDrilldown(drill?.metric ?? 'total-outlets', { vendorId: drill?.vendorId, afterId, limit: 200 }),
     [drill?.metric, drill?.vendorId],
   );
+  // The sheet resets on the TARGET identity (metric + vendor), not the display title.
+  const drillTargetKey = drill ? `${drill.metric}|${drill.vendorId ?? ''}` : '';
 
   return (
     <div className="space-y-6 fade-in">
@@ -155,6 +158,7 @@ export default function AdminAnalyticsPage() {
       <MetricDrilldownSheet
         open={drill !== null}
         title={drill?.title ?? ''}
+        targetKey={drillTargetKey}
         onClose={() => setDrill(null)}
         fetcher={drillFetcher}
         exportHref={drill ? drilldownExportUrl(drill.metric, { vendorId: drill.vendorId }) : null}

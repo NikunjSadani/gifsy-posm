@@ -43,9 +43,10 @@ export class ApprovalController {
   }
 
   /**
-   * GET /v1/approval/records?stage=<stage>&page=<n>&limit=<n> — the scoped, paginated
-   * drill-down list behind a dashboard tile (plus its element-type breakdown). Same @Roles
-   * floor + same scope confinement as the waterfall.
+   * GET /v1/approval/records?stage=<stage>&afterId=<id>&limit=<n> — the scoped, KEYSET-paged
+   * drill-down list behind a dashboard tile (plus its element-type breakdown, first page only).
+   * `afterId` is the last row the client holds (omitted for the first page). Same @Roles floor +
+   * same scope confinement as the waterfall.
    */
   @Get('records')
   records(@CurrentUser() user: JwtPayload, @Query() query: RecordsQueryDto) {

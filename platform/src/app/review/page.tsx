@@ -78,10 +78,10 @@ export default function ReviewDashboardPage() {
     [],
   );
   // Rebuilt when the target stage changes (so the sheet re-fetches the right stage). The sheet owns
-  // paging and passes the 1-based page; `limit: 200` is the per-page size it walks through
-  // (infinite scroll) to reach ALL records for the stage.
+  // paging and passes the last loaded row's id as the KEYSET cursor (`afterId`); `limit: 200` is
+  // the per-page size it walks through (infinite scroll) to reach ALL records for the stage.
   const fetcher = useMemo(
-    () => (page: number) => fetchRecords(drill?.stage ?? 'outlets', { page, limit: 200 }),
+    () => (afterId?: string) => fetchRecords(drill?.stage ?? 'outlets', { afterId, limit: 200 }),
     [drill?.stage],
   );
 
@@ -206,6 +206,8 @@ export default function ReviewDashboardPage() {
       <MetricDrilldownSheet
         open={drill !== null}
         title={drill?.title ?? ''}
+        // Reset the sheet on the TARGET identity (the stage), not the display title.
+        targetKey={drill?.stage ?? ''}
         onClose={() => setDrill(null)}
         fetcher={fetcher}
         onItemHref={itemHref}

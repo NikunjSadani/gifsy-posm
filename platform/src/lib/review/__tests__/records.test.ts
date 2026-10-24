@@ -11,7 +11,7 @@ beforeEach(() => {
   mockGet.mockReset();
   mockGet.mockResolvedValue({
     success: true,
-    data: { items: [], byElementType: [], total: 0, page: 1, limit: 200 },
+    data: { items: [], byElementType: [], total: 0, limit: 200 },
   });
 });
 
@@ -21,19 +21,19 @@ describe('fetchRecords', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/approval/records?stage=outlets');
   });
 
-  it('includes page and limit when provided (stage always first)', async () => {
-    await fetchRecords('pending-install', { page: 2, limit: 50 });
-    expect(mockGet).toHaveBeenCalledWith('/api/approval/records?stage=pending-install&page=2&limit=50');
+  it('includes the keyset afterId cursor and limit when provided (stage always first)', async () => {
+    await fetchRecords('pending-install', { afterId: 'id-7', limit: 50 });
+    expect(mockGet).toHaveBeenCalledWith('/api/approval/records?stage=pending-install&afterId=id-7&limit=50');
   });
 
-  it('includes only limit when page is omitted', async () => {
+  it('includes only limit when afterId is omitted (first page)', async () => {
     await fetchRecords('recce', { limit: 200 });
     expect(mockGet).toHaveBeenCalledWith('/api/approval/records?stage=recce&limit=200');
   });
 
-  it('serialises page 0 (does not treat 0 as absent)', async () => {
-    await fetchRecords('installed', { page: 0 });
-    expect(mockGet).toHaveBeenCalledWith('/api/approval/records?stage=installed&page=0');
+  it('drops a blank afterId', async () => {
+    await fetchRecords('installed', { afterId: '  ' });
+    expect(mockGet).toHaveBeenCalledWith('/api/approval/records?stage=installed');
   });
 
   it('passes the API response straight through', async () => {

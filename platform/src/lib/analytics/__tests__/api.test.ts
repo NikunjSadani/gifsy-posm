@@ -208,8 +208,9 @@ describe('drilldownQueryString', () => {
     expect(drilldownQueryString('recce', { vendorId: 'v-9' })).toBe('?metric=recce&vendorId=v-9');
     expect(drilldownQueryString('recce', { vendorId: '  ' })).toBe('?metric=recce');
   });
-  it('serialises page (including 0) and limit', () => {
-    expect(drilldownQueryString('installed', { page: 0, limit: 200 })).toBe('?metric=installed&page=0&limit=200');
+  it('serialises the keyset afterId cursor and limit (and drops a blank afterId)', () => {
+    expect(drilldownQueryString('installed', { afterId: 'id-9', limit: 200 })).toBe('?metric=installed&afterId=id-9&limit=200');
+    expect(drilldownQueryString('installed', { afterId: '  ', limit: 200 })).toBe('?metric=installed&limit=200');
   });
 });
 

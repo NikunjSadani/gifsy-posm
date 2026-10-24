@@ -492,7 +492,11 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     // Enriched outlet row: no capture/element data, human status label, vendor null (none on mock).
     expect(res.items[0]).toMatchObject({ recceDate: null, elementSummary: null, dimensions: null, vendorName: null, statusLabel: 'Active' });
     expect(res.byElementType).toEqual([]);
-    expect(res).toMatchObject({ total: 1, page: 1, limit: 50 });
+    expect(res).toMatchObject({ total: 1, limit: 50 });
+    // Keyset: no page index in the response, and the first page carries no cursor.
+    expect(res).not.toHaveProperty('page');
+    expect(fns.site.findMany.mock.calls[0][0]).not.toHaveProperty('cursor');
+    expect(fns.site.findMany.mock.calls[0][0]).not.toHaveProperty('skip');
     // No recce/install query runs for a site metric.
     expect(fns.recce.findMany).not.toHaveBeenCalled();
     expect(fns.installation.findMany).not.toHaveBeenCalled();
@@ -672,6 +676,48 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const svc = new AnalyticsService(prisma);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', limit: 5000 } as any);
     expect(fns.recce.findMany.mock.calls[0][0].take).toBe(200);
+  });
+
+  it('KEYSET first page: no cursor/skip, compound date-DESC + id-DESC order, computes byElementType', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([{ id: 'r1', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'C1', name: 'N1', town: 't' } }]);
+    fns.recce.count.mockResolvedValue(10);
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', limit: 50 } as any);
+    const call = fns.recce.findMany.mock.calls[0][0];
+    expect(call.take).toBe(50);
+    expect(call.cursor).toBeUndefined();
+    expect(call.skip).toBeUndefined();
+    expect(call.orderBy).toEqual([{ receivedAt: 'desc' }, { id: 'desc' }]);
+    // First page => the whole-metric element rollup IS computed (groupBy ran).
+    expect(fns.reccePosm.groupBy).toHaveBeenCalled();
+  });
+
+  it('KEYSET next page: seeks PAST afterId (cursor + skip:1) and SKIPS byElementType', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([{ id: 'r9', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'C9', name: 'N9', town: 't' } }]);
+    fns.recce.count.mockResolvedValue(10);
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', afterId: 'r5', limit: 50 } as any);
+    const call = fns.recce.findMany.mock.calls[0][0];
+    expect(call.cursor).toEqual({ id: 'r5' });
+    expect(call.skip).toBe(1);
+    expect(call.take).toBe(50);
+    expect(call.orderBy).toEqual([{ receivedAt: 'desc' }, { id: 'desc' }]);
+    // Cursor pages never re-sum the whole-metric rollup.
+    expect(fns.reccePosm.groupBy).not.toHaveBeenCalled();
+  });
+
+  it('KEYSET site metric: afterId seeks past the cursor on the site branch too', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.site.findMany.mockResolvedValue([{ id: 's2', code: 'C2', name: 'N2', town: 'Pune', status: 'ACTIVE' }]);
+    fns.site.count.mockResolvedValue(5);
+    const svc = new AnalyticsService(prisma);
+    await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'total-outlets', afterId: 's1', limit: 50 } as any);
+    const call = fns.site.findMany.mock.calls[0][0];
+    expect(call.cursor).toEqual({ id: 's1' });
+    expect(call.skip).toBe(1);
+    expect(call.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   it('ENRICHED recce row: recceDate, vendor, element summary, W×H, human status label', async () => {

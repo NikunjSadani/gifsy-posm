@@ -538,7 +538,11 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     // Enriched: outlet universe has no capture/element data; human status label; vendor null on mock.
     expect(res.items[0]).toMatchObject({ recceDate: null, elementSummary: null, dimensions: null, vendorName: null, statusLabel: 'Active' });
     expect(res.byElementType).toEqual([]);
-    expect(res).toMatchObject({ total: 1, page: 1, limit: 50 });
+    expect(res).toMatchObject({ total: 1, limit: 50 });
+    // Keyset: no page index in the response, and the first page carries no cursor/skip.
+    expect(res).not.toHaveProperty('page');
+    expect(fns.site.findMany.mock.calls[0][0]).not.toHaveProperty('cursor');
+    expect(fns.site.findMany.mock.calls[0][0]).not.toHaveProperty('skip');
     // The outlet stage never touches the element breakdown query.
     expect(fns.reccePosm.groupBy).not.toHaveBeenCalled();
   });
@@ -621,13 +625,40 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     ]);
   });
 
-  it('pagination: defaults page 1 / limit 50 and caps limit at 200', async () => {
+  it('pagination: defaults limit 50, caps limit at 200, and the first page has no cursor/skip', async () => {
     const { prisma, fns } = makePrisma();
     const svc = new ApprovalService(prisma);
     const res = await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: RecordsStage.RECCE, limit: 9999 });
     expect(res.limit).toBe(200);
-    expect(res.page).toBe(1);
-    expect(fns.recce.findMany.mock.calls[0][0]).toMatchObject({ skip: 0, take: 200 });
+    // Keyset first page: a bare `take`, no offset `skip` and no `cursor`.
+    const call = fns.recce.findMany.mock.calls[0][0];
+    expect(call.take).toBe(200);
+    expect(call.cursor).toBeUndefined();
+    expect(call.skip).toBeUndefined();
+  });
+
+  it('KEYSET next page: afterId seeks PAST the cursor (cursor + skip:1) and SKIPS the element rollup', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValue([
+      { id: 'r9', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'A9', name: 'Site A9', town: 't' } },
+    ]);
+    fns.recce.count.mockResolvedValue(10);
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {
+      stage: RecordsStage.RECCE,
+      afterId: 'r5',
+      limit: 50,
+    } as any);
+    const call = fns.recce.findMany.mock.calls[0][0];
+    expect(call.cursor).toEqual({ id: 'r5' });
+    expect(call.skip).toBe(1);
+    expect(call.take).toBe(50);
+    expect(call.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    // The total count still rides along for the FE header…
+    expect(res.total).toBe(10);
+    // …but a cursor page never re-sums the whole-stage element rollup.
+    expect(fns.reccePosm.groupBy).not.toHaveBeenCalled();
+    expect(res.byElementType).toEqual([]);
   });
 
   it('un-assumed GIFSY_ADMIN: platform-wide (no clientId filter) on a records stage', async () => {

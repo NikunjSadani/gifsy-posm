@@ -36,9 +36,10 @@ export enum DrilldownMetric {
 }
 
 /**
- * Query for GET /v1/analytics/drilldown — the sheet-shaped per-tile record list. `@Type` is
- * explicit (not relying on enableImplicitConversion) so page/limit coerce deterministically
- * before the bounds run.
+ * Query for GET /v1/analytics/drilldown — the sheet-shaped per-tile record list. Paging is
+ * KEYSET (cursor), not offset: the client passes the id of the last row it already holds and the
+ * server returns the next `limit` rows AFTER it. `@Type` is explicit (not relying on
+ * enableImplicitConversion) so `limit` coerces deterministically before the bounds run.
  */
 export class DrilldownQueryDto {
   /** Which tile to drill into. Required; enum-validated (an unknown value → 400). */
@@ -54,11 +55,15 @@ export class DrilldownQueryDto {
   @IsString()
   vendorId?: string;
 
+  /**
+   * Keyset cursor: the id of the LAST row the client already holds. Omitted on the first page;
+   * each subsequent page passes it so the server seeks PAST that row (cursor paging). This is
+   * immune to the duplicate/skip that OFFSET paging suffers when rows are inserted or deleted
+   * between fetches. An id that no longer exists simply yields an empty page (the sheet stops).
+   */
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
+  @IsString()
+  afterId?: string;
 
   @IsOptional()
   @Type(() => Number)

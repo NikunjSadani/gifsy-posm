@@ -502,9 +502,18 @@ export class ApprovalService {
    * so it carries the identical ASM-territory / tenant / platform confinement.
    */
   async records(user: JwtPayload, q: RecordsQueryDto): Promise<RecordsResult> {
-    const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
-    const skip = (page - 1) * limit;
+    const afterId = q.afterId?.trim() || undefined;
+    // KEYSET (cursor) paging, NOT offset: when the client passes the last row's id we seek PAST it
+    // (`cursor` + `skip:1`); the first page passes none. Combined with the compound
+    // (createdAt DESC, id DESC) order (a TOTAL order), a live insert/delete between page fetches can
+    // never duplicate or skip a row — offset paging would, since it shifts every later row when the
+    // set mutates. If the cursor row was itself deleted between fetches Prisma returns an empty page
+    // and the sheet simply stops (acceptable: no dup, no skip).
+    const paging = { take: limit, ...(afterId ? { cursor: { id: afterId }, skip: 1 } : {}) };
+    // `byElementType` is a WHOLE-STAGE rollup the sheet reads from the FIRST page only; skip the
+    // extra group-by on cursor pages (the FE never re-sums it).
+    const wantBreakdown = !afterId;
     const plan = this.recordsPlan(user, q.stage);
 
     if (plan.kind === 'site') {
@@ -512,19 +521,19 @@ export class ApprovalService {
       const [rows, total] = await Promise.all([
         this.prisma.site.findMany({
           where,
-          // STABLE order for deterministic pagination: createdAt is not unique, so an `id`
-          // tiebreaker gives a total order — a row never straddles two pages or gets skipped as
-          // the FE walks page≥2 (matches the xlsx cursor's id ordering).
+          // STABLE TOTAL order for the keyset cursor: createdAt is non-unique, so the `id`
+          // tiebreaker makes the (createdAt DESC, id DESC) order total — the cursor seeks WITHIN
+          // this order, so no row is duplicated or skipped as the FE walks pages. (The xlsx export
+          // pages by id ASC — a different, independently-stable order — so the two need not match.)
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          skip,
-          take: limit,
+          ...paging,
           select: ApprovalService.SITE_DRILL_SELECT,
         }),
         this.prisma.site.count({ where }),
       ]);
       const items = rows.map((s) => this.siteItem(s));
       // The outlet stage has no element lines.
-      return { items, byElementType: [], total, page, limit };
+      return { items, byElementType: [], total, limit };
     }
 
     if (plan.kind === 'install') {
@@ -532,20 +541,22 @@ export class ApprovalService {
       const [rows, total, byElementType] = await Promise.all([
         this.prisma.installation.findMany({
           where,
-          // STABLE order (see the site branch): createdAt is non-unique, so the `id` tiebreaker
-          // makes the order total — no duplicate/skipped row across pages.
+          // STABLE TOTAL order for the keyset cursor: createdAt is non-unique, so the `id`
+          // tiebreaker makes the (createdAt DESC, id DESC) order total — the cursor seeks within
+          // it, so no row is duplicated or skipped across pages.
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          skip,
-          take: limit,
+          ...paging,
           select: ApprovalService.INSTALL_DRILL_SELECT,
         }),
         this.prisma.installation.count({ where }),
         // Installed element lines grouped by element type: ReccePosm rows that HAVE a linked
-        // InstallPosm whose installation is in scope — reuses `installWhere` verbatim.
-        this.elementBreakdown({ installPosm: { installation: where } }),
+        // InstallPosm whose installation is in scope — reuses `installWhere` verbatim. First page only.
+        wantBreakdown
+          ? this.elementBreakdown({ installPosm: { installation: where } })
+          : Promise.resolve([] as ElementTypeCount[]),
       ]);
       const items = rows.map((i) => this.installItem(i));
-      return { items, byElementType, total, page, limit };
+      return { items, byElementType, total, limit };
     }
 
     // Recce-based stages (recce / asm-approved / ho-approved / pending-install).
@@ -553,20 +564,20 @@ export class ApprovalService {
     const [rows, total, byElementType] = await Promise.all([
       this.prisma.recce.findMany({
         where,
-        // STABLE order (see the site branch): createdAt is non-unique, so the `id` tiebreaker
-        // makes the order total — no duplicate/skipped row across pages.
+        // STABLE TOTAL order for the keyset cursor: createdAt is non-unique, so the `id` tiebreaker
+        // makes the (createdAt DESC, id DESC) order total — the cursor seeks within it, so no row
+        // is duplicated or skipped across pages.
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        skip,
-        take: limit,
+        ...paging,
         select: ApprovalService.RECCE_DRILL_SELECT,
       }),
       this.prisma.recce.count({ where }),
       // ReccePosm lines of the matched recces, grouped by element type — the stage's scoped
-      // recce `where` reached through the parent relation (same scope, no new surface).
-      this.elementBreakdown({ recce: where }),
+      // recce `where` reached through the parent relation (same scope, no new surface). First page only.
+      wantBreakdown ? this.elementBreakdown({ recce: where }) : Promise.resolve([] as ElementTypeCount[]),
     ]);
     const items = rows.map((r) => this.recceItem(r));
-    return { items, byElementType, total, page, limit };
+    return { items, byElementType, total, limit };
   }
 
   // ── Enriched drill-down selects + row→item mappers (shared by records + xlsx) ──────

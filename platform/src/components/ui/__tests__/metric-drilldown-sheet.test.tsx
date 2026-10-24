@@ -161,19 +161,19 @@ const rec = (id: string): ApprovalRecord => ({
   statusLabel: 'HO approved',
 });
 
-describe('MetricDrilldownSheet — pagination', () => {
-  it('loads page 2 on demand, appends without duplicates, stops at total, and does not re-sum byElementType', async () => {
-    const fetcher = vi.fn((page: number) =>
+describe('MetricDrilldownSheet — keyset pagination', () => {
+  it('loads the next page by afterId cursor, appends without duplicates, stops at total, and does not re-sum byElementType', async () => {
+    const fetcher = vi.fn((afterId?: string) =>
       Promise.resolve({
         success: true as const,
         data:
-          page === 1
+          afterId === undefined
             ? { items: [rec('r1'), rec('r2')], byElementType: [{ code: 'GSB', name: 'GSB', count: 5 }], total: 4 }
             : // page 2 carries a DIFFERENT element count to prove the sheet keeps page 1's rollup.
               { items: [rec('r3'), rec('r4')], byElementType: [{ code: 'GSB', name: 'GSB', count: 99 }], total: 4 },
       }),
     );
-    render(<MetricDrilldownSheet open title="Recce" onClose={() => {}} fetcher={fetcher} />);
+    render(<MetricDrilldownSheet open title="Recce" targetKey="recce" onClose={() => {}} fetcher={fetcher} />);
 
     // Page 1 only, with the server-wide total in the header and the page-1 element rollup (×5).
     await screen.findByText('Shop r1');
@@ -182,7 +182,7 @@ describe('MetricDrilldownSheet — pagination', () => {
     expect(screen.getByText('4 records')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
 
-    // Scroll fallback: the explicit button fetches page 2 and APPENDS.
+    // Scroll fallback: the explicit button fetches the next page (by the last row's id) and APPENDS.
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
 
     expect(await screen.findByText('Shop r3')).toBeInTheDocument();
@@ -195,17 +195,40 @@ describe('MetricDrilldownSheet — pagination', () => {
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(screen.queryByText('99')).toBeNull();
     expect(screen.queryByText('104')).toBeNull();
-    // Paged through: page 1 then page 2.
-    expect(fetcher).toHaveBeenNthCalledWith(1, 1);
-    expect(fetcher).toHaveBeenNthCalledWith(2, 2);
+    // First call has NO cursor; the second seeks past the last loaded id ('r2').
+    expect(fetcher).toHaveBeenNthCalledWith(1);
+    expect(fetcher).toHaveBeenNthCalledWith(2, 'r2');
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it('does not append a stale page after the metric (title) changes mid-fetch', async () => {
+  it('dedupes a repeated id across pages so a row is never rendered twice', async () => {
+    const fetcher = vi.fn((afterId?: string) =>
+      Promise.resolve({
+        success: true as const,
+        data:
+          afterId === undefined
+            ? { items: [rec('r1'), rec('r2')], byElementType: [], total: 3 }
+            : // page 2 echoes r2 (a moved cursor row) + a genuinely new r3.
+              { items: [rec('r2'), rec('r3')], byElementType: [], total: 3 },
+      }),
+    );
+    render(<MetricDrilldownSheet open title="Recce" targetKey="recce" onClose={() => {}} fetcher={fetcher} />);
+    await screen.findByText('Shop r1');
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+    expect(await screen.findByText('Shop r3')).toBeInTheDocument();
+
+    // r2 appeared on BOTH pages but renders exactly once; all three unique rows present once each.
+    expect(screen.getAllByText('Shop r2')).toHaveLength(1);
+    expect(screen.getAllByText(/^Shop r[1-3]$/)).toHaveLength(3);
+    expect(fetcher).toHaveBeenNthCalledWith(2, 'r2');
+  });
+
+  it('does not append a stale page after the drill target changes mid-fetch', async () => {
     let resolveP2!: (v: ApiResponse<DrilldownPage>) => void;
     const fetcherA = vi.fn(
-      (page: number): Promise<ApiResponse<DrilldownPage>> =>
-        page === 1
+      (afterId?: string): Promise<ApiResponse<DrilldownPage>> =>
+        afterId === undefined
           ? Promise.resolve({ success: true, data: { items: [rec('a1'), rec('a2')], byElementType: [], total: 4 } })
           : new Promise<ApiResponse<DrilldownPage>>((res) => {
               resolveP2 = res;
@@ -217,43 +240,71 @@ describe('MetricDrilldownSheet — pagination', () => {
     );
 
     const { rerender } = render(
-      <MetricDrilldownSheet open title="Metric A" onClose={() => {}} fetcher={fetcherA} />,
+      <MetricDrilldownSheet open title="Metric A" targetKey="A" onClose={() => {}} fetcher={fetcherA} />,
     );
     await screen.findByText('Shop a1');
 
-    // Kick off page 2 for metric A (its promise is held open).
+    // Kick off page 2 for target A (its promise is held open).
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
     expect(await screen.findByText('Loading more…')).toBeInTheDocument();
 
-    // Metric switches (title changes) before page 2 resolves → the sheet resets to metric B page 1.
-    rerender(<MetricDrilldownSheet open title="Metric B" onClose={() => {}} fetcher={fetcherB} />);
+    // Target switches before page 2 resolves → the sheet resets to target B's first page.
+    rerender(<MetricDrilldownSheet open title="Metric B" targetKey="B" onClose={() => {}} fetcher={fetcherB} />);
     await screen.findByText('Shop b1');
     expect(screen.queryByText('Shop a1')).toBeNull();
 
-    // The now-stale metric-A page 2 arrives — it must be dropped, never appended to metric B.
+    // The now-stale target-A page 2 arrives — it must be dropped, never appended to target B.
     resolveP2({ success: true, data: { items: [rec('a3'), rec('a4')], byElementType: [], total: 4 } });
     await waitFor(() => expect(screen.queryByText('Shop a3')).toBeNull());
     expect(screen.queryByText('Shop a4')).toBeNull();
     expect(screen.getByText('Shop b1')).toBeInTheDocument();
   });
 
-  it('surfaces a "load more" error and retries the same page', async () => {
+  it('resets on the TARGET identity (targetKey), not the display title', async () => {
+    const fetcherA = vi.fn(
+      (): Promise<ApiResponse<DrilldownPage>> =>
+        Promise.resolve({ success: true, data: { items: [rec('a1')], byElementType: [], total: 1 } }),
+    );
+    const fetcherB = vi.fn(
+      (): Promise<ApiResponse<DrilldownPage>> =>
+        Promise.resolve({ success: true, data: { items: [rec('b1')], byElementType: [], total: 1 } }),
+    );
+
+    const { rerender } = render(
+      <MetricDrilldownSheet open title="Shared title" targetKey="A" onClose={() => {}} fetcher={fetcherA} />,
+    );
+    await screen.findByText('Shop a1');
+    expect(fetcherA).toHaveBeenCalledTimes(1);
+
+    // Only the DISPLAY title changes (same target A) → no reload, rows untouched.
+    rerender(<MetricDrilldownSheet open title="Shared title (renamed)" targetKey="A" onClose={() => {}} fetcher={fetcherA} />);
+    await waitFor(() => expect(fetcherA).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Shop a1')).toBeInTheDocument();
+
+    // The TARGET identity changes (A → B), even with the same title → reset + refetch.
+    rerender(<MetricDrilldownSheet open title="Shared title (renamed)" targetKey="B" onClose={() => {}} fetcher={fetcherB} />);
+    await screen.findByText('Shop b1');
+    expect(screen.queryByText('Shop a1')).toBeNull();
+    expect(fetcherB).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a "load more" error and retries the SAME cursor (not a page number)', async () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce({ success: true, data: { items: [rec('r1')], byElementType: [], total: 2 } })
       .mockResolvedValueOnce({ success: false, error: 'Network down' })
       .mockResolvedValueOnce({ success: true, data: { items: [rec('r2')], byElementType: [], total: 2 } });
-    render(<MetricDrilldownSheet open title="Recce" onClose={() => {}} fetcher={fetcher} />);
+    render(<MetricDrilldownSheet open title="Recce" targetKey="recce" onClose={() => {}} fetcher={fetcher} />);
     await screen.findByText('Shop r1');
 
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
     expect(await screen.findByText("Couldn't load more records.")).toBeInTheDocument();
-    // The already-loaded page 1 row is untouched by the failed page-2 fetch.
+    // The already-loaded page 1 row is untouched by the failed next-page fetch.
     expect(screen.getByText('Shop r1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /try again/i }));
     expect(await screen.findByText('Shop r2')).toBeInTheDocument();
-    expect(fetcher).toHaveBeenNthCalledWith(2, 2);
-    expect(fetcher).toHaveBeenNthCalledWith(3, 2); // retry re-requests page 2, not page 3
+    expect(fetcher).toHaveBeenNthCalledWith(2, 'r1');
+    expect(fetcher).toHaveBeenNthCalledWith(3, 'r1'); // retry re-requests the same cursor
   });
 });

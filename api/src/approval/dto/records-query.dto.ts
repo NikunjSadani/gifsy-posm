@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsInt, Min, Max } from 'class-validator';
+import { IsEnum, IsOptional, IsInt, IsString, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -25,9 +25,11 @@ export enum RecordsStage {
  *
  * `stage` is REQUIRED and must be one of the controlled RecordsStage vocabulary — an unknown
  * stage is refused by validation (the service also fails closed on any unexpected value rather
- * than returning an unscoped list). `page`/`limit` default to 1/50 and `limit` is capped at
- * 200. `@Type` is explicit (not relying on enableImplicitConversion) so query-string
- * page/limit coerce to numbers deterministically before the bounds run.
+ * than returning an unscoped list). Paging is KEYSET (cursor): the client passes `afterId` (the
+ * last row it holds) and gets the next `limit` rows after it — immune to the OFFSET duplicate/skip
+ * when rows change between fetches. `limit` defaults to 50 and is capped at 200. `@Type` is
+ * explicit (not relying on enableImplicitConversion) so query-string `limit` coerces to a number
+ * deterministically before the bounds run.
  */
 export class RecordsQueryDto {
   @IsEnum(RecordsStage, {
@@ -35,11 +37,14 @@ export class RecordsQueryDto {
   })
   stage: RecordsStage;
 
+  /**
+   * Keyset cursor: the id of the LAST row the client already holds. Omitted on the first page;
+   * each subsequent page passes it so the server seeks PAST that row (cursor paging). Immune to
+   * the duplicate/skip that offset paging suffers when rows are inserted/deleted between fetches.
+   */
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
+  @IsString()
+  afterId?: string;
 
   @IsOptional()
   @Type(() => Number)

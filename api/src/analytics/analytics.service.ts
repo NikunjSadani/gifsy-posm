@@ -630,9 +630,18 @@ export class AnalyticsService {
    * The admin-only `vendorId` narrows further (ignored for VENDOR_HO/ASM, exactly like records()).
    */
   async drilldown(user: JwtPayload, q: DrilldownQueryDto) {
-    const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
-    const skip = (page - 1) * limit;
+    const afterId = q.afterId?.trim() || undefined;
+    // KEYSET (cursor) paging, NOT offset: when the client passes the last row's id we seek PAST it
+    // (`cursor` + `skip:1`); the first page passes none. Combined with each branch's compound
+    // date-DESC + id-DESC order (a TOTAL order), a live insert/delete between page fetches can
+    // never duplicate or skip a row — offset paging would, since it shifts every later row when
+    // the set mutates. If the cursor row was itself deleted between fetches Prisma returns an empty
+    // page and the sheet simply stops (acceptable: no dup, no skip).
+    const paging = { take: limit, ...(afterId ? { cursor: { id: afterId }, skip: 1 } : {}) };
+    // `byElementType` is a WHOLE-METRIC rollup the sheet reads from the FIRST page only; skip the
+    // extra group-by on cursor pages (the FE never re-sums it).
+    const wantBreakdown = !afterId;
     const plan = this.drilldownPlan(user, q); // throws (fail-closed) for a vendor with no vendorId
 
     // ── Site-based metric ──────────────────────────────────────────────────────────
@@ -641,18 +650,18 @@ export class AnalyticsService {
       const [rows, total] = await Promise.all([
         this.prisma.site.findMany({
           where,
-          // STABLE order for deterministic pagination: the primary key (createdAt) is not unique,
-          // so an `id` tiebreaker guarantees a total order — a row never straddles two pages or
-          // gets skipped as the FE walks page≥2 (matches the xlsx cursor's id ordering).
+          // STABLE TOTAL order for the keyset cursor: createdAt is non-unique, so an `id`
+          // tiebreaker makes the (createdAt DESC, id DESC) order total — the cursor seeks WITHIN
+          // this order, so no row is duplicated or skipped as the FE walks pages. (The xlsx export
+          // pages by id ASC — a different, independently-stable order — so the two need not match.)
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          skip,
-          take: limit,
+          ...paging,
           select: AnalyticsService.SITE_DRILL_SELECT,
         }),
         this.prisma.site.count({ where }),
       ]);
       const items = rows.map((r) => this.siteItem(r));
-      return { items, byElementType: [] as ElementTypeCount[], total, page, limit };
+      return { items, byElementType: [] as ElementTypeCount[], total, limit };
     }
 
     // ── Installation-based metrics ───────────────────────────────────────────────────
@@ -661,20 +670,24 @@ export class AnalyticsService {
       const [rows, total, byElementType] = await Promise.all([
         this.prisma.installation.findMany({
           where,
-          // STABLE order (see the site branch): receivedAt is non-unique (and nullable), so the
-          // `id` tiebreaker makes the order total — no duplicate/skipped row across pages.
+          // STABLE TOTAL order for the keyset cursor: receivedAt is NON-null
+          // (schema `@default(now())`) but non-unique, so the `id` tiebreaker makes the
+          // (receivedAt DESC, id DESC) order total — the cursor seeks within it, so no row is
+          // duplicated or skipped across pages.
           orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
-          skip,
-          take: limit,
+          ...paging,
           select: AnalyticsService.INSTALL_DRILL_SELECT,
         }),
         this.prisma.installation.count({ where }),
         // Installed element lines: ReccePosm rows with a linked InstallPosm whose installation is
         // in scope — reuses `where` verbatim through the back-relation (same scope, no new surface).
-        this.elementBreakdown({ installPosm: { installation: where } }),
+        // First page only (whole-metric rollup).
+        wantBreakdown
+          ? this.elementBreakdown({ installPosm: { installation: where } })
+          : Promise.resolve([] as ElementTypeCount[]),
       ]);
       const items = rows.map((i) => this.installItem(i));
-      return { items, byElementType, total, page, limit };
+      return { items, byElementType, total, limit };
     }
 
     // ── Recce-based metrics ──────────────────────────────────────────────────────────
@@ -682,20 +695,21 @@ export class AnalyticsService {
     const [rows, total, byElementType] = await Promise.all([
       this.prisma.recce.findMany({
         where,
-        // STABLE order (see the site branch): receivedAt is non-unique (and nullable), so the
-        // `id` tiebreaker makes the order total — no duplicate/skipped row across pages.
+        // STABLE TOTAL order for the keyset cursor: receivedAt is NON-null
+        // (schema `@default(now())`) but non-unique, so the `id` tiebreaker makes the
+        // (receivedAt DESC, id DESC) order total — the cursor seeks within it, so no row is
+        // duplicated or skipped across pages.
         orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
-        skip,
-        take: limit,
+        ...paging,
         select: AnalyticsService.RECCE_DRILL_SELECT,
       }),
       this.prisma.recce.count({ where }),
       // ReccePosm lines of the matched recces grouped by element type — the stage's scoped recce
-      // `where` reached through the parent relation (same scope, no new surface).
-      this.elementBreakdown({ recce: where }),
+      // `where` reached through the parent relation (same scope, no new surface). First page only.
+      wantBreakdown ? this.elementBreakdown({ recce: where }) : Promise.resolve([] as ElementTypeCount[]),
     ]);
     const items = rows.map((r) => this.recceItem(r));
-    return { items, byElementType, total, page, limit };
+    return { items, byElementType, total, limit };
   }
 
   // ── Enriched drill-down selects + row→item mappers (shared by drilldown + xlsx) ────
