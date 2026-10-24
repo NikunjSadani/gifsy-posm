@@ -32,12 +32,90 @@ export function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
+/** A normalised (0..1) markup shape parsed from a stored blob: a rectangle box, or a freehand path. */
+export type NormShape =
+  | { kind: 'rect'; rect: Rect }
+  | { kind: 'path'; points: { x: number; y: number }[] };
+
+/**
+ * A markup shape PLACED onto the fitted image rect, in slide inches, ready to stroke:
+ *  - `rect`  → a rectangle outline (`rect` is the inch rect to stroke).
+ *  - `path`  → a polyline (`box` is the enclosing fitted-image rect; `points` are LOCAL to that box,
+ *    i.e. inches from its top-left — which is exactly what pptxgenjs custom-geometry expects).
+ */
+export type PlacedShape =
+  | { kind: 'rect'; rect: Rect }
+  | { kind: 'path'; box: Rect; points: { x: number; y: number }[] };
+
+/**
+ * ALL shapes of a stored recce markup blob, normalised 0..1, in stored order — the faithful,
+ * per-shape view the slide renderer draws (two separate boxes stay two boxes; a freehand path stays
+ * a path). Mirrors the defensive parse in platform `@/lib/markup` (version-less legacy rects
+ * tolerated, coords clamped to 0..1, rect size clamped so it never spills past the image edge).
+ * Returns [] when there is nothing parseable. Degenerate shapes are filtered at PLACEMENT
+ * ({@link placeShape}), not here, so the parse stays faithful.
+ */
+export function markupShapes(markup: unknown): NormShape[] {
+  if (!markup || typeof markup !== 'object') return [];
+  const shapes = (markup as { shapes?: unknown }).shapes;
+  if (!Array.isArray(shapes)) return [];
+
+  const out: NormShape[] = [];
+  for (const raw of shapes) {
+    if (!raw || typeof raw !== 'object') continue;
+    const s = raw as Record<string, unknown>;
+    if (s.type === 'path' && Array.isArray(s.points)) {
+      const points: { x: number; y: number }[] = [];
+      for (const p of s.points) {
+        if (p && typeof p === 'object') {
+          const px = (p as { x?: unknown }).x;
+          const py = (p as { y?: unknown }).y;
+          if (typeof px === 'number' && typeof py === 'number') {
+            points.push({ x: clamp01(px), y: clamp01(py) });
+          }
+        }
+      }
+      if (points.length >= 2) out.push({ kind: 'path', points });
+    } else if (
+      (s.type === 'rect' || s.type === undefined) &&
+      ['x', 'y', 'w', 'h'].every((k) => typeof s[k] === 'number')
+    ) {
+      const x = clamp01(s.x as number);
+      const y = clamp01(s.y as number);
+      // Clamp the size so the rect never spills past the image edge (mirrors FE `normalizeRect`).
+      const w = Math.min(clamp01(s.w as number), 1 - x);
+      const h = Math.min(clamp01(s.h as number), 1 - y);
+      out.push({ kind: 'rect', rect: { x, y, w, h } });
+    }
+  }
+  return out;
+}
+
+/**
+ * Place ONE normalised markup shape onto the fitted image rect, in slide inches. A rect maps onto the
+ * image via {@link placeBox}; a path becomes a polyline whose box is the image rect and whose points
+ * are local to it. Returns null for a degenerate shape that must not be drawn: a zero-width OR
+ * zero-height rect (a straight line, not a box — drawing it would emit a zero-area outline), or a
+ * path with fewer than two points.
+ */
+export function placeShape(img: Rect, shape: NormShape): PlacedShape | null {
+  if (shape.kind === 'rect') {
+    const r = shape.rect;
+    if (!(r.w > 0) || !(r.h > 0)) return null; // zero-area box → skip (never stroke a line as a rect)
+    return { kind: 'rect', rect: placeBox(img, r) };
+  }
+  if (shape.points.length < 2) return null;
+  // Points LOCAL to the image box (inches from its top-left); the renderer sets the shape box to `box`.
+  const points = shape.points.map((p) => ({ x: p.x * img.w, y: p.y * img.h }));
+  return { kind: 'path', box: { ...img }, points };
+}
+
 /**
  * The bounding box (normalised 0..1) of a stored recce markup blob, or null when there is nothing
  * meaningful to draw. Mirrors the defensive parse in platform `@/lib/markup` (version-less legacy
  * rects tolerated), but returns a single box: for a RECT shape its own extent, for a FREEHAND PATH
- * its points' bounding box (a best-effort box for a non-rectangular annotation, per the owner spec),
- * and for multiple shapes the UNION extent (a recce element is normally one box, so union == that box).
+ * its points' bounding box, and for multiple shapes the UNION extent. Retained as a pure helper;
+ * the slide renderer now draws EACH shape faithfully via {@link markupShapes} + {@link placeShape}.
  */
 export function markupBoundingBox(markup: unknown): Rect | null {
   if (!markup || typeof markup !== 'object') return null;
@@ -201,11 +279,12 @@ export interface PlanElementInput {
   image?: { dataUrl: string; natW: number; natH: number };
 }
 
-/** One laid-out element: an optional image + optional stroke box (markup) + a caption, all in inches. */
+/** One laid-out element: an optional image + each markup shape placed over it + a caption, all in inches. */
 export interface PlannedElement {
   dataUrl?: string;
   imageRect?: Rect;
-  boxRect?: Rect;
+  /** Every markup shape placed onto the fitted image rect (faithful per-shape; [] when no markup). */
+  boxes: PlacedShape[];
   caption: string;
   captionRect: Rect;
 }
@@ -320,13 +399,16 @@ export function planRecceSlide(opts: {
 
     if (!el.image) {
       // Present element but the photo could not be fetched/decoded — caption only (no crash).
-      return { caption: `${captionBase} (image unavailable)`, captionRect };
+      return { caption: `${captionBase} (image unavailable)`, captionRect, boxes: [] };
     }
 
     const imageRect = fitContain(el.image.natW, el.image.natH, imgBox);
-    const bbox = markupBoundingBox(el.markup);
-    const boxRect = bbox ? placeBox(imageRect, bbox) : undefined;
-    return { dataUrl: el.image.dataUrl, imageRect, boxRect, caption: captionBase, captionRect };
+    // Draw EACH markup shape faithfully (two boxes → two boxes; a freehand path → a polyline),
+    // dropping any degenerate shape; never collapse to a single union rectangle.
+    const boxes = markupShapes(el.markup)
+      .map((s) => placeShape(imageRect, s))
+      .filter((s): s is PlacedShape => s !== null);
+    return { dataUrl: el.image.dataUrl, imageRect, boxes, caption: captionBase, captionRect };
   });
 
   return { line1, line2, empty: false, elements: planned };

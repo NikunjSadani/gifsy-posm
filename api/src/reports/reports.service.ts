@@ -43,6 +43,12 @@ const OUTLET_EXPORT_BATCH = 1_000;
 const PPTX_HEADER_GREEN = '1F7A3D';
 /** Max outlets per PPT export (owner spec) — keeps full-res base64 images bounded in memory. */
 const PPTX_MAX_OUTLETS = 3;
+/**
+ * Longest-side cap (px) for an embedded recce photo. Phone photos are multi-thousand-px; downscaling
+ * to this before the JPEG re-encode bounds each slide's image bytes (and peak memory) for EVERY
+ * export, while staying sharp on a 13.33in-wide slide. Aspect is always preserved (scaleToFit).
+ */
+const PPTX_IMG_MAX_PX = 1280;
 
 /**
  * jimp image decoders, built ONCE from jimp's bundled default formats and used DIRECTLY (not via
@@ -900,11 +906,17 @@ export class ReportsService {
       for (const s of sites) if (s.code === code) ordered.push(s);
     }
 
+    // Bound the RESULTING sites, not just the codes: an un-assumed GIFSY platform-wide read can match
+    // the same code in >1 tenant (Site.code is unique only per tenant), so 3 codes could resolve to
+    // many sites. Cap to PPTX_MAX_OUTLETS in the deterministic (requested-code, then code+id) order
+    // above so a platform-wide export can never materialise more than 3 slides.
+    const capped = ordered.slice(0, PPTX_MAX_OUTLETS);
+
     const pptx = new PptxGenJS();
     pptx.defineLayout({ name: 'RECCE_WIDE', width: DEFAULT_SLIDE_LAYOUT.slideW, height: DEFAULT_SLIDE_LAYOUT.slideH });
     pptx.layout = 'RECCE_WIDE';
 
-    for (const site of ordered) {
+    for (const site of capped) {
       const plan = await this.buildOutletSlidePlan(user, site);
       this.renderRecceSlide(pptx, plan);
     }
@@ -1025,11 +1037,21 @@ export class ReportsService {
       const natW = img.bitmap.width;
       const natH = img.bitmap.height;
       if (!(natW > 0) || !(natH > 0)) return null;
+      // Downscale an oversized photo to a sane longest side BEFORE re-encoding, so the embedded JPEG
+      // (and the whole deck) stays bounded in size/memory for all exports. scaleToFit preserves
+      // aspect; the guard means a small photo is never upscaled. The natural aspect that the box math
+      // relies on is unchanged, so markup boxes still land correctly.
+      if (Math.max(natW, natH) > PPTX_IMG_MAX_PX) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (img as any).scaleToFit({ w: PPTX_IMG_MAX_PX, h: PPTX_IMG_MAX_PX });
+      }
+      const outW = img.bitmap.width;
+      const outH = img.bitmap.height;
       // Re-encode to JPEG so the embedded image is always a PowerPoint-supported format (webp/gif are
-      // normalised away), at a size close to the original photo.
+      // normalised away), at the (possibly downscaled) size.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const jpeg: Buffer = await (img as any).getBuffer('image/jpeg');
-      return { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`, natW, natH };
+      return { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`, natW: outW, natH: outH };
     } catch (e) {
       this.logger.warn(`pptx: could not embed photo ${key}: ${this.reason(e)}`);
       return null;
@@ -1098,17 +1120,36 @@ export class ReportsService {
           h: el.imageRect.h,
         });
       }
-      if (el.boxRect) {
-        // The element-placement box: a thin green outline, NO fill (object-fit: contain means the box
-        // is mapped onto the fitted image rect, so it lands exactly where the on-screen overlay draws).
-        slide.addShape(pptx.ShapeType.rect, {
-          x: el.boxRect.x,
-          y: el.boxRect.y,
-          w: el.boxRect.w,
-          h: el.boxRect.h,
-          fill: { type: 'none' },
-          line: { color: PPTX_HEADER_GREEN, width: 1.5 },
-        });
+      // Draw EACH markup shape faithfully over the photo (matching the FE MarkupOverlay): a rect is a
+      // thin green rectangle outline; a freehand path is a green polyline via custom geometry. NO fill.
+      // object-fit: contain means every shape is mapped onto the fitted image rect, so each lands
+      // exactly where the on-screen overlay draws. Degenerate shapes were dropped by the planner.
+      for (const box of el.boxes) {
+        if (box.kind === 'rect') {
+          slide.addShape(pptx.ShapeType.rect, {
+            x: box.rect.x,
+            y: box.rect.y,
+            w: box.rect.w,
+            h: box.rect.h,
+            fill: { type: 'none' },
+            line: { color: PPTX_HEADER_GREEN, width: 1.5 },
+          });
+        } else {
+          // custom-geometry polyline — the shape box is the fitted image rect and the points are
+          // LOCAL to it (inches from its top-left), which is what pptxgenjs expects. `custGeom` is a
+          // real runtime ShapeType (absent from the shipped .d.ts enum), so cast the literal.
+          slide.addShape('custGeom' as unknown as PptxGenJS.ShapeType, {
+            x: box.box.x,
+            y: box.box.y,
+            w: box.box.w,
+            h: box.box.h,
+            fill: { type: 'none' },
+            line: { color: PPTX_HEADER_GREEN, width: 1.5 },
+            points: box.points.map((p, i) =>
+              i === 0 ? { x: p.x, y: p.y, moveTo: true } : { x: p.x, y: p.y },
+            ),
+          });
+        }
       }
       slide.addText(el.caption, {
         x: el.captionRect.x,

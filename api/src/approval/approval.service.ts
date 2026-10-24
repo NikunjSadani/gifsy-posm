@@ -577,6 +577,9 @@ export class ApprovalService {
     id: true,
     status: true,
     capturedAt: true,
+    // The "Recce Date" column must carry the RECCE's capture date even on install-stage rows, so pull
+    // it from the installation→recce relation (Installation.recceId is unique → exactly one recce).
+    recce: { select: { capturedAt: true } },
     site: { select: { code: true, name: true, town: true, vendor: { select: { name: true } } } },
     posms: {
       select: { reccePosm: { select: { dimensions: true, posmType: { select: { name: true } } } } },
@@ -626,7 +629,8 @@ export class ApprovalService {
       town: i.site.town,
       recceId: null,
       status: i.status,
-      recceDate: i.capturedAt ?? null,
+      // "Recce Date" = the RECCE's capture date (not the install's), matching recceItem's derivation.
+      recceDate: i.recce?.capturedAt ?? null,
       vendorName: i.site.vendor?.name ?? null,
       elementSummary,
       dimensions,

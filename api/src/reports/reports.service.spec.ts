@@ -769,6 +769,11 @@ const hasImage = (slide: unknown): boolean => slideObjects(slide).some((o) => o.
 // but carry a `text` array, so the `text == null` check isolates the real element-placement box.
 const hasRectBox = (slide: unknown): boolean =>
   slideObjects(slide).some((o) => o.shape === 'rect' && o.text == null);
+// A freehand path renders as a custom-geometry polyline (`shape:'custGeom'` with a `points` array).
+const rectBoxCount = (slide: unknown): number =>
+  slideObjects(slide).filter((o) => o.shape === 'rect' && o.text == null).length;
+const polylineShapes = (slide: unknown): any[] =>
+  slideObjects(slide).filter((o) => o.shape === 'custGeom' && Array.isArray(o.options?.points));
 const slideText = (slide: unknown): string =>
   slideObjects(slide)
     .filter((o) => o._type === 'text' && o.text)

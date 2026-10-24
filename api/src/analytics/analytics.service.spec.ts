@@ -792,6 +792,7 @@ describe('AnalyticsService.drilldownXlsx — scoped enriched drill-down export',
         id: 'i1',
         status: 'AUDIT_APPROVED',
         capturedAt: new Date('2026-10-19T00:00:00.000Z'),
+        recce: { capturedAt: new Date('2026-10-15T00:00:00.000Z') },
         site: { code: 'C9', name: 'Nine', town: null, vendor: { name: 'V9' } },
         posms: [{ reccePosm: { dimensions: { width: 2, height: 2, unit: 'ft' }, posmType: { name: 'Shelf' } } }],
       },
@@ -799,7 +800,8 @@ describe('AnalyticsService.drilldownXlsx — scoped enriched drill-down export',
     const svc = new AnalyticsService(prisma);
     const file = svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
     const rows = await readStreamedRows(file);
-    expect(rows[1]).toEqual(['C9', 'Nine', '', 'V9', 'Shelf', '2 × 2 ft', '2026-10-19', 'Audited']);
+    // recceDate must be the RECCE's capture date (2026-10-15), NOT the install's (2026-10-19).
+    expect(rows[1]).toEqual(['C9', 'Nine', '', 'V9', 'Shelf', '2 × 2 ft', '2026-10-15', 'Audited']);
     expect(fns.installation.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'AUDIT_APPROVED' });
   });
 });

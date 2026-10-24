@@ -1,5 +1,7 @@
 import {
   markupBoundingBox,
+  markupShapes,
+  placeShape,
   fitContain,
   placeBox,
   pptxTitleLine1,
@@ -60,6 +62,79 @@ describe('markupBoundingBox', () => {
     expect(markupBoundingBox({})).toBeNull();
     expect(markupBoundingBox({ version: 1, shapes: 'nope' })).toBeNull();
     expect(markupBoundingBox({ version: 1, shapes: [{ type: 'rect' }] })).toBeNull(); // no coords
+  });
+});
+
+describe('markupShapes — faithful per-shape parse (FIX 1)', () => {
+  it('returns a single rect verbatim (the common case, unchanged)', () => {
+    const shapes = markupShapes({ version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] });
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0]).toEqual({ kind: 'rect', rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.25 } });
+  });
+
+  it('keeps TWO separate rects as two shapes (never a union)', () => {
+    const shapes = markupShapes({
+      version: 1,
+      shapes: [
+        { type: 'rect', x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+        { type: 'rect', x: 0.5, y: 0.6, w: 0.2, h: 0.2 },
+      ],
+    });
+    expect(shapes).toEqual([
+      { kind: 'rect', rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } },
+      { kind: 'rect', rect: { x: 0.5, y: 0.6, w: 0.2, h: 0.2 } },
+    ]);
+  });
+
+  it('keeps a freehand path as a path shape with its clamped points', () => {
+    const shapes = markupShapes({
+      version: 1,
+      shapes: [{ type: 'path', points: [{ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.1 }, { x: 0.4, y: 0.5 }] }],
+    });
+    expect(shapes).toEqual([
+      { kind: 'path', points: [{ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.1 }, { x: 0.4, y: 0.5 }] },
+    ]);
+  });
+
+  it('tolerates a legacy type-less rect and clamps size past the edge', () => {
+    expect(markupShapes({ version: 1, shapes: [{ x: 0.8, y: 0, w: 0.5, h: 0.5 }] })).toEqual([
+      // w clamped to 1 - x = 0.2 so the rect never spills past the image edge
+      { kind: 'rect', rect: { x: 0.8, y: 0, w: 1 - 0.8, h: 0.5 } },
+    ]);
+  });
+
+  it('returns [] for absent / malformed markup', () => {
+    expect(markupShapes(null)).toEqual([]);
+    expect(markupShapes({})).toEqual([]);
+    expect(markupShapes({ version: 1, shapes: 'nope' })).toEqual([]);
+  });
+});
+
+describe('placeShape — per-shape placement onto the fitted image rect (FIX 1 + FIX 4)', () => {
+  const img: Rect = { x: 2, y: 1, w: 6, h: 4 };
+
+  it('maps a rect onto the image rect (same as placeBox)', () => {
+    const placed = placeShape(img, { kind: 'rect', rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.25 } });
+    expect(placed).toEqual({ kind: 'rect', rect: placeBox(img, { x: 0.1, y: 0.2, w: 0.3, h: 0.25 }) });
+  });
+
+  it('maps a path to a polyline on the image box with LOCAL points (inches from its top-left)', () => {
+    const placed = placeShape(img, { kind: 'path', points: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }] });
+    expect(placed).toEqual({
+      kind: 'path',
+      box: { x: 2, y: 1, w: 6, h: 4 },
+      // local = (px·w, py·h): (0,0) and (0.5·6, 1·4) = (3, 4)
+      points: [{ x: 0, y: 0 }, { x: 3, y: 4 }],
+    });
+  });
+
+  it('FIX 4: skips a zero-width OR zero-height rect (a straight line, not a box)', () => {
+    expect(placeShape(img, { kind: 'rect', rect: { x: 0.1, y: 0.2, w: 0, h: 0.25 } })).toBeNull();
+    expect(placeShape(img, { kind: 'rect', rect: { x: 0.1, y: 0.2, w: 0.3, h: 0 } })).toBeNull();
+  });
+
+  it('skips a path with fewer than two points', () => {
+    expect(placeShape(img, { kind: 'path', points: [{ x: 0.1, y: 0.1 }] })).toBeNull();
   });
 });
 
@@ -162,14 +237,58 @@ describe('planRecceSlide', () => {
     const imgBox: Rect = { x: L.leftX, y: L.contentTop, w: L.leftW, h: cellH - L.captionH };
     const fitted = fitContain(200, 100, imgBox);
     expect(el.imageRect).toEqual(fitted);
-    // Compare against the SAME markup-bbox→placeBox pipeline the planner uses (identical float path).
-    expect(el.boxRect).toEqual(placeBox(fitted, markupBoundingBox(markup)!));
+    // A single rect markup → exactly one placed rect box (common case unchanged): the markup rect
+    // mapped onto the fitted image rect.
+    expect(el.boxes).toHaveLength(1);
+    expect(el.boxes[0]).toEqual({ kind: 'rect', rect: placeBox(fitted, { x: 0.1, y: 0.2, w: 0.3, h: 0.25 }) });
 
     // Header line 2 carries the GPS hyperlink run.
     expect(plan.line2.some((s) => s.link?.includes('google.com/maps'))).toBe(true);
   });
 
-  it('stacks two elements and omits the box when an element has no markup', () => {
+  it('draws TWO separate rects as two boxes, each placed on the fitted image rect (FIX 1)', () => {
+    const markup = {
+      version: 1,
+      shapes: [
+        { type: 'rect', x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+        { type: 'rect', x: 0.6, y: 0.6, w: 0.2, h: 0.2 },
+      ],
+    };
+    const plan = planRecceSlide({
+      outletName: 'Shop', town: null, state: null, recceDate: null, geo: null,
+      elements: [{ slotNo: 1, posmTypeName: 'Board', dimsInner: null, markup, image: { dataUrl: 'd1', natW: 100, natH: 100 } }],
+    });
+    const el = plan.elements[0];
+    const fitted = el.imageRect!;
+    expect(el.boxes).toEqual([
+      { kind: 'rect', rect: placeBox(fitted, { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }) },
+      { kind: 'rect', rect: placeBox(fitted, { x: 0.6, y: 0.6, w: 0.2, h: 0.2 }) },
+    ]);
+  });
+
+  it('draws a freehand path as a polyline box, not a union rectangle (FIX 1)', () => {
+    const markup = { version: 1, shapes: [{ type: 'path', points: [{ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.1 }, { x: 0.4, y: 0.5 }] }] };
+    const plan = planRecceSlide({
+      outletName: 'Shop', town: null, state: null, recceDate: null, geo: null,
+      elements: [{ slotNo: 1, posmTypeName: 'Board', dimsInner: null, markup, image: { dataUrl: 'd1', natW: 100, natH: 100 } }],
+    });
+    const el = plan.elements[0];
+    expect(el.boxes).toHaveLength(1);
+    const box = el.boxes[0];
+    expect(box.kind).toBe('path');
+    if (box.kind === 'path') {
+      expect(box.box).toEqual(el.imageRect);
+      // local points = (px·w, py·h) on the fitted image rect
+      const f = el.imageRect!;
+      expect(box.points).toEqual([
+        { x: 0.2 * f.w, y: 0.3 * f.h },
+        { x: 0.6 * f.w, y: 0.1 * f.h },
+        { x: 0.4 * f.w, y: 0.5 * f.h },
+      ]);
+    }
+  });
+
+  it('stacks two elements and omits boxes when an element has no markup', () => {
     const plan = planRecceSlide({
       outletName: 'Shop', town: null, state: null, recceDate: null, geo: null,
       elements: [
@@ -178,8 +297,8 @@ describe('planRecceSlide', () => {
       ],
     });
     expect(plan.elements).toHaveLength(2);
-    expect(plan.elements[0].boxRect).toBeDefined();
-    expect(plan.elements[1].boxRect).toBeUndefined(); // no markup → no box
+    expect(plan.elements[0].boxes).toHaveLength(1);
+    expect(plan.elements[1].boxes).toEqual([]); // no markup → no boxes
     // The second cell sits strictly below the first (stacked, not overlapping).
     expect(plan.elements[1].captionRect.y).toBeGreaterThan(plan.elements[0].captionRect.y);
   });
@@ -191,6 +310,7 @@ describe('planRecceSlide', () => {
     });
     expect(plan.elements[0].dataUrl).toBeUndefined();
     expect(plan.elements[0].imageRect).toBeUndefined();
+    expect(plan.elements[0].boxes).toEqual([]);
     expect(plan.elements[0].caption).toBe('Board — 24 X 12 in (image unavailable)');
   });
 });
