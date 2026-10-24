@@ -33,12 +33,30 @@ const sampleSite = {
       capturedAt: new Date('2026-08-28T02:30:00Z'), receivedAt: new Date('2026-08-28T02:30:00Z'),
       captureLat: 19.24, captureLng: 73.13, reviewedAt: null, hoReviewedAt: null,
       submittedBy: { promoterCode: 'P1' }, approvedBy: null, hoReviewedBy: null,
+      // installation + per-element install photo (installed mode); slot 2 has a recce photo but NO
+      // install (exercises the "Awaiting installation" placeholder on the right).
+      installation: {
+        status: 'AUDIT_APPROVED',
+        capturedAt: new Date('2026-09-02T04:00:00Z'), receivedAt: new Date('2026-09-02T04:00:00Z'),
+        submittedBy: { promoterCode: 'INST1' }, auditedBy: { name: 'Auditor A' }, auditedAt: new Date('2026-09-03T04:00:00Z'),
+      },
       posms: [
         {
           id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' },
           dimensions: { width: 24, height: 12, unit: 'in' },
           photo: { key: 'posm-media/c1/x.jpg', geo: { lat: 19.2401, lng: 73.1301 } },
           markup: { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] },
+          installPosm: {
+            photo: { key: 'posm-media/c1/x-install.jpg', geo: { lat: 19.2402, lng: 73.1302 } },
+            geoFenceOk: true, distanceFromRecce: 3.2,
+          },
+        },
+        {
+          id: 'rp2', slotNo: 2, posmType: { name: 'Danglers' },
+          dimensions: { width: 6, height: 2, unit: 'in' },
+          photo: { key: 'posm-media/c1/y.jpg' },
+          markup: null,
+          installPosm: null, // not installed yet → right side is an "Awaiting installation" placeholder
         },
       ],
     },
@@ -71,7 +89,22 @@ try {
     assert(threw, `expected a 400 for outletCodes="${bad}"`);
   }
 
-  console.log(`PPTX BOOT SMOKE: PASS — ${buf.length} bytes, slide1.xml + embedded image present, validation 400s OK`);
+  // INSTALLED mode — the before/after deck must generate end-to-end under real Node, embedding BOTH
+  // the recce photo (left) and the install photo (right) for the installed element. slot 1 → recce +
+  // install (2 images); slot 2 → recce only + an "Awaiting installation" placeholder (no install img).
+  const instBuf = await svc.outletExecutionPptx(admin, 'A8', 'installed');
+  assert(Buffer.isBuffer(instBuf) && instBuf.length > 1000, `installed pptx buffer looks too small (${instBuf?.length})`);
+  assert.strictEqual(instBuf.subarray(0, 2).toString('latin1'), 'PK', 'installed buffer is not a zip (no PK header)');
+  const instText = instBuf.toString('latin1');
+  assert(/ppt\/slides\/slide1\.xml/.test(instText), 'installed deck: no slide1.xml');
+  // At least TWO embedded media images (recce-left + install-right for slot 1) prove the before/after.
+  const mediaCount = (instText.match(/ppt\/media\/image[-0-9]*\.(jpe?g|png)/g) ?? []).length;
+  assert(mediaCount >= 2, `installed deck: expected >=2 embedded images (before/after), saw ${mediaCount}`);
+
+  console.log(
+    `PPTX BOOT SMOKE: PASS — recce ${buf.length} bytes + installed ${instBuf.length} bytes ` +
+    `(${mediaCount} media images / before+after), slide1.xml present, validation 400s OK`,
+  );
   process.exit(0);
 } catch (err) {
   console.error('PPTX BOOT SMOKE: FAIL —', err?.stack || err);

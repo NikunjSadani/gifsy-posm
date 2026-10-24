@@ -10,6 +10,7 @@ import {
   mapsUrl,
   buildHeaderLine2,
   planRecceSlide,
+  planInstalledSlide,
   DEFAULT_SLIDE_LAYOUT,
   type Rect,
 } from './outlet-pptx.helper';
@@ -312,5 +313,110 @@ describe('planRecceSlide', () => {
     expect(plan.elements[0].imageRect).toBeUndefined();
     expect(plan.elements[0].boxes).toEqual([]);
     expect(plan.elements[0].caption).toBe('Board — 24 X 12 in (image unavailable)');
+  });
+
+  it('the recce-only layout never populates install fields (installed seam stays off)', () => {
+    const plan = planRecceSlide({
+      outletName: 'Shop', town: null, state: null, recceDate: null, geo: null,
+      elements: [{ slotNo: 1, posmTypeName: 'Board', dimsInner: null, markup: null, image: { dataUrl: 'd1', natW: 100, natH: 100 } }],
+    });
+    const el = plan.elements[0];
+    expect(el.installDataUrl).toBeUndefined();
+    expect(el.installImageRect).toBeUndefined();
+    expect(el.installPlaceholder).toBeUndefined();
+    expect(el.installCaption).toBeUndefined();
+  });
+});
+
+describe('planInstalledSlide — before/after layout (Phase C)', () => {
+  const L = DEFAULT_SLIDE_LAYOUT;
+
+  it('marks the slide empty when there are no elements', () => {
+    const plan = planInstalledSlide({
+      outletName: 'Shop', town: 'Pune', state: 'MH', recceDate: null, installDate: null, geo: null, elements: [],
+    });
+    expect(plan.empty).toBe(true);
+    expect(plan.elements).toHaveLength(0);
+  });
+
+  it('lays the recce photo (with its markup box) on the LEFT and the install photo (NO box) on the RIGHT', () => {
+    const markup = { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] };
+    const plan = planInstalledSlide({
+      outletName: 'Shop', town: 'Pune', state: 'MH',
+      recceDate: new Date('2026-08-27T20:00:00Z'),
+      installDate: new Date('2026-09-01T20:00:00Z'),
+      geo: { lat: 19.24, lng: 73.13 },
+      elements: [
+        {
+          slotNo: 1, posmTypeName: 'Standard Board', dimsInner: '24 X 12 in', markup,
+          image: { dataUrl: 'recce-data', natW: 200, natH: 100 },
+          installImage: { dataUrl: 'install-data', natW: 200, natH: 100 },
+        },
+      ],
+    });
+    expect(plan.empty).toBe(false);
+    const el = plan.elements[0];
+
+    // LEFT = recce: image in the left column, a placed markup box, "Before · Recce" caption.
+    expect(el.dataUrl).toBe('recce-data');
+    expect(el.imageRect!.x).toBeCloseTo(fitContain(200, 100, { x: L.leftX, y: L.contentTop, w: L.leftW, h: (L.contentBottom - L.contentTop) - L.captionH }).x);
+    expect(el.boxes).toHaveLength(1);
+    expect(el.boxes[0].kind).toBe('rect');
+    expect(el.caption).toBe('Standard Board — 24 X 12 in · Before · Recce');
+    expect(el.captionRect.x).toBe(L.leftX);
+
+    // RIGHT = install: image in the right column, NO box on the install side, "After · Installed" caption.
+    expect(el.installDataUrl).toBe('install-data');
+    expect(el.installImageRect!.x).toBeGreaterThanOrEqual(L.rightX); // right column
+    expect(el.installPlaceholder).toBeUndefined();
+    expect(el.installCaption).toBe('After · Installed');
+    expect(el.installCaptionRect!.x).toBe(L.rightX);
+
+    // The install date is appended to header line 2 (alongside the recce date + GPS). Use
+    // pptxDateLabel so the month abbreviation matches the runtime Intl output (en-GB: "Sept", not "Sep").
+    expect(plan.line2.map((s) => s.text).join('')).toContain(`Installed ${pptxDateLabel(new Date('2026-09-01T20:00:00Z'))}`);
+    expect(plan.line2.some((s) => s.link?.includes('google.com/maps'))).toBe(true);
+  });
+
+  it('shows the recce side + an "Awaiting installation" placeholder on the right when not yet installed', () => {
+    const plan = planInstalledSlide({
+      outletName: 'Shop', town: null, state: null, recceDate: null, installDate: null, geo: null,
+      elements: [
+        { slotNo: 1, posmTypeName: 'Board', dimsInner: null, markup: null, image: { dataUrl: 'recce-only', natW: 100, natH: 100 } },
+      ],
+    });
+    const el = plan.elements[0];
+    expect(el.dataUrl).toBe('recce-only'); // recce side is still shown
+    expect(el.installDataUrl).toBeUndefined();
+    expect(el.installPlaceholder).toBe(true);
+    expect(el.installImageRect).toEqual({ x: L.rightX, y: expect.any(Number), w: L.rightW, h: expect.any(Number) });
+    expect(el.installCaption).toBe('Awaiting installation');
+  });
+
+  it('notes an unavailable recce image on the left but still planning the install side', () => {
+    const plan = planInstalledSlide({
+      outletName: 'Shop', town: null, state: null, recceDate: null, installDate: null, geo: null,
+      elements: [
+        { slotNo: 1, posmTypeName: 'Board', dimsInner: '2 X 2 in', markup: null, installImage: { dataUrl: 'install', natW: 100, natH: 100 } },
+      ],
+    });
+    const el = plan.elements[0];
+    expect(el.caption).toBe('Board — 2 X 2 in · Before · Recce (image unavailable)');
+    expect(el.dataUrl).toBeUndefined();
+    expect(el.installDataUrl).toBe('install');
+    expect(el.installCaption).toBe('After · Installed');
+  });
+
+  it('stacks two elements; the second row sits strictly below the first on BOTH columns', () => {
+    const plan = planInstalledSlide({
+      outletName: 'Shop', town: null, state: null, recceDate: null, installDate: null, geo: null,
+      elements: [
+        { slotNo: 1, posmTypeName: 'A', dimsInner: null, markup: null, image: { dataUrl: 'a', natW: 100, natH: 100 }, installImage: { dataUrl: 'ai', natW: 100, natH: 100 } },
+        { slotNo: 2, posmTypeName: 'B', dimsInner: null, markup: null, image: { dataUrl: 'b', natW: 100, natH: 100 } },
+      ],
+    });
+    expect(plan.elements).toHaveLength(2);
+    expect(plan.elements[1].captionRect.y).toBeGreaterThan(plan.elements[0].captionRect.y);
+    expect(plan.elements[1].installCaptionRect!.y).toBeGreaterThan(plan.elements[0].installCaptionRect!.y);
   });
 });

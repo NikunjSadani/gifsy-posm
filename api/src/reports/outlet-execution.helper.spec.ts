@@ -2,10 +2,16 @@ import {
   buildOutletExecutionRows,
   buildRecceRow,
   CURATED_COLUMNS,
+  INSTALL_COLUMNS,
+  INSTALL_AUDIT_COLUMNS,
+  columnsForMode,
   dimsLabel,
   readPhoto,
   fmtDateTime,
   recceStatusCell,
+  elementInstallStatusCell,
+  installAuditStatusCell,
+  beforeAfterGeoLabel,
   rsLabel,
   sourceLabel,
   isPlausibleOrigin,
@@ -14,6 +20,7 @@ import {
   type ReportColumn,
   type RepSite,
   type RepRecce,
+  type RepInstallation,
 } from './outlet-execution.helper';
 
 // Durable rule: NEVER hardcode a fixed date in a test. All timestamps are derived from `now` so the
@@ -419,5 +426,162 @@ describe('buildOutletExecutionRows — mixed outlet (1 app + 2 manual → 3 rows
       expect(r.outletCode).toBe('M9');
       expect(r.cells.outletName).toEqual({ t: 'text', v: 'Multi Outlet' });
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// INSTALLED VARIANT (Phase C) — columns, cells, filter, and recce-mode non-regression
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+const sampleInstallation = (over: Partial<RepInstallation> = {}): RepInstallation => ({
+  status: 'AUDIT_APPROVED',
+  capturedAt: daysAgo(1),
+  receivedAt: daysAgo(1),
+  submittedBy: { promoterCode: 'INST9' },
+  auditedBy: { name: 'Auditor A' },
+  auditedAt: now,
+  ...over,
+});
+
+/** An app recce whose slot-1 element IS installed (with geo+distance) and slot-2 element is NOT. */
+const installedRecce = (over: Partial<RepRecce> = {}): RepRecce => ({
+  ...appRecce(),
+  installation: sampleInstallation(),
+  posms: [
+    {
+      id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' }, dimensions: { width: 24, height: 12, unit: 'in' },
+      photo: { key: 'r1', geo: { lat: 19.2401, lng: 73.1301 } },
+      installPosm: { photo: { key: 'i1', geo: { lat: 19.2402, lng: 73.1302 } }, geoFenceOk: true, distanceFromRecce: 3.2 },
+    },
+    {
+      id: 'rp2', slotNo: 2, posmType: { name: 'Danglers' }, dimensions: {},
+      photo: { key: 'r2' }, installPosm: null, // element present in recce, not installed yet
+    },
+  ],
+  ...over,
+});
+
+const installedSite = (over: Partial<RepSite> = {}): RepSite => ({ ...fullSite(), recces: [installedRecce()], ...over });
+
+describe('columnsForMode — the installed column contract', () => {
+  it('recce mode returns exactly CURATED_COLUMNS (unchanged)', () => {
+    expect(columnsForMode('recce')).toBe(CURATED_COLUMNS);
+  });
+
+  it('installed mode inserts the install group BEFORE overall and appends install audit after the recce audit', () => {
+    const cols = columnsForMode('installed');
+    const keys = cols.map((c) => c.key);
+    // The install group sits directly before `recceStatus` (the overall column), in its declared order.
+    const installKeys = INSTALL_COLUMNS.map((c) => c.key);
+    const recceIdx = keys.indexOf('recceStatus');
+    expect(keys.slice(recceIdx - installKeys.length, recceIdx)).toEqual(installKeys);
+    // The install audit columns are the final two, excel-only, in the audit group.
+    expect(keys.slice(-2)).toEqual(['installAuditedBy', 'installAuditedOn']);
+    expect(cols.slice(-2).every((c) => c.group === 'audit' && c.excelOnly === true)).toBe(true);
+    // Every install-group column is in the `install` group and NOT excel-only (the FE table renders them).
+    expect(INSTALL_COLUMNS.every((c) => c.group === 'install' && !c.excelOnly)).toBe(true);
+    // All recce columns are still present (superset).
+    for (const c of CURATED_COLUMNS) expect(keys).toContain(c.key);
+  });
+
+  it('every row in installed mode carries a cell for every installed column', () => {
+    const [row] = buildOutletExecutionRows(installedSite(), 'installed');
+    expect(Object.keys(row.cells).sort()).toEqual(columnsForMode('installed').map((c) => c.key).sort());
+  });
+});
+
+describe('installed-mode cell helpers', () => {
+  it('elementInstallStatusCell: Installed(green) / Not installed(amber) / empty', () => {
+    expect(elementInstallStatusCell(true, true)).toEqual({ t: 'status', v: 'Installed', tone: 'approved' });
+    expect(elementInstallStatusCell(true, false)).toEqual({ t: 'status', v: 'Not installed', tone: 'pending' });
+    expect(elementInstallStatusCell(false, false)).toEqual({ t: 'empty' });
+  });
+
+  it('installAuditStatusCell maps the installation status to a chip, empty when no installation', () => {
+    expect(installAuditStatusCell(null)).toEqual({ t: 'empty' });
+    expect(installAuditStatusCell({ status: 'SUBMITTED' } as RepInstallation)).toEqual({ t: 'status', v: 'Submitted', tone: 'pending' });
+    expect(installAuditStatusCell({ status: 'AUDIT_APPROVED' } as RepInstallation)).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+    expect(installAuditStatusCell({ status: 'AUDIT_REJECTED' } as RepInstallation)).toEqual({ t: 'status', v: 'Audit rejected', tone: 'rejected' });
+  });
+
+  it('beforeAfterGeoLabel joins distance + geo-fence verdict (null verdict omitted)', () => {
+    expect(beforeAfterGeoLabel(null)).toBe('');
+    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 3.2, geoFenceOk: true })).toBe('3.2 m · Geo-fence pass');
+    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 12, geoFenceOk: false })).toBe('12 m · Geo-fence fail');
+    expect(beforeAfterGeoLabel({ photo: {}, geoFenceOk: null })).toBe(''); // unverifiable → nothing
+    expect(beforeAfterGeoLabel({ photo: {}, distanceFromRecce: 5 })).toBe('5 m'); // distance only
+  });
+});
+
+describe('buildRecceRow — installed cells', () => {
+  it('slot 1 installed → "Installed" chip + an install photo cell; slot 2 not installed → amber + empty photo', () => {
+    const { cells } = buildRecceRow(installedSite(), installedRecce(), 'installed');
+    expect(cells.el1InstallStatus).toEqual({ t: 'status', v: 'Installed', tone: 'approved' });
+    expect(cells.el1InstallPhoto).toEqual({ t: 'photo', key: 'i1', viewPath: '/v1/media/view?key=i1', lat: 19.2402, lng: 73.1302 });
+    expect(cells.el2InstallStatus).toEqual({ t: 'status', v: 'Not installed', tone: 'pending' });
+    expect(cells.el2InstallPhoto).toEqual({ t: 'empty' });
+  });
+
+  it('install metadata: date (IST), installer promoter, audit chip, before/after geo', () => {
+    const { cells } = buildRecceRow(installedSite(), installedRecce(), 'installed');
+    expect(cells.installDate).toEqual({ t: 'text', v: fmtDateTime(daysAgo(1)) });
+    expect(cells.installer).toEqual({ t: 'text', v: 'INST9' });
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+    expect(cells.beforeAfterGeo).toEqual({ t: 'text', v: '3.2 m · Geo-fence pass' });
+  });
+
+  it('excel-only install audit trail filled on a terminal audit outcome', () => {
+    const { cells } = buildRecceRow(installedSite(), installedRecce(), 'installed');
+    expect(cells.installAuditedBy).toEqual({ t: 'text', v: 'Auditor A' });
+    expect(cells.installAuditedOn).toEqual({ t: 'text', v: fmtDateTime(now) });
+  });
+
+  it('a still-SUBMITTED installation leaves the excel-only install audit trail empty', () => {
+    const recce = installedRecce({ installation: sampleInstallation({ status: 'SUBMITTED', auditedBy: null, auditedAt: null }) });
+    const { cells } = buildRecceRow({ ...installedSite(), recces: [recce] }, recce, 'installed');
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Submitted', tone: 'pending' });
+    expect(cells.installAuditedBy).toEqual({ t: 'empty' });
+    expect(cells.installAuditedOn).toEqual({ t: 'empty' });
+  });
+
+  it('a ONE-element installed recce: slot-2 install cells are empty (never "Not installed")', () => {
+    const recce = installedRecce();
+    recce.posms = [recce.posms[0]]; // only slot 1
+    const { cells } = buildRecceRow({ ...installedSite(), recces: [recce] }, recce, 'installed');
+    expect(cells.el1InstallStatus).toEqual({ t: 'status', v: 'Installed', tone: 'approved' });
+    for (const k of ['el2InstallStatus', 'el2InstallPhoto']) expect(cells[k]).toEqual({ t: 'empty' });
+  });
+
+  it('recce mode does NOT add any install keys (byte-identical to before)', () => {
+    const { cells } = buildRecceRow(installedSite(), installedRecce(), 'recce');
+    for (const k of ['el1InstallStatus', 'el1InstallPhoto', 'installDate', 'installer', 'auditStatus', 'beforeAfterGeo', 'installAuditedBy']) {
+      expect(cells[k]).toBeUndefined();
+    }
+    // The recce cells themselves are unchanged.
+    expect(cells.recceStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+    expect(Object.keys(cells).sort()).toEqual(CURATED_COLUMNS.map((c) => c.key).sort());
+  });
+});
+
+describe('buildOutletExecutionRows — installed-mode filter (only recces WITH an installation)', () => {
+  it('keeps only recces that have an installation; drops the rest', () => {
+    const withInstall = installedRecce({ id: 'recInstalled' });
+    const noInstall: RepRecce = { ...appRecce(), id: 'recNoInstall', installation: null };
+    const site: RepSite = { ...fullSite(), recces: [withInstall, noInstall] };
+    const rows = buildOutletExecutionRows(site, 'installed');
+    expect(rows.map((r) => r.id)).toEqual(['recInstalled']);
+  });
+
+  it('an outlet with NO installed recce yields ZERO rows in installed mode (vs one in recce mode)', () => {
+    const noInstall: RepRecce = { ...appRecce(), id: 'recNoInstall', installation: null };
+    const site: RepSite = { ...fullSite(), recces: [noInstall] };
+    expect(buildOutletExecutionRows(site, 'installed')).toHaveLength(0);
+    expect(buildOutletExecutionRows(site, 'recce')).toHaveLength(1);
+  });
+
+  it('a no-recce outlet still yields one row in recce mode, zero in installed mode', () => {
+    const bare: RepSite = { ...fullSite(), recces: [] };
+    expect(buildOutletExecutionRows(bare, 'recce')).toHaveLength(1);
+    expect(buildOutletExecutionRows(bare, 'installed')).toHaveLength(0);
   });
 });

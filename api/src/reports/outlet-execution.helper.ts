@@ -20,15 +20,22 @@
 
 // ── Column + cell contract (authoritative — the FE builds to this verbatim) ────────────────────
 
-/** The display group a column belongs to (drives the FE's grouped header). */
+/** The display group a column belongs to (drives the FE's grouped header). `install` is the
+ *  installed-variant group (appended after the element groups, before `overall`); it is absent from
+ *  the recce-mode column set. */
 export type ColumnGroup =
   | 'outlet'
   | 'location'
   | 'profile'
   | 'element1'
   | 'element2'
+  | 'install'
   | 'overall'
   | 'audit';
+
+/** The report variant. `recce` = the original recce report; `installed` = the installed variant that
+ *  adds the per-element install status + photo, the install metadata and the install audit trail. */
+export type ReportMode = 'recce' | 'installed';
 
 /** One column of the report. `pinned` freezes the outlet identity to the left; `excelOnly` columns
  *  are omitted by the on-screen table but ALWAYS written to the .xlsx export. */
@@ -94,10 +101,58 @@ export const CURATED_COLUMNS: ReportColumn[] = [
   { key: 'hoApprovedOn', label: 'HO Approved On', group: 'audit', excelOnly: true },
 ];
 
+/**
+ * The installed-variant columns — a new `install` group inserted BEFORE the `overall` column, with
+ * per-element install status + photo, then the install metadata (date / installer / audit status /
+ * before↔after geo). Element 1/2 map to the recce POSM slots 1/2 (install photo via the 1:1
+ * InstallPosm linked to each ReccePosm).
+ */
+export const INSTALL_COLUMNS: ReportColumn[] = [
+  { key: 'el1InstallStatus', label: 'Element 1 Install', group: 'install' },
+  { key: 'el1InstallPhoto', label: 'Element 1 Install Image', group: 'install' },
+  { key: 'el2InstallStatus', label: 'Element 2 Install', group: 'install' },
+  { key: 'el2InstallPhoto', label: 'Element 2 Install Image', group: 'install' },
+  { key: 'installDate', label: 'Install Date', group: 'install' },
+  { key: 'installer', label: 'Installer ID', group: 'install' },
+  { key: 'auditStatus', label: 'Audit Status', group: 'install' },
+  { key: 'beforeAfterGeo', label: 'Before/After Geo', group: 'install' },
+];
+
+/** The install audit trail — EXCEL ONLY, appended to the `audit` group after the recce approvers. */
+export const INSTALL_AUDIT_COLUMNS: ReportColumn[] = [
+  { key: 'installAuditedBy', label: 'Install Audited By', group: 'audit', excelOnly: true },
+  { key: 'installAuditedOn', label: 'Install Audited On', group: 'audit', excelOnly: true },
+];
+
+/**
+ * The column contract for a given mode. `recce` → exactly {@link CURATED_COLUMNS} (unchanged).
+ * `installed` → the same, with the `install` group spliced in right before the `overall` column and
+ * the install audit columns appended after the recce audit trail.
+ */
+export function columnsForMode(mode: ReportMode): ReportColumn[] {
+  if (mode !== 'installed') return CURATED_COLUMNS;
+  const out: ReportColumn[] = [];
+  for (const col of CURATED_COLUMNS) {
+    if (col.key === 'recceStatus') out.push(...INSTALL_COLUMNS); // install group → before `overall`
+    out.push(col);
+    if (col.key === 'hoApprovedOn') out.push(...INSTALL_AUDIT_COLUMNS); // after the recce audit trail
+  }
+  return out;
+}
+
 // ── Minimal source shapes (a subset of the Prisma includes the service passes) ────────────────
 
 export interface RepPosmType {
   name: string | null;
+}
+/** The installed-POSM photo linked 1:1 to its ReccePosm (installed mode only). Optional so recce-mode
+ *  fixtures/queries can omit it entirely. */
+export interface RepInstallPosm {
+  photo: unknown; // MediaValue { key, geo? }
+  captureLat?: unknown;
+  captureLng?: unknown;
+  geoFenceOk?: boolean | null;
+  distanceFromRecce?: unknown; // recce↔install distance (metres, Prisma Decimal | number | null)
 }
 export interface RepReccePosm {
   slotNo: number;
@@ -107,6 +162,18 @@ export interface RepReccePosm {
   /** The normalised on-image install-area annotation (rect/path, 0..1). Only read by the PPT export;
    *  the xlsx/table paths ignore it. Optional so pure fixtures can omit it. */
   markup?: unknown;
+  /** The install photo that fulfils this recce element (installed mode). Null/absent when the element
+   *  has not been installed yet. */
+  installPosm?: RepInstallPosm | null;
+}
+/** One installation of a recce (installed mode only). Optional on RepRecce so recce-mode omits it. */
+export interface RepInstallation {
+  status: string; // SUBMITTED | AUDIT_APPROVED | AUDIT_REJECTED
+  capturedAt: Date | string | null;
+  receivedAt: Date | string | null;
+  submittedBy: { promoterCode: string | null } | null; // the installer (VENDOR_FIELD)
+  auditedBy?: { name: string | null } | null;
+  auditedAt?: Date | string | null;
 }
 export interface RepRecce {
   id: string;
@@ -127,6 +194,9 @@ export interface RepRecce {
   approvedBy: { name: string | null } | null;
   hoReviewedBy: { name: string | null } | null;
   posms: (RepReccePosm & { id: string })[];
+  /** The installation fulfilling this recce (installed mode). Null/absent until the outlet is
+   *  installed; the installed report filters to recces that HAVE one. */
+  installation?: RepInstallation | null;
 }
 export interface RepSite {
   id: string;
@@ -253,6 +323,44 @@ export function recceStatusCell(recce: RepRecce | null): Cell {
 }
 
 /**
+ * Per-element INSTALL status chip (installed mode). "Installed" (green) when the element has an
+ * install photo; "Not installed" (amber) when the recce element exists but has no install yet;
+ * `empty` when the slot has no recce element at all.
+ */
+export function elementInstallStatusCell(elementPresent: boolean, installed: boolean): Cell {
+  if (!elementPresent) return { t: 'empty' };
+  return installed
+    ? { t: 'status', v: 'Installed', tone: 'approved' }
+    : { t: 'status', v: 'Not installed', tone: 'pending' };
+}
+
+/**
+ * The installation audit chip (installed mode): AUDIT_REJECTED → red "Audit rejected",
+ * AUDIT_APPROVED → green "Audited", else (SUBMITTED) → amber "Submitted". `empty` with no installation.
+ */
+export function installAuditStatusCell(inst: RepInstallation | null | undefined): Cell {
+  if (!inst) return { t: 'empty' };
+  if (inst.status === 'AUDIT_REJECTED') return { t: 'status', v: 'Audit rejected', tone: 'rejected' };
+  if (inst.status === 'AUDIT_APPROVED') return { t: 'status', v: 'Audited', tone: 'approved' };
+  return { t: 'status', v: 'Submitted', tone: 'pending' };
+}
+
+/**
+ * The before↔after geo summary: "<distance> m" + the geo-fence verdict ("Geo-fence pass"/"fail"),
+ * joined with " · ". "" when the install posm is absent or carries neither datum (a null geoFenceOk
+ * means unverifiable, so no verdict is shown).
+ */
+export function beforeAfterGeoLabel(ip: RepInstallPosm | null | undefined): string {
+  if (!ip) return '';
+  const parts: string[] = [];
+  const d = num(ip.distanceFromRecce);
+  if (d != null) parts.push(`${d} m`);
+  if (ip.geoFenceOk === true) parts.push('Geo-fence pass');
+  else if (ip.geoFenceOk === false) parts.push('Geo-fence fail');
+  return parts.join(' · ');
+}
+
+/**
  * A browser-supplied origin is trusted for building an xlsx hyperlink only when it is a plausible
  * bare `http(s)://host[:port]` — scheme + authority, no path / query / fragment / whitespace. This
  * is NOT an allow-list (the backend can't know the public origin — it sits behind the Next proxy),
@@ -315,26 +423,36 @@ function recceSortKey(r: RepRecce): [number, number, string] {
 
 /**
  * Build ALL report rows for a loaded Site — one row per recce (see the file header for the grain).
- * An outlet with no recce still yields one row. Rows are ordered by {@link recceSortKey}.
+ *
+ * `recce` mode (default): an outlet with no recce still yields one row (unchanged behaviour).
+ * `installed` mode: ONE ROW PER RECCE THAT HAS AN INSTALLATION — recces without an installation are
+ * filtered out, so an outlet with no installed recce yields zero rows.
+ *
+ * Rows are ordered by {@link recceSortKey}.
  */
-export function buildOutletExecutionRows(site: RepSite): ReportRow[] {
-  const recces = [...site.recces].sort((a, b) => {
+export function buildOutletExecutionRows(site: RepSite, mode: ReportMode = 'recce'): ReportRow[] {
+  let recces = [...site.recces].sort((a, b) => {
     const [am, at, ai] = recceSortKey(a);
     const [bm, bt, bi] = recceSortKey(b);
     if (am !== bm) return am - bm;
     if (at !== bt) return at - bt;
     return ai < bi ? -1 : ai > bi ? 1 : 0;
   });
-  if (recces.length === 0) return [buildRecceRow(site, null)];
-  return recces.map((r) => buildRecceRow(site, r));
+  if (mode === 'installed') {
+    recces = recces.filter((r) => !!r.installation);
+    return recces.map((r) => buildRecceRow(site, r, mode));
+  }
+  if (recces.length === 0) return [buildRecceRow(site, null, mode)];
+  return recces.map((r) => buildRecceRow(site, r, mode));
 }
 
 /**
  * Build one report row for a single recce of a site (or `null` for a no-recce outlet). Every
  * per-recce cell reflects the row's OWN recce — never a sibling's. Element 1/2 map to recce POSM
- * slots 1/2.
+ * slots 1/2. In `installed` mode the row additionally carries the `install` group cells + the
+ * excel-only install audit trail; in `recce` mode the cells are exactly as before (no install keys).
  */
-export function buildRecceRow(site: RepSite, recce: RepRecce | null): ReportRow {
+export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: ReportMode = 'recce'): ReportRow {
   // Recce POSMs indexed by slot (1 / 2).
   const bySlot = new Map<number, RepReccePosm & { id: string }>();
   for (const p of recce?.posms ?? []) bySlot.set(p.slotNo, p);
@@ -376,6 +494,31 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null): ReportRow 
     cells[`${k}Dims`] = present ? text(dimsLabel(rp!.dimensions)) : empty();
     cells[`${k}RecceStatus`] = elementStatusCell(recce, present);
     cells[`${k}Photo`] = present ? photoCell(rp!.photo) : empty();
+  }
+
+  // Installed-variant cells — the `install` group + the excel-only install audit trail. Only added in
+  // installed mode so a recce-mode row is byte-identical to before.
+  if (mode === 'installed') {
+    const inst = recce?.installation ?? null;
+    for (const slot of [1, 2]) {
+      const rp = bySlot.get(slot) ?? null;
+      const ip = rp?.installPosm ?? null;
+      const k = `el${slot}`;
+      cells[`${k}InstallStatus`] = elementInstallStatusCell(rp !== null, ip != null);
+      cells[`${k}InstallPhoto`] = ip ? photoCell(ip.photo) : empty();
+    }
+    // The representative install posm for the before↔after geo summary: the lowest-slot one present.
+    const repIp = bySlot.get(1)?.installPosm ?? bySlot.get(2)?.installPosm ?? null;
+    cells.installDate = inst ? text(fmtDateTime(inst.capturedAt ?? inst.receivedAt)) : empty();
+    cells.installer = inst ? text(inst.submittedBy?.promoterCode) : empty();
+    cells.auditStatus = installAuditStatusCell(inst);
+    cells.beforeAfterGeo = text(beforeAfterGeoLabel(repIp));
+    // Excel-only install audit trail: the auditor relation is set on BOTH approve and reject, so gate
+    // the pair on a terminal audit outcome (not still-SUBMITTED).
+    const installAudited =
+      !!inst?.auditedBy && (inst.status === 'AUDIT_APPROVED' || inst.status === 'AUDIT_REJECTED');
+    cells.installAuditedBy = installAudited ? text(inst!.auditedBy?.name) : empty();
+    cells.installAuditedOn = installAudited ? text(fmtDateTime(inst!.auditedAt ?? null)) : empty();
   }
 
   return {

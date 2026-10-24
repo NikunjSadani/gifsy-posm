@@ -90,6 +90,36 @@ describe('groupOutletColumns (server-driven grouping)', () => {
   });
 });
 
+describe('groupOutletColumns — installed variant (the `install` group)', () => {
+  const INSTALLED_COLUMNS: Column[] = [
+    ...SPEC_COLUMNS.filter((c) => c.group !== 'overall' && c.group !== 'audit'),
+    { key: 'el1InstallStatus', label: 'Element 1 Install', group: 'install' },
+    { key: 'el1InstallPhoto', label: 'Element 1 Install Image', group: 'install' },
+    { key: 'installDate', label: 'Install Date', group: 'install' },
+    { key: 'auditStatus', label: 'Audit Status', group: 'install' },
+    { key: 'recceStatus', label: 'Recce Status', group: 'overall' },
+    { key: 'installAuditedBy', label: 'Install Audited By', group: 'audit', excelOnly: true },
+  ];
+
+  it('places the install group between element2 and overall, labelled "Installation"', () => {
+    const groups = groupOutletColumns(INSTALLED_COLUMNS);
+    expect(groups.map((g) => g.group)).toEqual([
+      'outlet', 'location', 'profile', 'element1', 'element2', 'install', 'overall',
+    ]);
+    expect(groups.find((g) => g.group === 'install')!.label).toBe(GROUP_LABELS.install);
+    expect(GROUP_LABELS.install).toBe('Installation');
+  });
+
+  it('renders the install columns in server order and never pins them', () => {
+    const groups = groupOutletColumns(INSTALLED_COLUMNS);
+    const install = groups.find((g) => g.group === 'install')!;
+    expect(install.columns.map((c) => c.key)).toEqual(['el1InstallStatus', 'el1InstallPhoto', 'installDate', 'auditStatus']);
+    expect(install.pinned).toBe(false);
+    // The excel-only install audit column stays out of the on-screen view.
+    expect(displayOrder(groups)).not.toContain('installAuditedBy');
+  });
+});
+
 describe('flatColumns', () => {
   const flat = flatColumns(groupOutletColumns(SPEC_COLUMNS));
 

@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import type { Readable } from 'node:stream';
 import { ReportsService } from './reports.service';
-import { CURATED_COLUMNS, type RepSite, type RepRecce } from './outlet-execution.helper';
+import { CURATED_COLUMNS, columnsForMode, type RepSite, type RepRecce } from './outlet-execution.helper';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
 import {
   DEFAULT_EMAIL_REPORTS_CONFIG,
@@ -886,3 +886,125 @@ describe('ReportsService.buildRecceDeck (slides)', () => {
 // NOTE: the actual `write()` → .pptx-zip path (incl. embedded-image media encoding) is NOT asserted
 // here — pptxgenjs's media encoder `import()`s node built-ins, which the CommonJS Jest VM cannot run.
 // It is covered end-to-end by the standalone node smoke (`scripts/pptx-boot-smoke.mjs`) under real Node.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INSTALLED VARIANT (Phase C) — mode param on JSON / .xlsx / .pptx
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A site whose app recce has an installation + a slot-1 install photo (slot-2 element not installed). */
+const installedSampleSite = (): RepSite => ({
+  ...sampleSite(),
+  recces: [
+    {
+      ...sampleRecce(),
+      installation: {
+        status: 'AUDIT_APPROVED',
+        capturedAt: new Date('2026-09-02T04:00:00Z'), receivedAt: new Date('2026-09-02T04:00:00Z'),
+        submittedBy: { promoterCode: 'INST9' }, auditedBy: { name: 'Auditor A' }, auditedAt: new Date('2026-09-03T04:00:00Z'),
+      },
+      posms: [
+        {
+          id: 'rp1', slotNo: 1, posmType: { name: 'Standard Board' }, dimensions: { width: 24, height: 12, unit: 'in' },
+          photo: { key: 'r1', geo: { lat: 19.2401, lng: 73.1301 } },
+          markup: { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] },
+          installPosm: { photo: { key: 'i1', geo: { lat: 19.2402, lng: 73.1302 } }, geoFenceOk: true, distanceFromRecce: 3.2 },
+        },
+      ],
+    } as RepRecce,
+  ],
+});
+
+describe('ReportsService.outletExecution (installed mode)', () => {
+  it('returns the installed columns (install group + install audit) and install cells, filtering to installed recces', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([installedSampleSite()]);
+    fns.site.count.mockResolvedValue(1);
+
+    const res = await service.outletExecution(admin(), { mode: 'installed' });
+    expect(res.columns).toEqual(columnsForMode('installed'));
+    expect(res.columns.map((c) => c.key)).toContain('el1InstallStatus');
+    expect(res.columns.map((c) => c.key)).toContain('installAuditedBy');
+
+    // The Site query is restricted to outlets with an installed recce, with the install include.
+    const call = fns.site.findMany.mock.calls[0][0];
+    expect(call.where.recces).toEqual({ some: { installation: { isNot: null } } });
+    expect(call.include.recces.include.installation).toBeDefined();
+    expect(call.include.recces.include.posms.include.installPosm).toBe(true);
+
+    const { cells } = res.rows[0];
+    expect(cells.el1InstallStatus).toEqual({ t: 'status', v: 'Installed', tone: 'approved' });
+    expect(cells.el1InstallPhoto).toEqual({ t: 'photo', key: 'i1', viewPath: '/v1/media/view?key=i1', lat: 19.2402, lng: 73.1302 });
+    expect(cells.installer).toEqual({ t: 'text', v: 'INST9' });
+    expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+    expect(cells.beforeAfterGeo).toEqual({ t: 'text', v: '3.2 m · Geo-fence pass' });
+  });
+
+  it('recce mode is lean: no install filter on the where, no install include', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([sampleSite()]);
+    await service.outletExecution(admin(), {});
+    const call = fns.site.findMany.mock.calls[0][0];
+    expect(call.where.recces).toBeUndefined();
+    expect(call.include.recces.include.installation).toBeUndefined();
+    expect(call.include.recces.include.posms.include.installPosm).toBeUndefined();
+  });
+});
+
+describe('ReportsService.outletExecutionXlsxStream (installed mode)', () => {
+  it('writes the install columns and renders the install photo as a hyperlink', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValueOnce([installedSampleSite()]).mockResolvedValue([]);
+
+    const buf = await streamToBuffer(service.outletExecutionXlsxStream(admin(), { mode: 'installed', origin: 'https://app.kwality.in' }));
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const aoa = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
+    const header = aoa[0];
+
+    for (const label of ['Element 1 Install', 'Element 1 Install Image', 'Install Date', 'Installer ID', 'Audit Status', 'Before/After Geo', 'Install Audited By']) {
+      expect(header).toContain(label);
+    }
+    const instImgCol = header.indexOf('Element 1 Install Image');
+    const addr = XLSX.utils.encode_cell({ r: 1, c: instImgCol });
+    expect((ws[addr] as XLSX.CellObject).l?.Target).toBe('https://app.kwality.in/api/media/view?key=i1');
+    expect(aoa[1][header.indexOf('Installer ID')]).toBe('INST9');
+  });
+});
+
+describe('ReportsService.buildRecceDeck (installed before/after slides)', () => {
+  it('embeds BOTH the recce (left) and install (right) photos and draws the markup box only on the recce side', async () => {
+    const { service, fns, viewMedia } = makeService();
+    fns.site.findMany.mockResolvedValue([installedSampleSite()]);
+
+    const deck: any = await service.buildRecceDeck(admin(), 'A8', 'installed');
+    expect(deck.slides).toHaveLength(1);
+    const slide = deck.slides[0];
+    // Two embedded images (before + after) and exactly one markup box (recce side only).
+    const images = slideObjects(slide).filter((o) => o._type === 'image');
+    expect(images.length).toBe(2);
+    expect(rectBoxCount(slide)).toBe(1);
+    // Before/After captions present.
+    expect(slideText(slide)).toContain('Before · Recce');
+    expect(slideText(slide)).toContain('After · Installed');
+    // Both the recce photo (r1) and install photo (i1) were read through the media service.
+    const keys = viewMedia.mock.calls.map((c: any[]) => c[1]);
+    expect(keys).toContain('r1');
+    expect(keys).toContain('i1');
+
+    // Installed include applied to the deck query too.
+    expect(fns.site.findMany.mock.calls[0][0].include.recces.include.installation).toBeDefined();
+  });
+
+  it('shows an "Awaiting installation" placeholder (no 2nd image) when the element has no install photo', async () => {
+    const { service, fns } = makeService();
+    const site = installedSampleSite();
+    (site.recces[0].posms[0] as any).installPosm = null; // recce present, not installed
+    fns.site.findMany.mockResolvedValue([site]);
+
+    const deck: any = await service.buildRecceDeck(admin(), 'A8', 'installed');
+    const slide = deck.slides[0];
+    const images = slideObjects(slide).filter((o) => o._type === 'image');
+    expect(images.length).toBe(1); // only the recce photo
+    expect(slideText(slide)).toContain('Awaiting installation');
+  });
+});

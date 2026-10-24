@@ -96,7 +96,11 @@ export class ReportsController {
     @CurrentUser() user: JwtPayload,
     @Query() query: ListOutletReportDto,
   ): Promise<StreamableFile> {
-    const buf = await this.reports.outletExecutionPptx(user, query.outletCodes);
+    const buf = await this.reports.outletExecutionPptx(
+      user,
+      query.outletCodes,
+      query.mode === 'installed' ? 'installed' : 'recce',
+    );
     const stamp = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     return new StreamableFile(buf, {
       type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',

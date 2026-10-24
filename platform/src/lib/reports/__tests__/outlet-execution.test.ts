@@ -79,6 +79,43 @@ describe('downloadOutletReportPptx', () => {
     await new Promise((r) => setTimeout(r, 0));
   });
 
+  it('passes mode=installed and names the file installation-report when exporting the installed variant', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, blob: async () => new Blob(['x']) });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() } as never);
+    let savedName = '';
+    const origDownload = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'download');
+    Object.defineProperty(HTMLAnchorElement.prototype, 'download', {
+      configurable: true,
+      set(v: string) { savedName = v; },
+      get() { return savedName; },
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    const err = await downloadOutletReportPptx(['A8'], 'installed');
+    expect(err).toBeNull();
+    expect(decodeURIComponent(fetchMock.mock.calls[0][0] as string)).toContain('mode=installed');
+    expect(savedName).toMatch(/^installation-report-/);
+
+    if (origDownload) Object.defineProperty(HTMLAnchorElement.prototype, 'download', origDownload);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('recce mode omits the mode param (default)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, blob: async () => new Blob(['x']) });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() } as never);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    await downloadOutletReportPptx(['A8']);
+    expect(fetchMock.mock.calls[0][0] as string).not.toContain('mode=');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
   it('maps a backend 400 to the owner message', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400 }));
     expect(await downloadOutletReportPptx(['A8'])).toBe('Select 1–3 outlets for a PPT export.');

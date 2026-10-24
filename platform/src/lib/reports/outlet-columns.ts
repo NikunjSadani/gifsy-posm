@@ -16,6 +16,7 @@ export const GROUP_ORDER: ColumnGroup[] = [
   'profile',
   'element1',
   'element2',
+  'install',
   'overall',
   'audit',
 ];
@@ -27,6 +28,7 @@ export const GROUP_LABELS: Record<ColumnGroup, string> = {
   profile: 'Profile',
   element1: 'Element 1',
   element2: 'Element 2',
+  install: 'Installation',
   overall: 'Overall',
   audit: 'Audit trail',
 };

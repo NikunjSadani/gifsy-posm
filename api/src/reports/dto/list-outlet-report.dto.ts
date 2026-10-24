@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
+import { IsOptional, IsString, IsInt, IsIn, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -34,6 +34,15 @@ export class ListOutletReportDto {
   @IsOptional()
   @IsString()
   outletCodes?: string;
+
+  /**
+   * The report variant: `recce` (default) is the original recce report; `installed` adds the
+   * per-element install status + photo, install metadata and the install audit trail (JSON + .xlsx),
+   * and the before/after slide (.pptx). Anything else is treated as `recce` by the service.
+   */
+  @IsOptional()
+  @IsIn(['recce', 'installed'])
+  mode?: 'recce' | 'installed';
 
   /**
    * The caller's browser origin (`window.location.origin`), sent ONLY by the .xlsx download so the

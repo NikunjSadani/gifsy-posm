@@ -10,11 +10,12 @@ import { JwtPayload } from '../common/decorators/current-user.decorator';
 import {
   DEFAULT_SLIDE_LAYOUT,
   planRecceSlide,
+  planInstalledSlide,
   pptxDimsLabel,
   type PlanElementInput,
   type SlidePlan,
 } from './outlet-pptx.helper';
-import { readPhoto, type RepRecce } from './outlet-execution.helper';
+import { readPhoto, columnsForMode, type RepRecce, type ReportMode } from './outlet-execution.helper';
 import {
   EmailReportsConfig,
   DEFAULT_ASM_RECCE_REMINDER,
@@ -28,10 +29,10 @@ import { tenantScope } from '../common/tenant-scope';
 import { streamXlsx, type HyperlinkCell } from '../common/xlsx';
 import type { Readable } from 'node:stream';
 import {
-  CURATED_COLUMNS,
   buildOutletExecutionRows,
   mediaHyperlinkTarget,
   type Cell,
+  type ReportColumn,
   type ReportRow,
   type RepSite,
 } from './outlet-execution.helper';
@@ -81,7 +82,7 @@ function pptxDecoders() {
  * Recces are ordered app-first then manual oldest-first (matching the helper's sort) for a stable,
  * page-safe row order.
  */
-const OUTLET_REPORT_INCLUDE = {
+const OUTLET_REPORT_INCLUDE_RECCE = {
   // The servicing vendor's name feeds the "Vendor" report column (the vendorId filter targets this
   // relation) — select only `name`, never the whole Vendor row.
   vendor: { select: { name: true } },
@@ -95,6 +96,42 @@ const OUTLET_REPORT_INCLUDE = {
     },
   },
 } satisfies Prisma.SiteInclude;
+
+/**
+ * The INSTALLED-mode include — the recce include PLUS the per-recce installation (status, dates, the
+ * installer's promoterCode, the install auditor) AND, on each recce POSM, its 1:1 InstallPosm (photo,
+ * geo, distance). Kept SEPARATE from the recce include so recce-mode queries stay lean (they never
+ * load the install relations).
+ */
+const OUTLET_REPORT_INCLUDE_INSTALLED = {
+  vendor: { select: { name: true } },
+  recces: {
+    orderBy: [{ recceMode: 'asc' }, { receivedAt: 'asc' }, { id: 'asc' }],
+    include: {
+      submittedBy: { select: { promoterCode: true } },
+      approvedBy: { select: { name: true } },
+      hoReviewedBy: { select: { name: true } },
+      posms: { include: { posmType: { select: { name: true } }, installPosm: true } },
+      installation: {
+        include: {
+          submittedBy: { select: { promoterCode: true } },
+          auditedBy: { select: { name: true } },
+        },
+      },
+    },
+  },
+} satisfies Prisma.SiteInclude;
+
+/** The report include for a mode: the lean recce include, or the installed include with the install
+ *  relations folded in. */
+function outletReportInclude(mode: ReportMode): Prisma.SiteInclude {
+  return mode === 'installed' ? OUTLET_REPORT_INCLUDE_INSTALLED : OUTLET_REPORT_INCLUDE_RECCE;
+}
+
+/** Normalise the DTO's `mode` query param to the report variant (default `recce`). */
+function reportMode(mode: string | undefined): ReportMode {
+  return mode === 'installed' ? 'installed' : 'recce';
+}
 
 /** The raw digest counts for one tenant (all tenant-scoped, never cross-tenant). */
 export interface DigestCounts {
@@ -724,16 +761,23 @@ export class ReportsService {
     if (q.region) where.region = { contains: q.region, mode: 'insensitive' };
     if (q.state) where.state = { contains: q.state, mode: 'insensitive' };
     if (q.vendorId) where.vendorId = q.vendorId;
+    // Installed mode: restrict to outlets that have at least one installed recce, so `total` reflects
+    // outlets with installations and pages aren't padded with install-less outlets (the row builder
+    // then emits exactly those recces that HAVE an installation).
+    if (reportMode(q.mode) === 'installed') {
+      where.recces = { some: { installation: { isNot: null } } };
+    }
     return where;
   }
 
-  /** Load matching sites (with the report include) and map each to one-row-per-recce report rows. */
+  /** Load matching sites (with the mode's report include) and map each to one-row-per-recce rows. */
   private async loadOutletRows(
     user: JwtPayload,
     q: ListOutletReportDto,
     skip: number,
     take: number,
   ): Promise<{ rows: ReportRow[]; total: number }> {
+    const mode = reportMode(q.mode);
     const where = this.outletReportWhere(user, q);
     const [sites, total] = await Promise.all([
       this.prisma.site.findMany({
@@ -744,12 +788,13 @@ export class ReportsService {
         orderBy: [{ code: 'asc' }, { id: 'asc' }],
         skip,
         take,
-        include: OUTLET_REPORT_INCLUDE,
+        include: outletReportInclude(mode),
       }),
       this.prisma.site.count({ where }),
     ]);
-    // flatMap: each site expands to one row per recce (app-only → 1 row; mixed → 1 + N; none → 1).
-    const rows = sites.flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite));
+    // flatMap: each site expands to one row per recce (recce mode: app-only → 1, mixed → 1 + N,
+    // none → 1; installed mode: one per recce WITH an installation, else 0).
+    const rows = sites.flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite, mode));
     return { rows, total };
   }
 
@@ -764,7 +809,7 @@ export class ReportsService {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(500, Math.max(1, q.limit ?? 50));
     const { rows, total } = await this.loadOutletRows(user, q, (page - 1) * limit, limit);
-    return { columns: CURATED_COLUMNS, rows, total, page, limit };
+    return { columns: columnsForMode(reportMode(q.mode)), rows, total, page, limit };
   }
 
   /**
@@ -777,9 +822,10 @@ export class ReportsService {
   private rowToXlsxRecord(
     row: ReportRow,
     origin: string | undefined,
+    columns: ReportColumn[],
   ): Record<string, string | HyperlinkCell> {
     const rec: Record<string, string | HyperlinkCell> = {};
-    for (const col of CURATED_COLUMNS) {
+    for (const col of columns) {
       rec[col.label] = this.cellToXlsx(row.cells[col.key], origin);
     }
     return rec;
@@ -822,7 +868,10 @@ export class ReportsService {
    * zero-row export as a header-only sheet. Returns a Readable the controller hands to StreamableFile.
    */
   outletExecutionXlsxStream(user: JwtPayload, q: ListOutletReportDto): Readable {
+    const mode = reportMode(q.mode);
     const where = this.outletReportWhere(user, q);
+    const columns = columnsForMode(mode);
+    const include = outletReportInclude(mode);
     // The FE passes its own `window.location.origin` so photo links can be ABSOLUTE on the public
     // app surface (the backend sits behind the Next proxy and can't reliably know it). Validated +
     // remapped per-cell in mediaHyperlinkTarget; an absent/invalid origin degrades to a relative link.
@@ -837,20 +886,20 @@ export class ReportsService {
         orderBy: [{ code: 'asc' }, { id: 'asc' }],
         take: OUTLET_EXPORT_BATCH,
         ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-        include: OUTLET_REPORT_INCLUDE,
+        include,
       });
       if (sites.length < OUTLET_EXPORT_BATCH) exhausted = true;
       if (sites.length > 0) cursorId = sites[sites.length - 1].id;
       return sites
-        .flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite))
-        .map((r) => this.rowToXlsxRecord(r, origin));
+        .flatMap((s) => buildOutletExecutionRows(s as unknown as RepSite, mode))
+        .map((r) => this.rowToXlsxRecord(r, origin, columns));
     };
 
-    // The export includes EVERY curated column, the excel-only audit group included (col.label is
-    // both the header and the per-row key streamXlsx projects onto).
+    // The export includes EVERY column for the mode — the install group + excel-only audit groups
+    // included (col.label is both the header and the per-row key streamXlsx projects onto).
     return streamXlsx({
-      sheetName: 'Recce Report',
-      headers: CURATED_COLUMNS.map((c) => c.label),
+      sheetName: mode === 'installed' ? 'Installation Report' : 'Recce Report',
+      headers: columns.map((c) => c.label),
       nextBatch,
     });
   }
@@ -869,8 +918,12 @@ export class ReportsService {
    * same media/storage driver the `/v1/media/view` endpoint uses (never an HTTP call to our own API),
    * embedded as base64 JPEG. Bounded memory: capped at 3 outlets × ≤2 elements of full-res images.
    */
-  async outletExecutionPptx(user: JwtPayload, outletCodesRaw: string | undefined): Promise<Buffer> {
-    const pptx = await this.buildRecceDeck(user, outletCodesRaw);
+  async outletExecutionPptx(
+    user: JwtPayload,
+    outletCodesRaw: string | undefined,
+    mode: ReportMode = 'recce',
+  ): Promise<Buffer> {
+    const pptx = await this.buildRecceDeck(user, outletCodesRaw, mode);
     // nodebuffer output → a Node Buffer ready for StreamableFile. (The media-encode step inside
     // `write` does a dynamic `import('node:fs')`, which only works under real Node — see the deck
     // builder's unit tests + the standalone boot smoke for why the two are split.)
@@ -884,7 +937,11 @@ export class ReportsService {
    * invokes pptxgenjs's media encoder, which `import()`s node built-ins (fine under real Node, but it
    * throws under the CommonJS Jest VM). Returns the populated PptxGenJS instance.
    */
-  async buildRecceDeck(user: JwtPayload, outletCodesRaw: string | undefined): Promise<PptxGenJS> {
+  async buildRecceDeck(
+    user: JwtPayload,
+    outletCodesRaw: string | undefined,
+    mode: ReportMode = 'recce',
+  ): Promise<PptxGenJS> {
     const codes = this.parsePptxOutletCodes(outletCodesRaw);
 
     // Tenant scope, mirroring outletReportWhere: pin clientId unless the caller is platform-wide.
@@ -895,7 +952,7 @@ export class ReportsService {
     const sites = (await this.prisma.site.findMany({
       where,
       orderBy: [{ code: 'asc' }, { id: 'asc' }],
-      include: OUTLET_REPORT_INCLUDE,
+      include: outletReportInclude(mode),
     })) as unknown as RepSite[];
 
     // Order the slides by the caller's requested code order (nice UX); a platform-wide GIFSY read can
@@ -917,7 +974,7 @@ export class ReportsService {
     pptx.layout = 'RECCE_WIDE';
 
     for (const site of capped) {
-      const plan = await this.buildOutletSlidePlan(user, site);
+      const plan = await this.buildOutletSlidePlan(user, site, mode);
       this.renderRecceSlide(pptx, plan);
     }
     return pptx;
@@ -941,31 +998,57 @@ export class ReportsService {
    * pure {@link planRecceSlide}. An outlet with no recce — or a recce with no usable element photo —
    * yields an `empty` plan (a "No recce captured" slide), never a crash.
    */
-  private async buildOutletSlidePlan(user: JwtPayload, site: RepSite): Promise<SlidePlan> {
+  private async buildOutletSlidePlan(
+    user: JwtPayload,
+    site: RepSite,
+    mode: ReportMode = 'recce',
+  ): Promise<SlidePlan> {
     const recce = this.pickPrimaryRecce(site);
     if (!recce) {
-      return planRecceSlide({
-        outletName: site.name,
-        town: site.town,
-        state: site.state,
-        recceDate: null,
-        geo: null,
-        elements: [],
-      });
+      // No recce at all → an empty slide ("No recce captured"), for either layout.
+      return mode === 'installed'
+        ? planInstalledSlide({
+            outletName: site.name, town: site.town, state: site.state,
+            recceDate: null, installDate: null, geo: null, elements: [],
+          })
+        : planRecceSlide({
+            outletName: site.name, town: site.town, state: site.state,
+            recceDate: null, geo: null, elements: [],
+          });
     }
 
-    // Present elements in slot order (1 then 2). Each needs its photo bytes decoded for the slide.
+    // Present elements in slot order (1 then 2). Each needs its recce photo bytes decoded; in installed
+    // mode its install photo bytes are decoded too (via the SAME media path, downscaled identically).
     const posms = [...recce.posms].sort((a, b) => a.slotNo - b.slotNo);
     const elements: PlanElementInput[] = [];
     for (const p of posms) {
       const { key } = readPhoto(p.photo);
       const image = key ? await this.decodeImageForSlide(user, key) : null;
-      elements.push({
+      const el: PlanElementInput = {
         slotNo: p.slotNo,
         posmTypeName: p.posmType?.name ?? null,
         dimsInner: pptxDimsLabel(p.dimensions),
         markup: p.markup,
         image: image ?? undefined,
+      };
+      if (mode === 'installed' && p.installPosm) {
+        const { key: ikey } = readPhoto(p.installPosm.photo);
+        const installImage = ikey ? await this.decodeImageForSlide(user, ikey) : null;
+        el.installImage = installImage ?? undefined;
+      }
+      elements.push(el);
+    }
+
+    if (mode === 'installed') {
+      const inst = recce.installation ?? null;
+      return planInstalledSlide({
+        outletName: site.name,
+        town: site.town,
+        state: site.state,
+        recceDate: recce.capturedAt ?? recce.receivedAt,
+        installDate: inst ? (inst.capturedAt ?? inst.receivedAt) : null,
+        geo: this.resolveRecceGeo(recce),
+        elements,
       });
     }
 
@@ -1161,6 +1244,47 @@ export class ReportsService {
         fontSize: 11,
         color: '444444',
       });
+
+      // Installed variant — the RIGHT (install) side: the install photo (plain, no box) or an
+      // "Awaiting installation" placeholder, plus the "After · Installed" caption. These fields are
+      // undefined for a recce-only slide, so this is a no-op there.
+      if (el.installImageRect) {
+        if (el.installDataUrl) {
+          slide.addImage({
+            data: el.installDataUrl,
+            x: el.installImageRect.x,
+            y: el.installImageRect.y,
+            w: el.installImageRect.w,
+            h: el.installImageRect.h,
+          });
+        } else if (el.installPlaceholder) {
+          slide.addText('Awaiting installation', {
+            x: el.installImageRect.x,
+            y: el.installImageRect.y,
+            w: el.installImageRect.w,
+            h: el.installImageRect.h,
+            align: 'center',
+            valign: 'middle',
+            fontSize: 14,
+            italic: true,
+            color: '999999',
+            fill: { color: 'F3F4F6' },
+            line: { color: 'DDDDDD', width: 1, dashType: 'dash' },
+          });
+        }
+      }
+      if (el.installCaption && el.installCaptionRect) {
+        slide.addText(el.installCaption, {
+          x: el.installCaptionRect.x,
+          y: el.installCaptionRect.y,
+          w: el.installCaptionRect.w,
+          h: el.installCaptionRect.h,
+          align: 'center',
+          valign: 'middle',
+          fontSize: 11,
+          color: '444444',
+        });
+      }
     }
   }
 }

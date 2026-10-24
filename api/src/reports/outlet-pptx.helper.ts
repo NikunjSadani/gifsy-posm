@@ -270,16 +270,21 @@ export interface HeaderSeg {
   link?: string;
 }
 
-/** A decoded element ready to lay out. `image` is absent when the photo was missing/undecodable. */
+/** A decoded element ready to lay out. `image` is absent when the photo was missing/undecodable.
+ *  `installImage` is the INSTALLED-variant (right-side) photo; absent in recce mode or when the
+ *  element has not been installed yet (then the installed layout draws an "Awaiting installation"
+ *  placeholder). */
 export interface PlanElementInput {
   slotNo: number;
   posmTypeName: string | null;
   dimsInner: string | null;
   markup: unknown;
   image?: { dataUrl: string; natW: number; natH: number };
+  installImage?: { dataUrl: string; natW: number; natH: number };
 }
 
-/** One laid-out element: an optional image + each markup shape placed over it + a caption, all in inches. */
+/** One laid-out element: an optional image + each markup shape placed over it + a caption, all in
+ *  inches. The `install*` fields are populated ONLY by the installed layout (right side, no box). */
 export interface PlannedElement {
   dataUrl?: string;
   imageRect?: Rect;
@@ -287,6 +292,13 @@ export interface PlannedElement {
   boxes: PlacedShape[];
   caption: string;
   captionRect: Rect;
+  /** Installed variant (right side). `installImageRect` is the fitted photo rect, or the whole right
+   *  image box when `installPlaceholder` is set (no install photo → "Awaiting installation"). */
+  installDataUrl?: string;
+  installImageRect?: Rect;
+  installPlaceholder?: boolean;
+  installCaption?: string;
+  installCaptionRect?: Rect;
 }
 
 /** The full, render-ready plan for one slide. `empty` ⇒ a "No recce captured" body. */
@@ -302,9 +314,12 @@ export interface SlideLayout {
   slideW: number;
   slideH: number;
   headerH: number;
-  /** Left content column (the recce side). The right half is the INSTALLED-variant seam (Phase C). */
+  /** Left content column (the recce side; the only column used by the recce-only layout). */
   leftX: number;
   leftW: number;
+  /** Right content column — the install side, used by the installed (before/after) layout. */
+  rightX: number;
+  rightW: number;
   contentTop: number;
   contentBottom: number;
   /** Vertical gap between stacked elements, and the caption strip height. */
@@ -318,6 +333,10 @@ export const DEFAULT_SLIDE_LAYOUT: SlideLayout = {
   headerH: 1.2,
   leftX: 0.4,
   leftW: 6.0,
+  // The right column mirrors the left across the slide mid-line (6.93 + 6.0 = 12.93, a ~0.4in right
+  // margin). In recce mode this half stays empty; the installed layout fills it with the install photo.
+  rightX: 6.93,
+  rightW: 6.0,
   contentTop: 1.45,
   contentBottom: 7.2,
   gap: 0.25,
@@ -409,6 +428,100 @@ export function planRecceSlide(opts: {
       .map((s) => placeShape(imageRect, s))
       .filter((s): s is PlacedShape => s !== null);
     return { dataUrl: el.image.dataUrl, imageRect, boxes, caption: captionBase, captionRect };
+  });
+
+  return { line1, line2, empty: false, elements: planned };
+}
+
+/**
+ * The INSTALLED (before/after) slide planner — a sibling of {@link planRecceSlide} that lays each
+ * element across TWO columns: the recce photo on the LEFT (with its markup box, exactly as the recce
+ * layout) and the install photo on the RIGHT (plain — InstallPosm carries no markup, so no box). The
+ * left caption reads "<type — dims> · Before · Recce"; the right caption reads "After · Installed",
+ * or, when the element has no install photo yet, an "Awaiting installation" placeholder fills the
+ * right image box. The header's second line is the recce line with the install date appended when
+ * present. `empty` is true when there is no recce at all (a "No recce captured" body, shared with the
+ * recce layout). Pure — all geometry + text, no I/O.
+ */
+export function planInstalledSlide(opts: {
+  outletName: string;
+  town: string | null;
+  state: string | null;
+  recceDate: Date | string | null;
+  installDate: Date | string | null;
+  geo: { lat: number; lng: number } | null;
+  elements: PlanElementInput[];
+  layout?: SlideLayout;
+}): SlidePlan {
+  const layout = opts.layout ?? DEFAULT_SLIDE_LAYOUT;
+  const line1 = pptxTitleLine1(opts.outletName, opts.town, opts.state);
+  const firstDims = opts.elements.find((e) => e.dimsInner)?.dimsInner ?? null;
+  const line2 = buildHeaderLine2(firstDims, pptxDateLabel(opts.recceDate), opts.geo);
+  const instLabel = pptxDateLabel(opts.installDate);
+  if (instLabel) line2.push({ text: `${line2.length ? '  ·  ' : ''}Installed ${instLabel}` });
+
+  const els = opts.elements;
+  if (els.length === 0) {
+    return { line1, line2, empty: true, elements: [] };
+  }
+
+  const n = els.length;
+  const contentH = layout.contentBottom - layout.contentTop;
+  const cellH = (contentH - layout.gap * (n - 1)) / n;
+
+  const planned: PlannedElement[] = els.map((el, i) => {
+    const cellY = layout.contentTop + i * (cellH + layout.gap);
+    const imgH = Math.max(0, cellH - layout.captionH);
+    const leftImgBox: Rect = { x: layout.leftX, y: cellY, w: layout.leftW, h: imgH };
+    const rightImgBox: Rect = { x: layout.rightX, y: cellY, w: layout.rightW, h: imgH };
+    const captionRect: Rect = {
+      x: layout.leftX,
+      y: cellY + cellH - layout.captionH,
+      w: layout.leftW,
+      h: layout.captionH,
+    };
+    const installCaptionRect: Rect = {
+      x: layout.rightX,
+      y: cellY + cellH - layout.captionH,
+      w: layout.rightW,
+      h: layout.captionH,
+    };
+
+    const typeLabel = el.posmTypeName?.trim() || 'Element';
+    const captionBase = el.dimsInner ? `${typeLabel} — ${el.dimsInner}` : typeLabel;
+
+    const out: PlannedElement = {
+      boxes: [],
+      caption: '',
+      captionRect,
+      installCaptionRect,
+    };
+
+    // Left — the recce photo + its markup boxes (identical to the recce layout).
+    if (el.image) {
+      const imageRect = fitContain(el.image.natW, el.image.natH, leftImgBox);
+      out.dataUrl = el.image.dataUrl;
+      out.imageRect = imageRect;
+      out.boxes = markupShapes(el.markup)
+        .map((s) => placeShape(imageRect, s))
+        .filter((s): s is PlacedShape => s !== null);
+      out.caption = `${captionBase} · Before · Recce`;
+    } else {
+      out.caption = `${captionBase} · Before · Recce (image unavailable)`;
+    }
+
+    // Right — the install photo (plain, no box), or an "Awaiting installation" placeholder.
+    if (el.installImage) {
+      out.installDataUrl = el.installImage.dataUrl;
+      out.installImageRect = fitContain(el.installImage.natW, el.installImage.natH, rightImgBox);
+      out.installCaption = 'After · Installed';
+    } else {
+      out.installImageRect = { ...rightImgBox };
+      out.installPlaceholder = true;
+      out.installCaption = 'Awaiting installation';
+    }
+
+    return out;
   });
 
   return { line1, line2, empty: false, elements: planned };

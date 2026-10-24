@@ -31,6 +31,7 @@ import {
   PPTX_MAX_OUTLETS,
   type OutletReportResult,
   type OutletReportFilters,
+  type ReportMode,
 } from '@/lib/reports/outlet-execution';
 import { groupOutletColumns, flatColumns } from '@/lib/reports/outlet-columns';
 
@@ -71,10 +72,15 @@ function useIsSmallViewport(): boolean {
   return small;
 }
 
-type ReportMode = 'recce' | 'installed';
 const MODE_TITLES: Record<ReportMode, string> = {
   recce: 'Recce Report',
   installed: 'Installation Report',
+};
+const MODE_SUBTITLES: Record<ReportMode, string> = {
+  recce:
+    'One row per recce (an outlet can have more than one) — recce evidence, element status and approvals at a glance.',
+  installed:
+    'One row per installation — recce vs installed evidence, element + install status, audit and before↔after geo at a glance.',
 };
 
 export default function ExecutionReportPage() {
@@ -85,8 +91,9 @@ export default function ExecutionReportPage() {
   const [vendorId, setVendorId] = useState('');
   const [page, setPage] = useState(1);
 
-  // Seam for a later recce|installed toggle — only 'recce' is built today.
-  const [mode] = useState<ReportMode>('recce');
+  // Recce | Installed report variant. Switching refetches with `mode` and re-renders the server-driven
+  // columns (the installed variant adds the install group + the before/after PPT).
+  const [mode, setMode] = useState<ReportMode>('recce');
 
   // Pinned-column widths shrink below the `sm` breakpoint so the two frozen identity columns stay
   // usable on a ~375px PWA phone.
@@ -124,13 +131,13 @@ export default function ExecutionReportPage() {
     vendorsApi.list().then((res) => { if (res.success) setVendors(res.data); });
   }, []);
 
-  useEffect(() => { setPage(1); }, [filtersKey]);
+  useEffect(() => { setPage(1); }, [filtersKey, mode]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     const t = setTimeout(async () => {
-      const res = await fetchOutletReport({ ...filters, page, limit: PAGE_SIZE });
+      const res = await fetchOutletReport({ ...filters, mode, page, limit: PAGE_SIZE });
       if (cancelled) return;
       if (res.success) { setData(res.data); setError(null); }
       else { setError(res.error || 'Could not load the report.'); setData(null); }
@@ -138,11 +145,11 @@ export default function ExecutionReportPage() {
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersKey, page, reloadKey]);
+  }, [filtersKey, mode, page, reloadKey]);
 
   const onDownload = async () => {
     setDownloading(true);
-    const err = await downloadOutletReportXlsx(filters);
+    const err = await downloadOutletReportXlsx({ ...filters, mode });
     setDownloading(false);
     if (err) toast.error(err);
     else toast.success('Report downloaded');
@@ -152,7 +159,7 @@ export default function ExecutionReportPage() {
     const codes = Array.from(selected);
     if (codes.length === 0) return;
     setExportingPptx(true);
-    const err = await downloadOutletReportPptx(codes);
+    const err = await downloadOutletReportPptx(codes, mode);
     setExportingPptx(false);
     if (err) toast.error(err);
     else toast.success('PPT downloaded');
@@ -179,12 +186,35 @@ export default function ExecutionReportPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">{MODE_TITLES[mode]}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            One row per recce (an outlet can have more than one) — recce evidence, element status and
-            approvals at a glance.
+            {MODE_SUBTITLES[mode]}
             {!loading && !error && <> {' · '}{total} outlet{total === 1 ? '' : 's'}</>}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Recce | Installed segmented control. */}
+          <div
+            role="tablist"
+            aria-label="Report variant"
+            className="inline-flex items-center rounded-xl border border-gray-200 bg-gray-50 p-0.5"
+          >
+            {(['recce', 'installed'] as const).map((m) => (
+              <button
+                key={m}
+                role="tab"
+                aria-selected={mode === m}
+                onClick={() => setMode(m)}
+                disabled={loading}
+                className={cn(
+                  'rounded-lg px-3 py-1.5 text-sm font-semibold transition-all disabled:opacity-50',
+                  mode === m
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700',
+                )}
+              >
+                {m === 'recce' ? 'Recce' : 'Installed'}
+              </button>
+            ))}
+          </div>
           <button
             onClick={() => setReloadKey((k) => k + 1)}
             disabled={loading}
@@ -250,7 +280,9 @@ export default function ExecutionReportPage() {
           <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center">
             <FileSpreadsheet className="h-6 w-6 text-gray-400" />
           </div>
-          <p className="text-sm font-medium text-gray-700">No recces match your filters</p>
+          <p className="text-sm font-medium text-gray-700">
+            {mode === 'installed' ? 'No installations match your filters' : 'No recces match your filters'}
+          </p>
         </div>
       ) : (
         <>

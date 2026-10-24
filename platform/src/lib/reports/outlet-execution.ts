@@ -12,14 +12,19 @@ import { api, type ApiResponse } from '@/lib/api-client';
 /** The visual tone of a status chip (drives its color). */
 export type CellTone = 'approved' | 'pending' | 'rejected' | 'neutral';
 
+/** The report variant — `recce` (default) or the `installed` before/after variant. */
+export type ReportMode = 'recce' | 'installed';
+
 /** The column groups, in their canonical left→right display order. `audit` columns are
- *  export-only (see `Column.excelOnly`) — the on-screen table skips them. */
+ *  export-only (see `Column.excelOnly`) — the on-screen table skips them. `install` is present only
+ *  in the installed-mode column set. */
 export type ColumnGroup =
   | 'outlet'
   | 'location'
   | 'profile'
   | 'element1'
   | 'element2'
+  | 'install'
   | 'overall'
   | 'audit';
 
@@ -65,6 +70,8 @@ export interface OutletReportFilters {
   region?: string;
   state?: string;
   vendorId?: string;
+  /** The report variant. Omitted/`recce` → the recce report; `installed` → the installed variant. */
+  mode?: ReportMode;
   page?: number;
   limit?: number;
 }
@@ -76,6 +83,7 @@ function toParams(f: OutletReportFilters): URLSearchParams {
   if (f.region?.trim()) p.set('region', f.region.trim());
   if (f.state?.trim()) p.set('state', f.state.trim());
   if (f.vendorId) p.set('vendorId', f.vendorId);
+  if (f.mode === 'installed') p.set('mode', 'installed');
   return p;
 }
 
@@ -152,7 +160,7 @@ export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Pro
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `recce-report-${istDateStamp()}.xlsx`;
+    a.download = `${f.mode === 'installed' ? 'installation' : 'recce'}-report-${istDateStamp()}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -170,12 +178,16 @@ export async function downloadOutletReportXlsx(f: OutletReportFilters = {}): Pro
  * triggers a browser save. Returns an error string on failure, else null. The 1–3 bound is validated
  * both here (fast feedback) and on the backend (authoritative 400).
  */
-export async function downloadOutletReportPptx(outletCodes: string[]): Promise<string | null> {
+export async function downloadOutletReportPptx(
+  outletCodes: string[],
+  mode: ReportMode = 'recce',
+): Promise<string | null> {
   const codes = Array.from(new Set(outletCodes.map((c) => c.trim()).filter(Boolean)));
   if (codes.length === 0) return 'Select at least one outlet for a PPT export.';
   if (codes.length > PPTX_MAX_OUTLETS) return 'PPT export is limited to 3 outlets.';
   const p = new URLSearchParams();
   p.set('outletCodes', codes.join(','));
+  if (mode === 'installed') p.set('mode', 'installed');
   try {
     const res = await fetch(`/api/reports/outlet-execution.pptx?${p.toString()}`, {
       method: 'GET',
@@ -190,7 +202,7 @@ export async function downloadOutletReportPptx(outletCodes: string[]): Promise<s
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `recce-report-${istDateStamp()}.pptx`;
+    a.download = `${mode === 'installed' ? 'installation' : 'recce'}-report-${istDateStamp()}.pptx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
