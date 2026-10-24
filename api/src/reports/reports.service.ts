@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import PptxGenJS from 'pptxgenjs';
 import { Jimp, defaultFormats } from 'jimp';
@@ -25,7 +25,7 @@ import {
 import { istDateLabel, istDateOnlyUtc, istHour } from './reports.time';
 import { UpdateEmailReportsConfigDto } from './dto/update-email-reports-config.dto';
 import { ListOutletReportDto } from './dto/list-outlet-report.dto';
-import { tenantScope } from '../common/tenant-scope';
+import { tenantScope, vendorScope } from '../common/tenant-scope';
 import { streamXlsx, type HyperlinkCell } from '../common/xlsx';
 import type { Readable } from 'node:stream';
 import {
@@ -748,9 +748,34 @@ export class ReportsService {
   // ── Outlet Execution Report (owner spec 2026-09-30) ─────────────────────────────────
 
   /**
+   * Vendor FLEET confinement for EVERY report surface (JSON / .xlsx / .pptx), modeled EXACTLY on
+   * analytics.resolveScope. Returns the vendorId a vendor-role caller (VENDOR_HO / VENDOR_FIELD) is
+   * pinned to — AND it into the Site `where` so that caller can see ONLY their own fleet — or null
+   * for a non-vendor role (where the tenant scope alone governs: CLIENT_ADMIN tenant-wide, un-assumed
+   * GIFSY platform-wide).
+   *
+   * FAIL-CLOSED: a vendor-role token that (defensively) carries NO vendorId throws a 403 — it must
+   * NEVER fall through to an unconfined, fleet-leaking read. Distinguish by ROLE, not the bare null
+   * (see vendorScope's contract): null from a vendor role = deny, null from a non-vendor = tenant-governed.
+   */
+  private vendorFleetId(user: JwtPayload): string | null {
+    const isVendor = user.role === 'VENDOR_HO' || user.role === 'VENDOR_FIELD';
+    const v = vendorScope(user); // vendorId for a vendor role, else null
+    if (isVendor && !v) {
+      throw new ForbiddenException('Vendor login is not associated with a fleet');
+    }
+    return isVendor ? v : null;
+  }
+
+  /**
    * The tenant/vendor `where` for the report. Tenant-scoped like the admin dashboards: a
    * CLIENT_ADMIN / assumed operator is pinned to their tenant; an un-assumed GIFSY_ADMIN is
    * platform-wide (scope === undefined ⇒ no clientId filter). Text filters are ci-`contains`.
+   *
+   * VENDOR confinement (fail-closed, modeled on analytics.resolveScope): a VENDOR_HO / VENDOR_FIELD
+   * caller is pinned to their OWN fleet (`vendorId`) on top of the tenant scope — and a vendor with
+   * no vendorId is denied. A vendor's `?vendorId` filter is IGNORED (it can never widen OR re-point
+   * scope to a sibling fleet); only an admin's `?vendorId` narrows.
    */
   private outletReportWhere(user: JwtPayload, q: ListOutletReportDto): Prisma.SiteWhereInput {
     const where: Prisma.SiteWhereInput = {};
@@ -760,7 +785,11 @@ export class ReportsService {
     if (q.town) where.town = { contains: q.town, mode: 'insensitive' };
     if (q.region) where.region = { contains: q.region, mode: 'insensitive' };
     if (q.state) where.state = { contains: q.state, mode: 'insensitive' };
-    if (q.vendorId) where.vendorId = q.vendorId;
+    // Vendor pin FIRST (fail-closed): a vendor sees only their fleet and any injected `?vendorId` is
+    // ignored. Only when the caller is NOT a vendor does an admin `?vendorId` narrow the view.
+    const fleetId = this.vendorFleetId(user);
+    if (fleetId) where.vendorId = fleetId;
+    else if (q.vendorId) where.vendorId = q.vendorId;
     // Installed mode: restrict to outlets that have at least one installed recce, so `total` reflects
     // outlets with installations and pages aren't padded with install-less outlets (the row builder
     // then emits exactly those recces that HAVE an installation).
@@ -948,6 +977,11 @@ export class ReportsService {
     const where: Prisma.SiteWhereInput = { code: { in: codes } };
     const scope = tenantScope(user);
     if (scope !== undefined) where.clientId = scope;
+    // VENDOR fleet pin (fail-closed), IDENTICAL to outletReportWhere: a VENDOR_HO / VENDOR_FIELD is
+    // confined to their own fleet, so a vendor can NEVER PPT-export a sibling fleet's outlet by code
+    // (the code alone is not a key — it must also be in their fleet). A vendor with no vendorId 403s.
+    const fleetId = this.vendorFleetId(user);
+    if (fleetId) where.vendorId = fleetId;
 
     const sites = (await this.prisma.site.findMany({
       where,

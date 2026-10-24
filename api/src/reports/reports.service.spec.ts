@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { Prisma } from '@prisma/client';
@@ -86,6 +86,11 @@ function makeService() {
 
 const admin = (over: Partial<JwtPayload> = {}): JwtPayload => ({
   sub: 'u1', role: 'CLIENT_ADMIN', clientId: 'c1', phone: '9800000000', name: 'T', ...over,
+});
+
+/** A VENDOR_HO caller — tenant c1, pinned to fleet `vend1` by default. */
+const vendor = (over: Partial<JwtPayload> = {}): JwtPayload => ({
+  sub: 'vu1', role: 'VENDOR_HO', clientId: 'c1', vendorId: 'vend1', phone: '9800000000', name: 'V', ...over,
 });
 
 const fullConfig = (over: Record<string, unknown> = {}) => ({
@@ -747,6 +752,110 @@ describe('ReportsService.outletExecutionXlsxStream', () => {
     const imageCol = aoa[0].indexOf('Element 1 Image');
     const addr = XLSX.utils.encode_cell({ r: 1, c: imageCol });
     expect((ws[addr] as XLSX.CellObject).l?.Target).toBe('/v1/media/view?key=r1');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VENDOR_HO fleet isolation — the SECURITY-CRITICAL scope: a vendor sees ONLY their own
+// fleet across the report JSON, the .xlsx stream AND the .pptx deck; an injected foreign
+// `?vendorId` is ignored; a vendor with no vendorId is fail-closed on all three; an admin
+// stays tenant-wide. Modeled on analytics.resolveScope's confinement.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ReportsService — VENDOR_HO fleet confinement (isolation)', () => {
+  // ── JSON (outletExecution) ──────────────────────────────────────────────────
+  it('JSON: a VENDOR_HO is pinned to their OWN vendorId (+ tenant), never a sibling fleet', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([sampleSite()]);
+    fns.site.count.mockResolvedValue(1);
+
+    await service.outletExecution(vendor(), {});
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.clientId).toBe('c1'); // still tenant-scoped
+    expect(where.vendorId).toBe('vend1'); // AND fleet-confined
+  });
+
+  it('JSON: an injected foreign `?vendorId` from a VENDOR_HO is IGNORED (pinned to their own)', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([]);
+    fns.site.count.mockResolvedValue(0);
+
+    await service.outletExecution(vendor(), { vendorId: 'ATTACKER_FLEET' });
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.vendorId).toBe('vend1'); // their own, NOT the injected one
+  });
+
+  it('JSON: a VENDOR_HO with NO vendorId is FAIL-CLOSED (403, no query)', async () => {
+    const { service, fns } = makeService();
+    await expect(service.outletExecution(vendor({ vendorId: undefined }), {})).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(fns.site.findMany).not.toHaveBeenCalled();
+  });
+
+  // ── .xlsx stream (outletExecutionXlsxStream) ────────────────────────────────
+  it('xlsx: EVERY streamed batch query carries the vendor fleet pin', async () => {
+    const { service, fns } = makeService();
+    // Two batches worth of calls then exhausted — assert the pin on each cursor batch.
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+
+    await streamToBuffer(service.outletExecutionXlsxStream(vendor(), {}));
+    expect(fns.site.findMany.mock.calls.length).toBeGreaterThan(0);
+    for (const call of fns.site.findMany.mock.calls) {
+      expect(call[0].where.vendorId).toBe('vend1');
+      expect(call[0].where.clientId).toBe('c1');
+    }
+  });
+
+  it('xlsx: an injected foreign `?vendorId` is IGNORED for a VENDOR_HO', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+    await streamToBuffer(service.outletExecutionXlsxStream(vendor(), { vendorId: 'ATTACKER_FLEET' }));
+    for (const call of fns.site.findMany.mock.calls) {
+      expect(call[0].where.vendorId).toBe('vend1');
+    }
+  });
+
+  it('xlsx: a VENDOR_HO with NO vendorId is FAIL-CLOSED (the stream builder throws 403 before any row)', () => {
+    const { service, fns } = makeService();
+    // The `where` is built synchronously when the stream is constructed, so the 403 fires here.
+    expect(() => service.outletExecutionXlsxStream(vendor({ vendorId: undefined }), {})).toThrow(
+      ForbiddenException,
+    );
+    expect(fns.site.findMany).not.toHaveBeenCalled();
+  });
+
+  // ── .pptx deck (buildRecceDeck) ─────────────────────────────────────────────
+  it('pptx: the deck Site query carries the vendor fleet pin (can’t export a sibling fleet by code)', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([pptxSite()]);
+    await service.buildRecceDeck(vendor(), 'A8');
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.clientId).toBe('c1');
+    expect(where.vendorId).toBe('vend1');
+    expect(where.code).toEqual({ in: ['A8'] });
+  });
+
+  it('pptx: a VENDOR_HO with NO vendorId is FAIL-CLOSED (403, no query)', async () => {
+    const { service, fns } = makeService();
+    await expect(service.buildRecceDeck(vendor({ vendorId: undefined }), 'A8')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(fns.site.findMany).not.toHaveBeenCalled();
+  });
+
+  // ── Admin unchanged ─────────────────────────────────────────────────────────
+  it('CLIENT_ADMIN is NOT fleet-pinned — stays tenant-wide, and its `?vendorId` narrows as before', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValue([sampleSite()]);
+    fns.site.count.mockResolvedValue(1);
+
+    // No vendorId → tenant-wide, no vendor pin at all.
+    await service.outletExecution(admin(), {});
+    expect(fns.site.findMany.mock.calls[0][0].where.vendorId).toBeUndefined();
+
+    // With ?vendorId → admin narrowing (honored, unlike a vendor's ignored filter).
+    await service.outletExecution(admin(), { vendorId: 'v9' });
+    expect(fns.site.findMany.mock.calls[1][0].where.vendorId).toBe('v9');
   });
 });
 

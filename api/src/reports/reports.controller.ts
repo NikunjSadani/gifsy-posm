@@ -56,8 +56,10 @@ export class ReportsController {
 
   /**
    * GET /v1/reports/outlet-execution — one paginated page of the Outlet Execution Report
-   * ({ columns, rows, total, page, limit }) for the on-screen table. Tenant-scoped in the service.
+   * ({ columns, rows, total, page, limit }) for the on-screen table. Tenant-scoped in the service;
+   * a VENDOR_HO is additionally fleet-confined (fail-closed) to their own outlets.
    */
+  @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO')
   @Get('outlet-execution')
   outletExecution(@CurrentUser() user: JwtPayload, @Query() query: ListOutletReportDto) {
     return this.reports.outletExecution(user, query);
@@ -67,8 +69,10 @@ export class ReportsController {
    * GET /v1/reports/outlet-execution.xlsx — the same report as a downloadable .xlsx, EVERY matching
    * row (no row cap). The service streams rows in batches straight into the response, so a large
    * tenant export never materialises the whole workbook in memory. Returned as a StreamableFile
-   * (passed through the global interceptor unwrapped) with an attachment disposition.
+   * (passed through the global interceptor unwrapped) with an attachment disposition. Fleet-scoped
+   * for a VENDOR_HO (fail-closed) on EVERY streamed batch — the same `where` as the JSON view.
    */
+  @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO')
   @Get('outlet-execution.xlsx')
   outletExecutionXlsx(
     @CurrentUser() user: JwtPayload,
@@ -87,10 +91,13 @@ export class ReportsController {
   /**
    * GET /v1/reports/outlet-execution.pptx?outletCodes=CODE1,CODE2,CODE3 — the Recce Report as a
    * PowerPoint, ONE SLIDE PER OUTLET (1–3 outlets; a 0/4+ selection 400s in the service). Tenant-
-   * scoped + admin-gated like the rest of the report. Photo bytes are read server-side through the
+   * scoped + role-gated like the rest of the report, and fleet-confined (fail-closed) for a
+   * VENDOR_HO — the deck's Site `where` carries the same vendor pin, so a vendor can never
+   * PPT-export a sibling fleet's outlet by code. Photo bytes are read server-side through the
    * media driver and embedded; the whole (bounded) deck is built in memory and returned as a
    * StreamableFile attachment.
    */
+  @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO')
   @Get('outlet-execution.pptx')
   async outletExecutionPptx(
     @CurrentUser() user: JwtPayload,
