@@ -24,7 +24,7 @@ import {
   RefreshCw,
   AlertTriangle,
 } from 'lucide-react';
-import { fetchWaterfall, fetchQueue, fetchRecords, type Waterfall, type ApprovalRecord } from '@/lib/review/api';
+import { fetchWaterfall, fetchQueue, fetchRecords, recordsExportUrl, type Waterfall, type ApprovalRecord } from '@/lib/review/api';
 import { Spinner } from '@/components/ui/spinner';
 import { MetricDrilldownSheet } from '@/components/ui/metric-drilldown-sheet';
 
@@ -207,6 +207,7 @@ export default function ReviewDashboardPage() {
         onClose={() => setDrill(null)}
         fetcher={fetcher}
         onItemHref={itemHref}
+        exportHref={drill ? recordsExportUrl(drill.stage) : null}
       />
     </div>
   );

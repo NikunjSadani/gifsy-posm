@@ -7,6 +7,7 @@ import {
   stageColor,
   geoFenceLabel,
   exportUrl,
+  drilldownExportUrl,
   recordsQueryString,
   drilldownQueryString,
   toAnalyticsMediaUrl,
@@ -162,6 +163,18 @@ describe('geoFenceLabel', () => {
 describe('exportUrl', () => {
   it('builds the plain same-origin export path (no stage param — export is always Summary + Scorecards)', () => {
     expect(exportUrl()).toBe('/api/analytics/export');
+  });
+});
+
+// ─── drilldownExportUrl ─────────────────────────────────────────────────────────
+
+describe('drilldownExportUrl', () => {
+  it('carries the metric; drops a blank vendorId', () => {
+    expect(drilldownExportUrl('recce')).toBe('/api/analytics/drilldown.xlsx?metric=recce');
+    expect(drilldownExportUrl('recce', { vendorId: '  ' })).toBe('/api/analytics/drilldown.xlsx?metric=recce');
+  });
+  it('serialises an admin vendorId narrowing', () => {
+    expect(drilldownExportUrl('recce', { vendorId: 'v-9' })).toBe('/api/analytics/drilldown.xlsx?metric=recce&vendorId=v-9');
   });
 });
 

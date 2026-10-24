@@ -4,28 +4,23 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope } from '../common/tenant-scope';
 import { readMediaValue } from '../capture/visibility-types';
-import { buildXlsx } from '../common/xlsx';
+import { buildXlsx, streamXlsx, type HyperlinkCell } from '../common/xlsx';
+import {
+  type DrilldownRecordItem,
+  type ElementTypeCount,
+  type ElementLineInput,
+  summarizeElements,
+  recceLifecycleLabel,
+  installLifecycleLabel,
+  siteStatusLabel,
+  DRILLDOWN_XLSX_HEADERS,
+  drilldownXlsxRow,
+} from '../common/drilldown-record';
 import { GeoQueryDto } from './dto/geo-query.dto';
 import { RecordsQueryDto } from './dto/records-query.dto';
 import { DrilldownMetric, DrilldownQueryDto } from './dto/drilldown-query.dto';
 
-/** One row of the sheet-shaped per-tile drill-down (lightweight — no media payloads). */
-export interface DrilldownItem {
-  id: string;
-  outletCode: string;
-  outletName: string;
-  town: string | null;
-  /** The recce id ONLY for an APP recce-based metric (manual recces are listed but un-linkable). */
-  recceId: string | null;
-  status: string | null;
-}
-
-/** An element-type line-count bucket in the drill-down breakdown. */
-export interface ElementTypeCount {
-  code: string;
-  name: string;
-  count: number;
-}
+export type { DrilldownRecordItem, ElementTypeCount } from '../common/drilldown-record';
 
 /**
  * A resolved read-scope for the caller, applied UNIFORMLY to every analytics query. It is the
@@ -635,93 +630,151 @@ export class AnalyticsService {
    * The admin-only `vendorId` narrows further (ignored for VENDOR_HO/ASM, exactly like records()).
    */
   async drilldown(user: JwtPayload, q: DrilldownQueryDto) {
-    const s = this.resolveScope(user); // throws (fail-closed) for a vendor with no vendorId
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
     const skip = (page - 1) * limit;
-    // Admin-only vendor narrowing (vendor-scorecard-row click). IGNORED for VENDOR_HO/ASM — that
-    // caller stays confined by resolveScope, so it can NEVER surface a foreign fleet.
-    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
-    const drillVendorId = isAdmin ? q.vendorId?.trim() || undefined : undefined;
-
-    const siteSelect = { code: true, name: true, town: true } as const;
+    const plan = this.drilldownPlan(user, q); // throws (fail-closed) for a vendor with no vendorId
 
     // ── Site-based metric ──────────────────────────────────────────────────────────
-    if (q.metric === DrilldownMetric.TOTAL_OUTLETS) {
-      const where: Prisma.SiteWhereInput = { ...s.site };
-      if (drillVendorId) where.vendorId = drillVendorId;
+    if (plan.kind === 'site') {
+      const { where } = plan;
       const [rows, total] = await Promise.all([
         this.prisma.site.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           skip,
           take: limit,
-          select: { id: true, code: true, name: true, town: true, status: true },
+          select: AnalyticsService.SITE_DRILL_SELECT,
         }),
         this.prisma.site.count({ where }),
       ]);
-      const items: DrilldownItem[] = rows.map((r) => ({
-        id: r.id,
-        outletCode: r.code,
-        outletName: r.name,
-        town: r.town,
-        recceId: null,
-        status: r.status,
-      }));
+      const items = rows.map((r) => this.siteItem(r));
       return { items, byElementType: [] as ElementTypeCount[], total, page, limit };
     }
 
     // ── Installation-based metrics ───────────────────────────────────────────────────
-    const installStatus = this.installMetricStatus(q.metric);
-    if (installStatus !== undefined) {
-      const where: Prisma.InstallationWhereInput = { ...s.install };
-      if (installStatus) where.status = installStatus;
-      if (drillVendorId) {
-        where.site = { ...(where.site as Prisma.SiteWhereInput | undefined), vendorId: drillVendorId };
-      }
+    if (plan.kind === 'install') {
+      const { where } = plan;
       const [rows, total, byElementType] = await Promise.all([
         this.prisma.installation.findMany({
           where,
           orderBy: { receivedAt: 'desc' },
           skip,
           take: limit,
-          select: { id: true, status: true, site: { select: siteSelect } },
+          select: AnalyticsService.INSTALL_DRILL_SELECT,
         }),
         this.prisma.installation.count({ where }),
         // Installed element lines: ReccePosm rows with a linked InstallPosm whose installation is
         // in scope — reuses `where` verbatim through the back-relation (same scope, no new surface).
         this.elementBreakdown({ installPosm: { installation: where } }),
       ]);
-      const items: DrilldownItem[] = rows.map((i) => ({
-        id: i.id,
-        outletCode: i.site.code,
-        outletName: i.site.name,
-        town: i.site.town,
-        recceId: null,
-        status: i.status,
-      }));
+      const items = rows.map((i) => this.installItem(i));
       return { items, byElementType, total, page, limit };
     }
 
     // ── Recce-based metrics ──────────────────────────────────────────────────────────
-    const where: Prisma.RecceWhereInput = { ...s.recce, ...this.recceMetricWhere(q.metric) };
-    if (drillVendorId) {
-      where.site = { ...(where.site as Prisma.SiteWhereInput | undefined), vendorId: drillVendorId };
-    }
+    const { where } = plan;
     const [rows, total, byElementType] = await Promise.all([
       this.prisma.recce.findMany({
         where,
         orderBy: { receivedAt: 'desc' },
         skip,
         take: limit,
-        select: { id: true, status: true, recceMode: true, site: { select: siteSelect } },
+        select: AnalyticsService.RECCE_DRILL_SELECT,
       }),
       this.prisma.recce.count({ where }),
       // ReccePosm lines of the matched recces grouped by element type — the stage's scoped recce
       // `where` reached through the parent relation (same scope, no new surface).
       this.elementBreakdown({ recce: where }),
     ]);
-    const items: DrilldownItem[] = rows.map((r) => ({
+    const items = rows.map((r) => this.recceItem(r));
+    return { items, byElementType, total, page, limit };
+  }
+
+  // ── Enriched drill-down selects + row→item mappers (shared by drilldown + xlsx) ────
+
+  /** Site fields for the outlet-universe metric (+ vendor name for the enriched shape). */
+  private static readonly SITE_DRILL_SELECT = {
+    id: true,
+    code: true,
+    name: true,
+    town: true,
+    status: true,
+    vendor: { select: { name: true } },
+  } as const;
+
+  /** Installation fields + its site/vendor + the installed element lines (via reccePosm). */
+  private static readonly INSTALL_DRILL_SELECT = {
+    id: true,
+    status: true,
+    capturedAt: true,
+    site: { select: { code: true, name: true, town: true, vendor: { select: { name: true } } } },
+    posms: {
+      select: { reccePosm: { select: { dimensions: true, posmType: { select: { name: true } } } } },
+    },
+  } as const;
+
+  /** Recce fields + its site/vendor + its element lines (posmType name + dimensions). */
+  private static readonly RECCE_DRILL_SELECT = {
+    id: true,
+    status: true,
+    recceMode: true,
+    hoReviewStatus: true,
+    capturedAt: true,
+    site: { select: { code: true, name: true, town: true, vendor: { select: { name: true } } } },
+    posms: { select: { dimensions: true, posmType: { select: { name: true } } } },
+  } as const;
+
+  private siteItem(
+    r: Prisma.SiteGetPayload<{ select: typeof AnalyticsService.SITE_DRILL_SELECT }>,
+  ): DrilldownRecordItem {
+    return {
+      id: r.id,
+      outletCode: r.code,
+      outletName: r.name,
+      town: r.town,
+      recceId: null,
+      status: r.status,
+      recceDate: null, // the outlet universe has no capture event
+      vendorName: r.vendor?.name ?? null,
+      elementSummary: null,
+      dimensions: null,
+      statusLabel: siteStatusLabel(r.status),
+    };
+  }
+
+  private installItem(
+    i: Prisma.InstallationGetPayload<{ select: typeof AnalyticsService.INSTALL_DRILL_SELECT }>,
+  ): DrilldownRecordItem {
+    const lines: ElementLineInput[] = (i.posms ?? []).map((p) => ({
+      name: p.reccePosm?.posmType?.name,
+      dimensions: p.reccePosm?.dimensions,
+    }));
+    const { elementSummary, dimensions } = summarizeElements(lines);
+    return {
+      id: i.id,
+      outletCode: i.site.code,
+      outletName: i.site.name,
+      town: i.site.town,
+      recceId: null,
+      status: i.status,
+      recceDate: i.capturedAt ?? null,
+      vendorName: i.site.vendor?.name ?? null,
+      elementSummary,
+      dimensions,
+      statusLabel: installLifecycleLabel(i.status),
+    };
+  }
+
+  private recceItem(
+    r: Prisma.RecceGetPayload<{ select: typeof AnalyticsService.RECCE_DRILL_SELECT }>,
+  ): DrilldownRecordItem {
+    const lines: ElementLineInput[] = (r.posms ?? []).map((p) => ({
+      name: p.posmType?.name,
+      dimensions: p.dimensions,
+    }));
+    const { elementSummary, dimensions } = summarizeElements(lines);
+    return {
       id: r.id,
       outletCode: r.site.code,
       outletName: r.site.name,
@@ -730,8 +783,119 @@ export class AnalyticsService {
       // its tile) but rendered un-linked — mirrors approval.records.
       recceId: r.recceMode === 'APP' ? r.id : null,
       status: r.status,
-    }));
-    return { items, byElementType, total, page, limit };
+      recceDate: r.capturedAt ?? null,
+      vendorName: r.site.vendor?.name ?? null,
+      elementSummary,
+      dimensions,
+      statusLabel: recceLifecycleLabel(r.status, r.hoReviewStatus),
+    };
+  }
+
+  /**
+   * Resolve a drill-down query to a discriminated `{ kind, where }` plan, applying resolveScope
+   * (fail-closed) AND the admin-only vendor narrowing. Shared by the paged {@link drilldown} and
+   * the uncapped {@link drilldownXlsx} stream so the two can NEVER diverge on scope or predicate.
+   */
+  private drilldownPlan(
+    user: JwtPayload,
+    q: DrilldownQueryDto,
+  ):
+    | { kind: 'site'; where: Prisma.SiteWhereInput }
+    | { kind: 'install'; where: Prisma.InstallationWhereInput }
+    | { kind: 'recce'; where: Prisma.RecceWhereInput } {
+    const s = this.resolveScope(user); // throws (fail-closed) for a vendor with no vendorId
+    // Admin-only vendor narrowing (vendor-scorecard-row click). IGNORED for VENDOR_HO/ASM — that
+    // caller stays confined by resolveScope, so it can NEVER surface a foreign fleet.
+    const isAdmin = user.role === 'CLIENT_ADMIN' || user.role === 'GIFSY_ADMIN';
+    const drillVendorId = isAdmin ? q.vendorId?.trim() || undefined : undefined;
+
+    if (q.metric === DrilldownMetric.TOTAL_OUTLETS) {
+      const where: Prisma.SiteWhereInput = { ...s.site };
+      if (drillVendorId) where.vendorId = drillVendorId;
+      return { kind: 'site', where };
+    }
+
+    const installStatus = this.installMetricStatus(q.metric);
+    if (installStatus !== undefined) {
+      const where: Prisma.InstallationWhereInput = { ...s.install };
+      if (installStatus) where.status = installStatus;
+      if (drillVendorId) {
+        where.site = { ...(where.site as Prisma.SiteWhereInput | undefined), vendorId: drillVendorId };
+      }
+      return { kind: 'install', where };
+    }
+
+    const where: Prisma.RecceWhereInput = { ...s.recce, ...this.recceMetricWhere(q.metric) };
+    if (drillVendorId) {
+      where.site = { ...(where.site as Prisma.SiteWhereInput | undefined), vendorId: drillVendorId };
+    }
+    return { kind: 'recce', where };
+  }
+
+  /**
+   * The ENRICHED drill-down for one metric as a streamed .xlsx (NO row cap). Same scope +
+   * predicate as {@link drilldown} (via the shared {@link drilldownPlan}), so a VENDOR_HO export
+   * contains ONLY their fleet and an ASM only their territory. Rows are pulled in batches by a
+   * stable `id` cursor and written straight to the response, so peak memory is one batch regardless
+   * of how many records the metric matches. Columns = {@link DRILLDOWN_XLSX_HEADERS}.
+   */
+  drilldownXlsx(user: JwtPayload, q: DrilldownQueryDto): StreamableFile {
+    const plan = this.drilldownPlan(user, q); // throws (fail-closed) before any row is read
+    let cursorId: string | undefined;
+    let exhausted = false;
+
+    const nextBatch = async (): Promise<Record<string, string | HyperlinkCell>[]> => {
+      if (exhausted) return [];
+      const items = await this.drilldownXlsxBatch(plan, cursorId);
+      if (items.length < AnalyticsService.XLSX_BATCH) exhausted = true;
+      if (items.length > 0) cursorId = items[items.length - 1].id;
+      return items.map(drilldownXlsxRow);
+    };
+
+    return new StreamableFile(
+      streamXlsx({ sheetName: 'Drill-down', headers: [...DRILLDOWN_XLSX_HEADERS], nextBatch }),
+      {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        disposition: `attachment; filename="posm-drilldown-${q.metric}.xlsx"`,
+      },
+    );
+  }
+
+  /** Streaming batch size for {@link drilldownXlsx} — one batch is the peak in-memory row count. */
+  private static readonly XLSX_BATCH = 500;
+
+  /** One cursor-paged batch of enriched items for the export, by the plan's entity. */
+  private async drilldownXlsxBatch(
+    plan: ReturnType<AnalyticsService['drilldownPlan']>,
+    cursorId: string | undefined,
+  ): Promise<DrilldownRecordItem[]> {
+    const paging = {
+      take: AnalyticsService.XLSX_BATCH,
+      orderBy: { id: 'asc' as const },
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+    };
+    if (plan.kind === 'site') {
+      const rows = await this.prisma.site.findMany({
+        where: plan.where,
+        select: AnalyticsService.SITE_DRILL_SELECT,
+        ...paging,
+      });
+      return rows.map((r) => this.siteItem(r));
+    }
+    if (plan.kind === 'install') {
+      const rows = await this.prisma.installation.findMany({
+        where: plan.where,
+        select: AnalyticsService.INSTALL_DRILL_SELECT,
+        ...paging,
+      });
+      return rows.map((i) => this.installItem(i));
+    }
+    const rows = await this.prisma.recce.findMany({
+      where: plan.where,
+      select: AnalyticsService.RECCE_DRILL_SELECT,
+      ...paging,
+    });
+    return rows.map((r) => this.recceItem(r));
   }
 
   /**

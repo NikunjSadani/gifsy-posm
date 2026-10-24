@@ -21,6 +21,7 @@ import {
   fetchVendorScorecards,
   fetchGeo,
   fetchAnalyticsDrilldown,
+  drilldownExportUrl,
   type AnalyticsSummary,
   type VendorScorecard,
   type GeoResult,
@@ -150,6 +151,7 @@ export default function VendorDashboardPage() {
         title={drill?.title ?? ''}
         onClose={() => setDrill(null)}
         fetcher={drillFetcher}
+        exportHref={drill ? drilldownExportUrl(drill.metric, { vendorId: drill.vendorId }) : null}
       />
     </div>
   );

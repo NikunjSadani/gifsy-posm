@@ -129,6 +129,17 @@ export interface ApprovalRecord {
   town: string | null;
   recceId: string | null;
   status: string | null;
+  // ── Phase E enrichment (shared with the analytics drill-down) ──
+  /** Recce / installation capture time (ISO); null for the outlet universe. */
+  recceDate: string | null;
+  /** Fleet vendor name; null when the outlet carries no vendor. */
+  vendorName: string | null;
+  /** Element type name(s) summary, e.g. "Glow Sign Board, Banner (+2)"; null when no elements. */
+  elementSummary: string | null;
+  /** Element W×H dimension(s) summary, e.g. "4 × 3 ft"; null when none. */
+  dimensions: string | null;
+  /** Human lifecycle label (Not started / Submitted / ASM approved / HO approved / Rejected / …). */
+  statusLabel: string | null;
 }
 
 /**
@@ -355,6 +366,15 @@ function recordsQueryString(stage: string, opts: { limit?: number; page?: number
   if (opts.page != null) params.set('page', String(opts.page));
   if (opts.limit != null) params.set('limit', String(opts.limit));
   return `?${params.toString()}`;
+}
+
+/**
+ * Same-origin .xlsx export URL for one records stage's FULL (uncapped) enriched set. Rendered as an
+ * `<a href download>` so the edge proxy injects auth and the browser streams the attachment — never
+ * fetched with a manual bearer header. Mirrors the analytics `drilldownExportUrl`.
+ */
+export function recordsExportUrl(stage: string): string {
+  return `/api/approval/records.xlsx?stage=${encodeURIComponent(stage)}`;
 }
 
 /**

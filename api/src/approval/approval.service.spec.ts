@@ -1,12 +1,30 @@
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException, StreamableFile } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { Prisma } from '@prisma/client';
+import { type Readable } from 'node:stream';
+import * as XLSX from 'xlsx';
 import { ApprovalService } from './approval.service';
 import { RejectRecceDto } from './dto/reject-recce.dto';
 import { RecordsStage } from './dto/records-query.dto';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
+
+/** Drain a streamed xlsx to its parsed rows (AOA of the first sheet). */
+function collect(stream: Readable): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on('data', (c: Buffer) => chunks.push(c));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
+async function readStreamedRows(file: StreamableFile): Promise<string[][]> {
+  const buf = await collect(file.getStream());
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, blankrows: false, defval: '' });
+}
 
 /** A Prisma "record to update/delete does not exist" error — what a 0-row guarded write throws. */
 const notFoundError = () =>
@@ -516,9 +534,9 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     const svc = new ApprovalService(prisma);
     const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.OUTLETS });
     expect(fns.site.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', asmUserId: 'asm-7' });
-    expect(res.items).toEqual([
-      { id: 's1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: null, status: 'ACTIVE' },
-    ]);
+    expect(res.items[0]).toMatchObject({ id: 's1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: null, status: 'ACTIVE' });
+    // Enriched: outlet universe has no capture/element data; human status label; vendor null on mock.
+    expect(res.items[0]).toMatchObject({ recceDate: null, elementSummary: null, dimensions: null, vendorName: null, statusLabel: 'Active' });
     expect(res.byElementType).toEqual([]);
     expect(res).toMatchObject({ total: 1, page: 1, limit: 50 });
     // The outlet stage never touches the element breakdown query.
@@ -536,11 +554,9 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.RECCE });
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
     expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual({ createdAt: 'desc' });
-    expect(res.items).toEqual([
-      // APP recce → linkable; MANUAL recce still listed (counts toward the tile) but recceId null.
-      { id: 'r1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: 'r1', status: 'SUBMITTED' },
-      { id: 'rM', outletCode: 'A2', outletName: 'Site A2', town: null, recceId: null, status: 'SUBMITTED' },
-    ]);
+    // APP recce → linkable; MANUAL recce still listed (counts toward the tile) but recceId null.
+    expect(res.items[0]).toMatchObject({ id: 'r1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: 'r1', status: 'SUBMITTED', statusLabel: 'Submitted' });
+    expect(res.items[1]).toMatchObject({ id: 'rM', outletCode: 'A2', outletName: 'Site A2', town: null, recceId: null, status: 'SUBMITTED' });
   });
 
   it('asm-approved: status APPROVED && approvedById set (manual + resubmitted-then-HO-approved APP excluded)', async () => {
@@ -580,9 +596,7 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     const res = await svc.records(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.INSTALLED });
     const installWhere = { clientId: 'c1', site: { asmUserId: 'asm-7' } };
     expect(fns.installation.findMany.mock.calls[0][0].where).toEqual(installWhere);
-    expect(res.items).toEqual([
-      { id: 'i1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: null, status: 'SUBMITTED' },
-    ]);
+    expect(res.items[0]).toMatchObject({ id: 'i1', outletCode: 'A1', outletName: 'Site A1', town: 'Pune', recceId: null, status: 'SUBMITTED', statusLabel: 'Submitted' });
     // Installed element lines = ReccePosm rows with a linked InstallPosm whose installation is in scope.
     expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({ installPosm: { installation: installWhere } });
   });
@@ -619,5 +633,70 @@ describe('ApprovalService.records — scoped per-tile drill-down', () => {
     const svc = new ApprovalService(prisma);
     await svc.records(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), { stage: RecordsStage.RECCE });
     expect(fns.recce.findMany.mock.calls[0][0].where.clientId).toBeUndefined();
+  });
+
+  it('ENRICHED recce row: recceDate, vendor, element summary, W×H, human status label', async () => {
+    const { prisma, fns } = makePrisma();
+    const captured = new Date('2026-10-20T06:30:00.000Z');
+    fns.recce.findMany.mockResolvedValue([
+      {
+        id: 'r1',
+        status: 'APPROVED',
+        recceMode: 'APP',
+        hoReviewStatus: 'PENDING',
+        capturedAt: captured,
+        site: { code: 'A1', name: 'Site A1', town: 'Pune', vendor: { name: 'Vendor One' } },
+        posms: [{ dimensions: { width: 4, height: 3, unit: 'ft' }, posmType: { name: 'Glow Sign Board' } }],
+      },
+    ]);
+    fns.recce.count.mockResolvedValue(1);
+    const svc = new ApprovalService(prisma);
+    const res = await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: RecordsStage.RECCE });
+    expect(res.items[0]).toEqual({
+      id: 'r1',
+      outletCode: 'A1',
+      outletName: 'Site A1',
+      town: 'Pune',
+      recceId: 'r1',
+      status: 'APPROVED',
+      recceDate: captured,
+      vendorName: 'Vendor One',
+      elementSummary: 'Glow Sign Board',
+      dimensions: '4 × 3 ft',
+      statusLabel: 'ASM approved', // APPROVED + HO PENDING → mid-pipeline (matches the report)
+    });
+  });
+});
+
+describe('ApprovalService.recordsXlsx — scoped enriched export', () => {
+  it('streams the enriched columns + rows for the recce stage (uncapped, id-cursor batches)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.recce.findMany.mockResolvedValueOnce([
+      {
+        id: 'r1',
+        status: 'REJECTED',
+        recceMode: 'APP',
+        hoReviewStatus: 'NONE',
+        capturedAt: new Date('2026-10-18T00:00:00.000Z'),
+        site: { code: 'A1', name: 'Site A1', town: 'Pune', vendor: { name: 'Vendor One' } },
+        posms: [{ dimensions: { width: 4, height: 3, unit: 'ft' }, posmType: { name: 'Glow Sign Board' } }],
+      },
+    ]);
+    const svc = new ApprovalService(prisma);
+    const file = svc.recordsXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: RecordsStage.RECCE });
+    expect(file).toBeInstanceOf(StreamableFile);
+    const rows = await readStreamedRows(file);
+    expect(rows[0]).toEqual(['Outlet Code', 'Outlet Name', 'Town', 'Vendor', 'Element(s)', 'W × H', 'Recce Date', 'Status']);
+    expect(rows[1]).toEqual(['A1', 'Site A1', 'Pune', 'Vendor One', 'Glow Sign Board', '4 × 3 ft', '2026-10-18', 'Rejected']);
+    expect(fns.recce.findMany.mock.calls[0][0].take).toBe(500);
+    expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual({ id: 'asc' });
+  });
+
+  it('ASM export is TERRITORY-SCOPED (isolation): query pinned to site.asmUserId', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new ApprovalService(prisma);
+    const file = svc.recordsXlsx(user({ role: 'ASM', sub: 'asm-7', clientId: 'c1' }), { stage: RecordsStage.RECCE });
+    await readStreamedRows(file); // drain so the cursor batch runs
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-7' } });
   });
 });

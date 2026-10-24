@@ -8,11 +8,19 @@ import {
   summarizeQueue,
   dimensionsLabel,
   flaggedOnPageLabel,
+  recordsExportUrl,
   REJECT_REASON_CODES,
   REJECT_REASON_LABELS,
   type RecceQueueItem,
   type RecceIntegrity,
 } from '@/lib/review/api';
+
+describe('recordsExportUrl', () => {
+  it('builds the same-origin records .xlsx path for a stage', () => {
+    expect(recordsExportUrl('recce')).toBe('/api/approval/records.xlsx?stage=recce');
+    expect(recordsExportUrl('pending-install')).toBe('/api/approval/records.xlsx?stage=pending-install');
+  });
+});
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 

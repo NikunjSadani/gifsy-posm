@@ -54,6 +54,17 @@ export class AnalyticsController {
     return this.analytics.drilldown(user, query);
   }
 
+  /**
+   * GET /v1/analytics/drilldown.xlsx?metric=…&vendorId=… — the SAME scoped drill-down as
+   * `/drilldown`, full set (no row cap), streamed as an enriched .xlsx attachment. Same @Roles
+   * floor + same scope (a VENDOR_HO export is fleet-only; an ASM export territory-only).
+   */
+  @Get('drilldown.xlsx')
+  @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO', 'ASM')
+  drilldownXlsx(@CurrentUser() user: JwtPayload, @Query() query: DrilldownQueryDto): StreamableFile {
+    return this.analytics.drilldownXlsx(user, query);
+  }
+
   /** GET /v1/analytics/export — Summary + Vendor-Scorecards xlsx (attachment), scoped. */
   @Get('export')
   @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO')

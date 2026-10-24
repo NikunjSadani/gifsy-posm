@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { X, ChevronRight, AlertTriangle, Inbox } from 'lucide-react';
+import { X, ChevronRight, AlertTriangle, Inbox, Download, Calendar, Ruler, Building2 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import type { ApiResponse } from '@/lib/api-client';
 import type { ApprovalRecord, ElementTypeBreakdown } from '@/lib/review/api';
@@ -40,6 +40,12 @@ export interface MetricDrilldownSheetProps {
   fetcher: () => Promise<ApiResponse<DrilldownPage>>;
   /** Optional per-row deep link; a non-null return makes the row a `Link`, else it's plain. */
   onItemHref?: (item: ApprovalRecord) => string | null;
+  /**
+   * Optional same-origin `.xlsx` URL for the CURRENTLY-drilled set (the full, uncapped export).
+   * When provided, an "Export Excel" button appears in the header and downloads that URL via an
+   * `<a href download>` (edge proxy injects auth) — scoped server-side exactly like the drill-down.
+   */
+  exportHref?: string | null;
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -51,41 +57,93 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-/** Tone for a few well-known statuses; everything else falls back to neutral grey (honest default). */
+/**
+ * Tone for the human status label (or raw status). REJECT is checked first so "Audit rejected"
+ * reads red, not green; AUDIT/APPROVE → green; INSTALL → amber; SUBMIT → blue; "Not started" and
+ * anything else → neutral grey (honest default, never a misleading colour).
+ */
 function statusTone(status: string | null): string {
   const s = (status ?? '').toUpperCase();
   if (s.includes('REJECT')) return 'bg-red-50 text-red-700';
   if (s.includes('INSTALL')) return 'bg-amber-50 text-amber-700';
-  if (s.includes('APPROVE')) return 'bg-emerald-50 text-emerald-700';
+  if (s.includes('AUDIT') || s.includes('APPROVE')) return 'bg-emerald-50 text-emerald-700';
   if (s.includes('SUBMIT')) return 'bg-blue-50 text-blue-700';
   return 'bg-gray-100 text-gray-600';
 }
 
+/** Short, locale-stable date for a recce/install capture ISO; '' when absent/unparseable. */
+function formatRecceDate(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+/** A compact, icon-led meta chip (vendor / date / elements / dimensions). Hidden when no value. */
+function MetaChip({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-gray-500 min-w-0">
+      {icon}
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
+
 function RecordRow({ item, href }: { item: ApprovalRecord; href: string | null }) {
+  const statusText = item.statusLabel ?? item.status;
+  const recceDate = formatRecceDate(item.recceDate);
   const inner = (
     <>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-gray-900 truncate">
-          {item.outletName}
-          <span className="ml-1.5 text-xs font-normal text-gray-400">{item.outletCode}</span>
-        </p>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          {item.town && <span className="text-xs text-gray-500 truncate">{item.town}</span>}
-          {item.status && (
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-semibold text-gray-900 truncate">
+            {item.outletName}
+            <span className="ml-1.5 text-xs font-normal text-gray-400">{item.outletCode}</span>
+          </p>
+          {statusText && (
             <span
-              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(item.status)}`}
+              className={`shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(statusText)}`}
             >
-              {item.status}
+              {statusText}
             </span>
           )}
         </div>
+        {/* Line 2: town + vendor + capture date */}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          {item.town && <MetaChip>{item.town}</MetaChip>}
+          {item.vendorName && (
+            <MetaChip icon={<Building2 className="h-3 w-3 shrink-0 text-gray-400" aria-hidden />}>
+              {item.vendorName}
+            </MetaChip>
+          )}
+          {recceDate && (
+            <MetaChip icon={<Calendar className="h-3 w-3 shrink-0 text-gray-400" aria-hidden />}>
+              {recceDate}
+            </MetaChip>
+          )}
+        </div>
+        {/* Line 3: element summary + dimensions (only when the metric has elements) */}
+        {(item.elementSummary || item.dimensions) && (
+          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            {item.elementSummary && (
+              <MetaChip>
+                <span className="font-medium text-gray-600">{item.elementSummary}</span>
+              </MetaChip>
+            )}
+            {item.dimensions && (
+              <MetaChip icon={<Ruler className="h-3 w-3 shrink-0 text-gray-400" aria-hidden />}>
+                {item.dimensions}
+              </MetaChip>
+            )}
+          </div>
+        )}
       </div>
-      {href && <ChevronRight className="h-4 w-4 shrink-0 text-gray-300" aria-hidden />}
+      {href && <ChevronRight className="h-4 w-4 shrink-0 self-center text-gray-300" aria-hidden />}
     </>
   );
 
   const rowClass =
-    'flex items-center gap-3 py-3 border-b border-gray-100 last:border-0 -mx-5 px-5';
+    'flex items-start gap-3 py-3 border-b border-gray-100 last:border-0 -mx-5 px-5';
 
   if (href) {
     return (
@@ -97,7 +155,7 @@ function RecordRow({ item, href }: { item: ApprovalRecord; href: string | null }
   return <div className={rowClass}>{inner}</div>;
 }
 
-export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref }: MetricDrilldownSheetProps) {
+export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref, exportHref }: MetricDrilldownSheetProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<ApprovalRecord[]>([]);
@@ -226,13 +284,28 @@ export function MetricDrilldownSheet({ open, title, onClose, fetcher, onItemHref
               {loading ? 'Loading…' : `${total.toLocaleString()} record${total === 1 ? '' : 's'}`}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="shrink-0 rounded-xl p-2 text-gray-500 hover:bg-gray-100 active:scale-95 transition-all"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="shrink-0 flex items-center gap-1.5">
+            {/* Export the FULL (uncapped) drilled set; scoped server-side like the sheet. Hidden
+                until the first load resolves with at least one record. */}
+            {exportHref && !loading && !error && total > 0 && (
+              <a
+                href={exportHref}
+                download
+                className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white text-gray-700 text-xs font-semibold px-2.5 py-2 hover:bg-gray-50 active:scale-95 transition-all"
+                aria-label="Export these records to Excel"
+              >
+                <Download className="h-4 w-4" />
+                <span className="hidden sm:inline">Export Excel</span>
+              </a>
+            )}
+            <button
+              onClick={onClose}
+              className="rounded-xl p-2 text-gray-500 hover:bg-gray-100 active:scale-95 transition-all"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}

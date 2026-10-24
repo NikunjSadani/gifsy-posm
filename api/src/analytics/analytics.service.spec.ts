@@ -1,7 +1,25 @@
 import { ForbiddenException, StreamableFile } from '@nestjs/common';
+import { type Readable } from 'node:stream';
+import * as XLSX from 'xlsx';
 import { AnalyticsService } from './analytics.service';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
+
+/** Drain a streamed xlsx to its parsed rows (AOA of the first sheet). */
+function collect(stream: Readable): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on('data', (c: Buffer) => chunks.push(c));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
+async function readStreamedRows(file: StreamableFile): Promise<string[][]> {
+  const buf = await collect(file.getStream());
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, blankrows: false, defval: '' });
+}
 
 /**
  * AnalyticsService — SECURITY (scoping) + correctness proofs.
@@ -470,7 +488,9 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'total-outlets' } as any);
 
     expect(fns.site.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
-    expect(res.items[0]).toEqual({ id: 's1', outletCode: 'C1', outletName: 'N1', town: 'Pune', recceId: null, status: 'ACTIVE' });
+    expect(res.items[0]).toMatchObject({ id: 's1', outletCode: 'C1', outletName: 'N1', town: 'Pune', recceId: null, status: 'ACTIVE' });
+    // Enriched outlet row: no capture/element data, human status label, vendor null (none on mock).
+    expect(res.items[0]).toMatchObject({ recceDate: null, elementSummary: null, dimensions: null, vendorName: null, statusLabel: 'Active' });
     expect(res.byElementType).toEqual([]);
     expect(res).toMatchObject({ total: 1, page: 1, limit: 50 });
     // No recce/install query runs for a site metric.
@@ -489,7 +509,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
 
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
-    expect(res.items[0]).toEqual({ id: 'r1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: 'r1', status: 'SUBMITTED' });
+    expect(res.items[0]).toMatchObject({ id: 'r1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: 'r1', status: 'SUBMITTED', statusLabel: 'Submitted' });
     // MANUAL recce: listed (count matches tile) but recceId null (un-linkable).
     expect(res.items[1]).toMatchObject({ id: 'r2', recceId: null });
   });
@@ -560,7 +580,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const svc = new AnalyticsService(prisma);
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
 
-    expect(res.items[0]).toEqual({ id: 'i1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: null, status: 'AUDIT_APPROVED' });
+    expect(res.items[0]).toMatchObject({ id: 'i1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: null, status: 'AUDIT_APPROVED', statusLabel: 'Audited' });
     // Breakdown rides the install scope through the back-relation (no new query surface).
     expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({
       installPosm: { installation: { clientId: 'c1', status: 'AUDIT_APPROVED' } },
@@ -653,6 +673,48 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', limit: 5000 } as any);
     expect(fns.recce.findMany.mock.calls[0][0].take).toBe(200);
   });
+
+  it('ENRICHED recce row: recceDate, vendor, element summary, W×H, human status label', async () => {
+    const { prisma, fns } = makePrisma();
+    const captured = new Date('2026-10-20T06:30:00.000Z');
+    fns.recce.findMany.mockResolvedValue([
+      {
+        id: 'r1',
+        status: 'APPROVED',
+        recceMode: 'APP',
+        hoReviewStatus: 'APPROVED',
+        capturedAt: captured,
+        site: { code: 'C1', name: 'N1', town: 't', vendor: { name: 'Vendor One' } },
+        posms: [
+          { dimensions: { width: 4, height: 3, unit: 'ft' }, posmType: { name: 'Glow Sign Board' } },
+          { dimensions: { width: 4, height: 3, unit: 'ft' }, posmType: { name: 'Banner' } },
+        ],
+      },
+    ]);
+    fns.recce.count.mockResolvedValue(1);
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+    expect(res.items[0]).toEqual({
+      id: 'r1',
+      outletCode: 'C1',
+      outletName: 'N1',
+      town: 't',
+      recceId: 'r1',
+      status: 'APPROVED',
+      recceDate: captured,
+      vendorName: 'Vendor One',
+      elementSummary: 'Glow Sign Board, Banner',
+      dimensions: '4 × 3 ft', // de-duped across the two same-sized elements
+      statusLabel: 'HO approved', // APPROVED + hoReviewStatus APPROVED → terminal good
+    });
+    // The enriched recce select pulls the vendor + element lines for the summary.
+    expect(fns.recce.findMany.mock.calls[0][0].select).toMatchObject({
+      capturedAt: true,
+      hoReviewStatus: true,
+      site: { select: { vendor: { select: { name: true } } } },
+      posms: { select: { dimensions: true, posmType: { select: { name: true } } } },
+    });
+  });
 });
 
 describe('AnalyticsService.export — scoped xlsx stream', () => {
@@ -672,5 +734,72 @@ describe('AnalyticsService.export — scoped xlsx stream', () => {
     await expect(
       svc.export(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined })),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('AnalyticsService.drilldownXlsx — scoped enriched drill-down export', () => {
+  it('streams the enriched columns + rows for a recce metric', async () => {
+    const { prisma, fns } = makePrisma();
+    const captured = new Date('2026-10-20T06:30:00.000Z');
+    fns.recce.findMany.mockResolvedValueOnce([
+      {
+        id: 'r1',
+        status: 'SUBMITTED',
+        recceMode: 'APP',
+        hoReviewStatus: 'NONE',
+        capturedAt: captured,
+        site: { code: 'C1', name: 'Shop One', town: 'Pune', vendor: { name: 'Vendor One' } },
+        posms: [{ dimensions: { width: 4, height: 3, unit: 'ft' }, posmType: { name: 'Glow Sign Board' } }],
+      },
+    ]);
+    const svc = new AnalyticsService(prisma);
+    const file = svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+    expect(file).toBeInstanceOf(StreamableFile);
+    const rows = await readStreamedRows(file);
+    expect(rows[0]).toEqual(['Outlet Code', 'Outlet Name', 'Town', 'Vendor', 'Element(s)', 'W × H', 'Recce Date', 'Status']);
+    expect(rows[1]).toEqual(['C1', 'Shop One', 'Pune', 'Vendor One', 'Glow Sign Board', '4 × 3 ft', '2026-10-20', 'Submitted']);
+    // Export is UNCAPPED: it pulls batches of 500 by id cursor, not the paged 50/200 take.
+    expect(fns.recce.findMany.mock.calls[0][0].take).toBe(500);
+    expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual({ id: 'asc' });
+  });
+
+  it('VENDOR_HO export is FLEET-SCOPED (isolation): query pinned to their vendorId via the site relation', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    const file = svc.drilldownXlsx(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }), {
+      metric: 'recce',
+      vendorId: 'v-OTHER', // a foreign fleet passed in — MUST be ignored
+    } as any);
+    await readStreamedRows(file); // drain so the cursor batch runs
+    const where = fns.recce.findMany.mock.calls[0][0].where;
+    expect(where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
+    expect(JSON.stringify(where)).not.toContain('v-OTHER');
+  });
+
+  it('VENDOR_HO with NO vendorId: export FAILS CLOSED (403) before any row is read', async () => {
+    const { prisma, fns } = makePrisma();
+    const svc = new AnalyticsService(prisma);
+    expect(() =>
+      svc.drilldownXlsx(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined }), { metric: 'recce' } as any),
+    ).toThrow(ForbiddenException);
+    expect(fns.recce.findMany).not.toHaveBeenCalled();
+  });
+
+  it('install metric export pulls the installed element lines via reccePosm', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.installation.findMany.mockResolvedValueOnce([
+      {
+        id: 'i1',
+        status: 'AUDIT_APPROVED',
+        capturedAt: new Date('2026-10-19T00:00:00.000Z'),
+        site: { code: 'C9', name: 'Nine', town: null, vendor: { name: 'V9' } },
+        posms: [{ reccePosm: { dimensions: { width: 2, height: 2, unit: 'ft' }, posmType: { name: 'Shelf' } } }],
+      },
+    ]);
+    const svc = new AnalyticsService(prisma);
+    const file = svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
+    const rows = await readStreamedRows(file);
+    expect(rows[1]).toEqual(['C9', 'Nine', '', 'V9', 'Shelf', '2 × 2 ft', '2026-10-19', 'Audited']);
+    expect(fns.installation.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'AUDIT_APPROVED' });
   });
 });

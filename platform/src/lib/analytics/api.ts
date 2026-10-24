@@ -356,6 +356,20 @@ export function exportUrl(): string {
 }
 
 /**
+ * Same-origin .xlsx export URL for ONE drilled metric's FULL (uncapped) enriched set, carrying the
+ * same `metric` (+ optional admin `vendorId`) as the open drill-down sheet. Rendered as an
+ * `<a href download>` so the edge proxy injects auth and the browser streams the attachment; a
+ * VENDOR_HO / ASM download is fleet- / territory-scoped SERVER-SIDE (an injected vendorId is ignored).
+ */
+export function drilldownExportUrl(metric: string, opts: { vendorId?: string } = {}): string {
+  const params = new URLSearchParams();
+  params.set('metric', metric);
+  const vendorId = opts.vendorId?.trim();
+  if (vendorId) params.set('vendorId', vendorId);
+  return `/api/analytics/drilldown.xlsx?${params.toString()}`;
+}
+
+/**
  * Serialise records-drilldown filters to a query string (leading `?` when non-empty).
  * Blank status is dropped; page 0 is preserved (not treated as absent). An optional `vendorId`
  * narrows the list SERVER-SIDE (admin vendor drill-down) so `total`/pagination stay correct.

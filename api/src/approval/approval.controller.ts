@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Query,
+  StreamableFile,
 } from '@nestjs/common';
 import { ApprovalService } from './approval.service';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -49,6 +50,16 @@ export class ApprovalController {
   @Get('records')
   records(@CurrentUser() user: JwtPayload, @Query() query: RecordsQueryDto) {
     return this.approval.records(user, query);
+  }
+
+  /**
+   * GET /v1/approval/records.xlsx?stage=<stage> — the SAME scoped drill-down as `/records`, full
+   * set (no row cap), streamed as an enriched .xlsx attachment. Same @Roles floor + same scope
+   * confinement (an ASM export is territory-only).
+   */
+  @Get('records.xlsx')
+  recordsXlsx(@CurrentUser() user: JwtPayload, @Query() query: RecordsQueryDto): StreamableFile {
+    return this.approval.recordsXlsx(user, query);
   }
 
   /** GET /v1/approval/recces/:id — one scoped recce for the detail view (any status). */

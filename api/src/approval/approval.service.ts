@@ -4,43 +4,39 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  StreamableFile,
 } from '@nestjs/common';
 import { Prisma, RejectReasonCode, RecceMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope } from '../common/tenant-scope';
 import { readMediaValue } from '../capture/visibility-types';
+import { streamXlsx, type HyperlinkCell } from '../common/xlsx';
+import {
+  type DrilldownRecordItem,
+  type ElementTypeCount,
+  type DrilldownResult,
+  type ElementLineInput,
+  summarizeElements,
+  recceLifecycleLabel,
+  installLifecycleLabel,
+  siteStatusLabel,
+  DRILLDOWN_XLSX_HEADERS,
+  drilldownXlsxRow,
+} from '../common/drilldown-record';
 import { ListRecceQueueDto } from './dto/list-recce-queue.dto';
 import { RejectRecceDto } from './dto/reject-recce.dto';
 import { BulkApproveDto } from './dto/bulk-approve.dto';
 import { RecordsQueryDto, RecordsStage } from './dto/records-query.dto';
 
-/** One row of the per-tile drill-down list (lightweight — no media/photo payloads). */
-export interface RecordItem {
-  id: string;
-  outletCode: string;
-  outletName: string;
-  town: string | null;
-  /** Set for recce-based stages (FE links to /review/recces/:id); null for outlets/installed. */
-  recceId: string | null;
-  status: string | null;
-}
-
-/** An element-type line-count bucket in the drill-down breakdown. */
-export interface ElementTypeCount {
-  code: string;
-  name: string;
-  count: number;
-}
-
-/** The scoped, paginated drill-down response for a dashboard tile. */
-export interface RecordsResult {
-  items: RecordItem[];
-  byElementType: ElementTypeCount[];
-  total: number;
-  page: number;
-  limit: number;
-}
+/**
+ * The per-tile drill-down row is the ONE shared enriched shape ({@link DrilldownRecordItem}) so
+ * the ASM funnel (here) and the Analytics tiles (AnalyticsService) can never drift. Re-exported
+ * under the historical names for existing importers.
+ */
+export type RecordItem = DrilldownRecordItem;
+export type { ElementTypeCount } from '../common/drilldown-record';
+export type RecordsResult = DrilldownResult;
 
 /** JSON-safe snapshot for AuditLog (Dates → ISO; strips undefined). */
 const toJson = (v: unknown): Prisma.InputJsonValue =>
@@ -509,74 +505,144 @@ export class ApprovalService {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(200, Math.max(1, q.limit ?? 50));
     const skip = (page - 1) * limit;
-    const siteSelect = { code: true, name: true, town: true } as const;
+    const plan = this.recordsPlan(user, q.stage);
 
-    if (q.stage === RecordsStage.OUTLETS) {
-      const where = this.siteWhere(user);
+    if (plan.kind === 'site') {
+      const { where } = plan;
       const [rows, total] = await Promise.all([
         this.prisma.site.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           skip,
           take: limit,
-          select: { id: true, code: true, name: true, town: true, status: true },
+          select: ApprovalService.SITE_DRILL_SELECT,
         }),
         this.prisma.site.count({ where }),
       ]);
-      const items = rows.map((s) => ({
-        id: s.id,
-        outletCode: s.code,
-        outletName: s.name,
-        town: s.town,
-        recceId: null,
-        status: s.status,
-      }));
+      const items = rows.map((s) => this.siteItem(s));
       // The outlet stage has no element lines.
       return { items, byElementType: [], total, page, limit };
     }
 
-    if (q.stage === RecordsStage.INSTALLED) {
-      const where = this.installWhere(user);
+    if (plan.kind === 'install') {
+      const { where } = plan;
       const [rows, total, byElementType] = await Promise.all([
         this.prisma.installation.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           skip,
           take: limit,
-          select: { id: true, status: true, site: { select: siteSelect } },
+          select: ApprovalService.INSTALL_DRILL_SELECT,
         }),
         this.prisma.installation.count({ where }),
         // Installed element lines grouped by element type: ReccePosm rows that HAVE a linked
         // InstallPosm whose installation is in scope — reuses `installWhere` verbatim.
         this.elementBreakdown({ installPosm: { installation: where } }),
       ]);
-      const items = rows.map((i) => ({
-        id: i.id,
-        outletCode: i.site.code,
-        outletName: i.site.name,
-        town: i.site.town,
-        recceId: null,
-        status: i.status,
-      }));
+      const items = rows.map((i) => this.installItem(i));
       return { items, byElementType, total, page, limit };
     }
 
     // Recce-based stages (recce / asm-approved / ho-approved / pending-install).
-    const where = this.recceRecordsWhere(user, q.stage);
+    const { where } = plan;
     const [rows, total, byElementType] = await Promise.all([
       this.prisma.recce.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        select: { id: true, status: true, recceMode: true, site: { select: siteSelect } },
+        select: ApprovalService.RECCE_DRILL_SELECT,
       }),
       this.prisma.recce.count({ where }),
       // ReccePosm lines of the matched recces, grouped by element type — the stage's scoped
       // recce `where` reached through the parent relation (same scope, no new surface).
       this.elementBreakdown({ recce: where }),
     ]);
-    const items = rows.map((r) => ({
+    const items = rows.map((r) => this.recceItem(r));
+    return { items, byElementType, total, page, limit };
+  }
+
+  // ── Enriched drill-down selects + row→item mappers (shared by records + xlsx) ──────
+
+  private static readonly SITE_DRILL_SELECT = {
+    id: true,
+    code: true,
+    name: true,
+    town: true,
+    status: true,
+    vendor: { select: { name: true } },
+  } as const;
+
+  private static readonly INSTALL_DRILL_SELECT = {
+    id: true,
+    status: true,
+    capturedAt: true,
+    site: { select: { code: true, name: true, town: true, vendor: { select: { name: true } } } },
+    posms: {
+      select: { reccePosm: { select: { dimensions: true, posmType: { select: { name: true } } } } },
+    },
+  } as const;
+
+  private static readonly RECCE_DRILL_SELECT = {
+    id: true,
+    status: true,
+    recceMode: true,
+    hoReviewStatus: true,
+    capturedAt: true,
+    site: { select: { code: true, name: true, town: true, vendor: { select: { name: true } } } },
+    posms: { select: { dimensions: true, posmType: { select: { name: true } } } },
+  } as const;
+
+  private siteItem(
+    s: Prisma.SiteGetPayload<{ select: typeof ApprovalService.SITE_DRILL_SELECT }>,
+  ): DrilldownRecordItem {
+    return {
+      id: s.id,
+      outletCode: s.code,
+      outletName: s.name,
+      town: s.town,
+      recceId: null,
+      status: s.status,
+      recceDate: null,
+      vendorName: s.vendor?.name ?? null,
+      elementSummary: null,
+      dimensions: null,
+      statusLabel: siteStatusLabel(s.status),
+    };
+  }
+
+  private installItem(
+    i: Prisma.InstallationGetPayload<{ select: typeof ApprovalService.INSTALL_DRILL_SELECT }>,
+  ): DrilldownRecordItem {
+    const lines: ElementLineInput[] = (i.posms ?? []).map((p) => ({
+      name: p.reccePosm?.posmType?.name,
+      dimensions: p.reccePosm?.dimensions,
+    }));
+    const { elementSummary, dimensions } = summarizeElements(lines);
+    return {
+      id: i.id,
+      outletCode: i.site.code,
+      outletName: i.site.name,
+      town: i.site.town,
+      recceId: null,
+      status: i.status,
+      recceDate: i.capturedAt ?? null,
+      vendorName: i.site.vendor?.name ?? null,
+      elementSummary,
+      dimensions,
+      statusLabel: installLifecycleLabel(i.status),
+    };
+  }
+
+  private recceItem(
+    r: Prisma.RecceGetPayload<{ select: typeof ApprovalService.RECCE_DRILL_SELECT }>,
+  ): DrilldownRecordItem {
+    const lines: ElementLineInput[] = (r.posms ?? []).map((p) => ({
+      name: p.posmType?.name,
+      dimensions: p.dimensions,
+    }));
+    const { elementSummary, dimensions } = summarizeElements(lines);
+    return {
       id: r.id,
       outletCode: r.site.code,
       outletName: r.site.name,
@@ -585,8 +651,92 @@ export class ApprovalService {
       // recce still appears in the list (so the count matches its tile) but renders un-linked.
       recceId: r.recceMode === RecceMode.APP ? r.id : null,
       status: r.status,
-    }));
-    return { items, byElementType, total, page, limit };
+      recceDate: r.capturedAt ?? null,
+      vendorName: r.site.vendor?.name ?? null,
+      elementSummary,
+      dimensions,
+      statusLabel: recceLifecycleLabel(r.status, r.hoReviewStatus),
+    };
+  }
+
+  /**
+   * Resolve a records stage to a discriminated `{ kind, where }` plan, reusing the SAME scope
+   * helpers (`siteWhere`/`installWhere`/`recceRecordsWhere`). Shared by the paged {@link records}
+   * and the uncapped {@link recordsXlsx} stream so the two can never diverge.
+   */
+  private recordsPlan(
+    user: JwtPayload,
+    stage: RecordsStage,
+  ):
+    | { kind: 'site'; where: Prisma.SiteWhereInput }
+    | { kind: 'install'; where: Prisma.InstallationWhereInput }
+    | { kind: 'recce'; where: Prisma.RecceWhereInput } {
+    if (stage === RecordsStage.OUTLETS) return { kind: 'site', where: this.siteWhere(user) };
+    if (stage === RecordsStage.INSTALLED) return { kind: 'install', where: this.installWhere(user) };
+    return { kind: 'recce', where: this.recceRecordsWhere(user, stage) };
+  }
+
+  /**
+   * The ENRICHED records drill-down for one stage as a streamed .xlsx (NO row cap). Same scope +
+   * predicate as {@link records} (via the shared {@link recordsPlan}), so an ASM export is
+   * territory-only and a tenant admin tenant-only. Rows are pulled in batches by a stable `id`
+   * cursor and written straight to the response. Columns = {@link DRILLDOWN_XLSX_HEADERS}.
+   */
+  recordsXlsx(user: JwtPayload, q: RecordsQueryDto): StreamableFile {
+    const plan = this.recordsPlan(user, q.stage);
+    let cursorId: string | undefined;
+    let exhausted = false;
+
+    const nextBatch = async (): Promise<Record<string, string | HyperlinkCell>[]> => {
+      if (exhausted) return [];
+      const items = await this.recordsXlsxBatch(plan, cursorId);
+      if (items.length < ApprovalService.XLSX_BATCH) exhausted = true;
+      if (items.length > 0) cursorId = items[items.length - 1].id;
+      return items.map(drilldownXlsxRow);
+    };
+
+    return new StreamableFile(
+      streamXlsx({ sheetName: 'Drill-down', headers: [...DRILLDOWN_XLSX_HEADERS], nextBatch }),
+      {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        disposition: `attachment; filename="posm-records-${q.stage}.xlsx"`,
+      },
+    );
+  }
+
+  private static readonly XLSX_BATCH = 500;
+
+  private async recordsXlsxBatch(
+    plan: ReturnType<ApprovalService['recordsPlan']>,
+    cursorId: string | undefined,
+  ): Promise<DrilldownRecordItem[]> {
+    const paging = {
+      take: ApprovalService.XLSX_BATCH,
+      orderBy: { id: 'asc' as const },
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+    };
+    if (plan.kind === 'site') {
+      const rows = await this.prisma.site.findMany({
+        where: plan.where,
+        select: ApprovalService.SITE_DRILL_SELECT,
+        ...paging,
+      });
+      return rows.map((s) => this.siteItem(s));
+    }
+    if (plan.kind === 'install') {
+      const rows = await this.prisma.installation.findMany({
+        where: plan.where,
+        select: ApprovalService.INSTALL_DRILL_SELECT,
+        ...paging,
+      });
+      return rows.map((i) => this.installItem(i));
+    }
+    const rows = await this.prisma.recce.findMany({
+      where: plan.where,
+      select: ApprovalService.RECCE_DRILL_SELECT,
+      ...paging,
+    });
+    return rows.map((r) => this.recceItem(r));
   }
 
   /**
