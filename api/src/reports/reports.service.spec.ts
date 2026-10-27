@@ -631,6 +631,7 @@ const sampleRecce = (): RepRecce => ({
 const sampleSite = (): RepSite => ({
   id: 'siteA', code: 'A8', name: 'Kalyan Mega Mart',
   town: 'Kalyan', state: 'MH', rsCode: 'WB2.09', rsName: 'Das', channel: 'GT',
+  status: 'ACTIVE',
   vendor: { name: 'Prime Fleet' },
   recces: [sampleRecce()],
 });
@@ -665,6 +666,9 @@ describe('ReportsService.outletExecution (curated contract)', () => {
     expect(res.rows[0].id).toBe('recA');
     expect(res.rows[0].cells.el1Photo).toEqual({ t: 'photo', key: 'r1', viewPath: '/v1/media/view?key=r1', lat: 19.2401, lng: 73.1301 });
     expect(res.rows[0].cells.recceStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+    // Outlet Status (from the Site scalar) + the Activity Status rollup both render.
+    expect(res.rows[0].cells.outletStatus).toEqual({ t: 'status', v: 'Active', tone: 'approved' });
+    expect(res.rows[0].cells.activityStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
   });
 
   it('keeps tenant scope + text filters on the Site query (unchanged)', async () => {
@@ -1070,13 +1074,16 @@ describe('ReportsService.outletExecution (installed mode)', () => {
     expect(cells.installHoStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
   });
 
-  it('recce mode is lean: no install filter on the where, no install include', async () => {
+  it('recce mode is lean: no install filter on the where, and only a LEAN installation select (for the activity rollup), no install posms', async () => {
     const { service, fns } = makeService();
     fns.site.findMany.mockResolvedValue([sampleSite()]);
     await service.outletExecution(admin(), {});
     const call = fns.site.findMany.mock.calls[0][0];
     expect(call.where.recces).toBeUndefined();
-    expect(call.include.recces.include.installation).toBeUndefined();
+    // The recce report lean-loads the installation's status + HO outcome ONLY (so the Activity Status
+    // rollup can reach "Installed"/"Audited") — NOT the full install relation / user relations.
+    expect(call.include.recces.include.installation).toEqual({ select: { status: true, hoReviewStatus: true } });
+    // Still no install posms on the recce-mode posms include.
     expect(call.include.recces.include.posms.include.installPosm).toBeUndefined();
   });
 });

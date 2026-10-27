@@ -120,7 +120,7 @@ export function RecceReportScreen({ showVendorFilter = true }: { showVendorFilte
   const [downloading, setDownloading] = useState(false);
   const [exportingPptx, setExportingPptx] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string; markup?: unknown } | null>(null);
 
   // PPT export selection — BY OUTLET CODE (a multi-recce outlet has >1 row but counts once), capped at
   // PPTX_MAX_OUTLETS. Persisted across pages/filters so a user can gather up to 3 before exporting.
@@ -400,7 +400,7 @@ export function RecceReportScreen({ showVendorFilter = true }: { showVendorFilte
                             cell={cell}
                             label={c.column.label}
                             outlet={r.outletName || r.outletCode}
-                            onOpenPhoto={(src, alt) => setLightbox({ src, alt })}
+                            onOpenPhoto={(src, alt, markup) => setLightbox({ src, alt, markup })}
                           />
                         </td>
                       );
@@ -429,6 +429,7 @@ export function RecceReportScreen({ showVendorFilter = true }: { showVendorFilte
       <Lightbox
         src={lightbox?.src ?? null}
         alt={lightbox?.alt ?? 'Photo'}
+        markup={lightbox?.markup}
         onClose={() => setLightbox(null)}
       />
     </div>

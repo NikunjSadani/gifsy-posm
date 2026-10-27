@@ -92,7 +92,13 @@ const OUTLET_REPORT_INCLUDE_RECCE = {
       submittedBy: { select: { promoterCode: true } },
       approvedBy: { select: { name: true } },
       hoReviewedBy: { select: { name: true } },
+      // `include` (not select) returns ALL ReccePosm scalars — the `markup` JSON included — so the
+      // recce photo cells carry the element-placement annotation without an explicit select.
       posms: { include: { posmType: { select: { name: true } } } },
+      // LEAN installation pull (status + HO outcome only) so the "Activity Status" rollup can reach
+      // "Installed"/"Audited" on the recce report too — WITHOUT the install posms / user relations the
+      // installed-mode include loads. A `select` here keeps the recce query lean (two scalar columns).
+      installation: { select: { status: true, hoReviewStatus: true } },
     },
   },
 } satisfies Prisma.SiteInclude;
@@ -1084,7 +1090,7 @@ export class ReportsService {
         town: site.town,
         state: site.state,
         recceDate: recce.capturedAt ?? recce.receivedAt,
-        installDate: inst ? (inst.capturedAt ?? inst.receivedAt) : null,
+        installDate: inst ? (inst.capturedAt ?? inst.receivedAt ?? null) : null,
         geo: this.resolveRecceGeo(recce),
         elements,
       });

@@ -54,7 +54,12 @@ export type StatusTone = 'approved' | 'pending' | 'rejected' | 'neutral';
 export type Cell =
   | { t: 'text'; v: string }
   | { t: 'status'; v: string; tone: StatusTone }
-  | { t: 'photo'; key: string; viewPath: string; lat?: number; lng?: number }
+  /**
+   * A tappable photo. `markup` (RECCE photos only) is the raw stored on-image annotation
+   * (`ReccePosm.markup`); the FE draws it as the element-placement box over the thumbnail + the
+   * lightbox (parsed defensively there). INSTALL photos carry no markup (InstallPosm has none).
+   */
+  | { t: 'photo'; key: string; viewPath: string; lat?: number; lng?: number; markup?: unknown }
   | { t: 'empty' };
 
 /** One report row — one recce (outlet identity repeated across an outlet's recces). */
@@ -71,7 +76,10 @@ export const CURATED_COLUMNS: ReportColumn[] = [
   // Outlet identity — pinned left.
   { key: 'outletCode', label: 'Outlet Code', group: 'outlet', pinned: true },
   { key: 'outletName', label: 'Outlet Name', group: 'outlet', pinned: true },
-  // Location.
+  // Location. `outletStatus` (the outlet-master status chip) sits first here, immediately after the
+  // pinned identity, so it reads right next to the outlet — WITHOUT un-pinning the identity group
+  // (adding a non-pinned column to the `outlet` group would flip that group off `pinned`).
+  { key: 'outletStatus', label: 'Outlet Status', group: 'location' },
   { key: 'town', label: 'Town', group: 'location' },
   { key: 'state', label: 'State', group: 'location' },
   { key: 'rs', label: 'RS', group: 'location' },
@@ -91,8 +99,11 @@ export const CURATED_COLUMNS: ReportColumn[] = [
   { key: 'el2Dims', label: 'Element 2 W×H', group: 'element2' },
   { key: 'el2RecceStatus', label: 'Element 2 Status', group: 'element2' },
   { key: 'el2Photo', label: 'Element 2 Image', group: 'element2' },
-  // Overall.
+  // Overall. `activityStatus` sits next to `recceStatus` — the execution-pipeline rollup (see
+  // activityStatusCell). In installed mode the `install` group is spliced in BEFORE `recceStatus`,
+  // so these two stay together at the end of the on-screen groups.
   { key: 'recceStatus', label: 'Recce Status', group: 'overall' },
+  { key: 'activityStatus', label: 'Activity Status', group: 'overall' },
   // Audit trail — EXCEL ONLY (FE table skips these; the .xlsx includes them).
   { key: 'capturedOn', label: 'Captured On', group: 'audit', excelOnly: true },
   { key: 'asmApprovedBy', label: 'ASM Approved By', group: 'audit', excelOnly: true },
@@ -164,8 +175,9 @@ export interface RepReccePosm {
   posmType: RepPosmType | null;
   dimensions: unknown; // {width,height,unit} entered by the rep
   photo: unknown; // MediaValue { key, geo? }
-  /** The normalised on-image install-area annotation (rect/path, 0..1). Only read by the PPT export;
-   *  the xlsx/table paths ignore it. Optional so pure fixtures can omit it. */
+  /** The normalised on-image install-area annotation (rect/path, 0..1). Read by the PPT export and the
+   *  on-screen report (the recce photo cell + lightbox draw the box); the xlsx path ignores it.
+   *  Optional so pure fixtures can omit it. */
   markup?: unknown;
   /** The install photo that fulfils this recce element (installed mode). Null/absent when the element
    *  has not been installed yet. */
@@ -173,10 +185,13 @@ export interface RepReccePosm {
 }
 /** One installation of a recce (installed mode only). Optional on RepRecce so recce-mode omits it. */
 export interface RepInstallation {
+  // `status` + `hoReviewStatus` are the ONLY fields the recce-report lean select loads (and all the
+  // activity-status rollup reads). The rest are loaded only by the installed-mode include, so they are
+  // OPTIONAL — a recce-mode read of one is then a compile error, not a silent runtime `undefined`.
   status: string; // SUBMITTED | AUDIT_APPROVED | AUDIT_REJECTED
-  capturedAt: Date | string | null;
-  receivedAt: Date | string | null;
-  submittedBy: { promoterCode: string | null } | null; // the installer (VENDOR_FIELD)
+  capturedAt?: Date | string | null;
+  receivedAt?: Date | string | null;
+  submittedBy?: { promoterCode: string | null } | null; // the installer (VENDOR_FIELD)
   auditedBy?: { name: string | null } | null;
   auditedAt?: Date | string | null;
   /**
@@ -225,6 +240,10 @@ export interface RepSite {
   /** The vendor (fleet) servicing this outlet — the "Vendor" report column + filter dimension.
    *  Optional so pure fixtures can omit it; the service always includes it (null when unassigned). */
   vendor?: { name: string | null } | null;
+  /** The outlet-master status (SiteStatus — today ACTIVE | INACTIVE; SUSPENDED handled defensively
+   *  for the future). Drives the "Outlet Status" column. Optional so pure fixtures can omit it (then
+   *  the cell reads a neutral "Unknown"); the service loads it as a Site scalar. */
+  status?: string | null;
   /** All recces for the outlet (1 app + N manual). Each becomes one report row. */
   recces: RepRecce[];
 }
@@ -293,9 +312,13 @@ export function readPhoto(photo: unknown): { key: string; lat?: number; lng?: nu
 const text = (v: string | null | undefined): Cell => ({ t: 'text', v: v ?? '' });
 const empty = (): Cell => ({ t: 'empty' });
 
-/** A `photo` cell (auth-gated view path, same shape the approval/analytics services build), or
- *  `empty` when there is no stored key. The geotag (lat/lng) rides along when the photo carried one. */
-function photoCell(photo: unknown): Cell {
+/**
+ * A `photo` cell (auth-gated view path, same shape the approval/analytics services build), or
+ * `empty` when there is no stored key. The geotag (lat/lng) rides along when the photo carried one.
+ * `markup` (RECCE photos only) is attached ONLY when present, so an install / un-annotated photo
+ * cell stays byte-identical to before (no `markup` key) — the FE then draws no box over it.
+ */
+function photoCell(photo: unknown, markup?: unknown): Cell {
   const { key, lat, lng } = readPhoto(photo);
   if (!key) return empty();
   const cell: Cell = {
@@ -305,7 +328,60 @@ function photoCell(photo: unknown): Cell {
   };
   if (lat != null) cell.lat = lat;
   if (lng != null) cell.lng = lng;
+  if (markup != null) cell.markup = markup;
   return cell;
+}
+
+/**
+ * The outlet-master status chip (Site.status). ACTIVE → green "Active"; INACTIVE → neutral
+ * "Inactive"; SUSPENDED → red "Suspended" (a future SiteStatus value, mapped defensively — today
+ * the schema only has ACTIVE/INACTIVE). An absent/unknown status → neutral "Unknown" (never a crash).
+ */
+export function outletStatusCell(status: string | null | undefined): Cell {
+  switch (status) {
+    case 'ACTIVE':
+      return { t: 'status', v: 'Active', tone: 'approved' };
+    case 'INACTIVE':
+      return { t: 'status', v: 'Inactive', tone: 'neutral' };
+    case 'SUSPENDED':
+      return { t: 'status', v: 'Suspended', tone: 'rejected' };
+    default:
+      return { t: 'status', v: status && status.trim() ? status.trim() : 'Unknown', tone: 'neutral' };
+  }
+}
+
+/**
+ * The outlet's execution-pipeline position for the row's OWN recce, as a one-glance rollup chip —
+ * the FURTHEST stage reached along:
+ *   Not started → Recce submitted → ASM approved → HO approved → Installed → Audited
+ * A recce that was REJECTED and went no further reads "Recce rejected"; an installation the auditor
+ * rejected AND HO upheld reads the terminal "Install rejected".
+ *
+ * ⚠️ INTERPRETATION: the owner specified "activity status" only loosely; this reads it as the furthest
+ * pipeline milestone. Labels are kept clean + literal so the ladder is trivial to re-order/re-label.
+ * Install state is read from the recce's own `installation` (loaded in BOTH modes — a lean
+ * status/hoReviewStatus select on the recce report, the full relation in installed mode), so an
+ * installed/audited outlet rolls up correctly even on the recce report.
+ */
+export function activityStatusCell(recce: RepRecce | null): Cell {
+  if (!recce) return { t: 'status', v: 'Not started', tone: 'neutral' };
+  const inst = recce.installation ?? null;
+  if (inst) {
+    // "Audited" once the install is audit-approved OR HO-overruled to approved.
+    if (inst.status === 'AUDIT_APPROVED' || inst.hoReviewStatus === 'APPROVED')
+      return { t: 'status', v: 'Audited', tone: 'approved' };
+    // Terminal fail — the auditor rejected AND HO upheld the rejection. A distinct rung so the recce
+    // report (where this is the ONLY install signal in the row) can't read a dead install as in-flight.
+    if (inst.status === 'AUDIT_REJECTED' && inst.hoReviewStatus === 'REJECTED')
+      return { t: 'status', v: 'Install rejected', tone: 'rejected' };
+    // Otherwise the install exists but isn't signed off yet (SUBMITTED / audit-rejected-pending-HO).
+    return { t: 'status', v: 'Installed', tone: 'pending' };
+  }
+  // No installation yet — the recce stage it has reached.
+  if (recce.status === 'REJECTED') return { t: 'status', v: 'Recce rejected', tone: 'rejected' };
+  if (recce.hoReviewStatus === 'APPROVED') return { t: 'status', v: 'HO approved', tone: 'approved' };
+  if (recce.status === 'APPROVED') return { t: 'status', v: 'ASM approved', tone: 'pending' };
+  return { t: 'status', v: 'Recce submitted', tone: 'pending' };
 }
 
 /**
@@ -515,6 +591,7 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: Repor
   const cells: Record<string, Cell> = {
     outletCode: text(site.code),
     outletName: text(site.name),
+    outletStatus: outletStatusCell(site.status),
     town: text(site.town),
     state: text(site.state),
     rs: text(rsLabel(site.rsCode, site.rsName)),
@@ -524,6 +601,9 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: Repor
     recceDate: recce ? text(recceDate) : empty(),
     promoter: recce ? text(recce.submittedBy?.promoterCode) : empty(),
     recceStatus: recceStatusCell(recce),
+    // The execution-pipeline rollup (both modes). Reads the recce's own installation (lean-loaded on
+    // the recce report), so an installed/audited outlet rolls up past the recce stages here too.
+    activityStatus: activityStatusCell(recce),
     // Audit trail (excel-only).
     capturedOn: recce ? text(recceDate) : empty(),
     asmApprovedBy: asmApproved ? text(recce!.approvedBy?.name) : empty(),
@@ -540,7 +620,8 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: Repor
     cells[`${k}Type`] = present ? text(rp!.posmType?.name) : empty();
     cells[`${k}Dims`] = present ? text(dimsLabel(rp!.dimensions)) : empty();
     cells[`${k}RecceStatus`] = elementStatusCell(recce, present);
-    cells[`${k}Photo`] = present ? photoCell(rp!.photo) : empty();
+    // RECCE photo carries its markup so the FE draws the element-placement box over it.
+    cells[`${k}Photo`] = present ? photoCell(rp!.photo, rp!.markup) : empty();
   }
 
   // Installed-variant cells — the `install` group + the excel-only install audit trail. Only added in
@@ -556,7 +637,7 @@ export function buildRecceRow(site: RepSite, recce: RepRecce | null, mode: Repor
     }
     // The representative install posm for the before↔after geo summary: the lowest-slot one present.
     const repIp = bySlot.get(1)?.installPosm ?? bySlot.get(2)?.installPosm ?? null;
-    cells.installDate = inst ? text(fmtDateTime(inst.capturedAt ?? inst.receivedAt)) : empty();
+    cells.installDate = inst ? text(fmtDateTime(inst.capturedAt ?? inst.receivedAt ?? null)) : empty();
     cells.installer = inst ? text(inst.submittedBy?.promoterCode) : empty();
     cells.auditStatus = installAuditStatusCell(inst);
     // HO override axis — independent of the auditor verdict above (see installHoStatusCell).

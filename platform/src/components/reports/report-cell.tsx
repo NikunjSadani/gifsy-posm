@@ -15,6 +15,8 @@
 
 import { MapPin } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MarkupOverlay } from '@/components/ui/markup-overlay';
+import { parseMarkup } from '@/lib/markup';
 import { reportMediaSrc, gpsMapsUrl, type Cell, type CellTone } from '@/lib/reports/outlet-execution';
 
 /** Chip styling per tone. A tone outside the known set falls back to neutral. */
@@ -56,7 +58,9 @@ export function ReportCell({
   /** The row's outlet identity (name, falling back to code), threaded in so a photo's alt/aria
    *  announces WHICH outlet it belongs to — e.g. "Open Element 1 photo — Kalyan Mega Mart". */
   outlet?: string;
-  onOpenPhoto: (src: string, alt: string) => void;
+  /** Opens the shared lightbox. `markup` (recce photos) is forwarded so the enlarged view draws the
+   *  same element-placement box; omitted for photos without markup (install / un-annotated). */
+  onOpenPhoto: (src: string, alt: string, markup?: unknown) => void;
 }) {
   switch (cell.t) {
     case 'text':
@@ -68,6 +72,10 @@ export function ReportCell({
     case 'photo': {
       const src = reportMediaSrc(cell.viewPath);
       const hasGeo = typeof cell.lat === 'number' && typeof cell.lng === 'number';
+      // Recce photos carry an on-image element-placement annotation; draw it as a box over the
+      // thumbnail (and forward it to the lightbox). Parsed here so a legacy/garbage value simply
+      // leaves the thumbnail unchanged (no box) rather than switching to natural aspect for nothing.
+      const hasMarkup = !!parseMarkup(cell.markup);
       // The column label is e.g. "Element 1 Image" — strip a trailing "Image"/"Photo" so we don't
       // double it ("… Image photo"), then append the outlet so a screen reader has row context.
       const base = label.replace(/\s*(image|photo)$/i, '').trim() || label;
@@ -77,12 +85,23 @@ export function ReportCell({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => onOpenPhoto(src, alt)}
+            onClick={() => (hasMarkup ? onOpenPhoto(src, alt, cell.markup) : onOpenPhoto(src, alt))}
             aria-label={`Open ${alt}`}
             className="block shrink-0 overflow-hidden rounded-md ring-1 ring-gray-200 transition-all hover:ring-[var(--brand-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)] active:scale-95"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated dynamic media stream, not an optimizable static asset */}
-            <img src={src} alt={alt} loading="lazy" className="block h-11 w-11 object-cover bg-gray-100" />
+            {hasMarkup ? (
+              // Natural aspect (`block h-auto w-full` in a fixed-width `relative` wrapper) so the
+              // overlay's 0..1 coords align to the image content box — the capture/review contract.
+              // Recce photos are 4:3, so at w-14 the thumbnail stays within the row height.
+              <span className="relative block w-14">
+                {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated dynamic media stream */}
+                <img src={src} alt={alt} loading="lazy" className="block h-auto w-full bg-gray-100" />
+                <MarkupOverlay markup={cell.markup} />
+              </span>
+            ) : (
+              /* eslint-disable-next-line @next/next/no-img-element -- auth-gated dynamic media stream, not an optimizable static asset */
+              <img src={src} alt={alt} loading="lazy" className="block h-11 w-11 object-cover bg-gray-100" />
+            )}
           </button>
           {hasGeo && (
             <a

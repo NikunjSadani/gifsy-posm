@@ -45,7 +45,10 @@ export interface Column {
 export type Cell =
   | { t: 'text'; v: string }
   | { t: 'status'; v: string; tone: CellTone }
-  | { t: 'photo'; key: string; viewPath: string; lat?: number; lng?: number }
+  /** A photo. `markup` (recce photos only) is the raw stored on-image annotation; the cell draws it
+   *  as the element-placement box over the thumbnail + lightbox (parsed defensively). Install photos
+   *  carry no markup → no box. */
+  | { t: 'photo'; key: string; viewPath: string; lat?: number; lng?: number; markup?: unknown }
   | { t: 'empty' };
 
 /** One report row (one recce). `cells` is keyed by `Column.key`. */

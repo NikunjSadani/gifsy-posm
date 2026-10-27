@@ -9,6 +9,8 @@ import {
   readPhoto,
   fmtDateTime,
   recceStatusCell,
+  outletStatusCell,
+  activityStatusCell,
   elementInstallStatusCell,
   installAuditStatusCell,
   installHoStatusCell,
@@ -37,6 +39,7 @@ describe('CURATED_COLUMNS (the authoritative column contract)', () => {
     expect(CURATED_COLUMNS.map((c) => [c.key, c.group])).toEqual([
       ['outletCode', 'outlet'],
       ['outletName', 'outlet'],
+      ['outletStatus', 'location'],
       ['town', 'location'],
       ['state', 'location'],
       ['rs', 'location'],
@@ -54,6 +57,7 @@ describe('CURATED_COLUMNS (the authoritative column contract)', () => {
       ['el2RecceStatus', 'element2'],
       ['el2Photo', 'element2'],
       ['recceStatus', 'overall'],
+      ['activityStatus', 'overall'],
       ['capturedOn', 'audit'],
       ['asmApprovedBy', 'audit'],
       ['asmApprovedOn', 'audit'],
@@ -89,8 +93,81 @@ describe('CURATED_COLUMNS (the authoritative column contract)', () => {
     expect(byKey.rs).toBe('RS');
     expect(byKey.el1Dims).toBe('Element 1 W×H');
     expect(byKey.recceStatus).toBe('Recce Status');
+    expect(byKey.outletStatus).toBe('Outlet Status');
+    expect(byKey.activityStatus).toBe('Activity Status');
     expect(byKey.asmApprovedBy).toBe('ASM Approved By');
     expect(byKey.hoApprovedOn).toBe('HO Approved On');
+  });
+
+  it('places outletStatus first in the location group (near the pinned identity) and activityStatus in overall', () => {
+    const loc = CURATED_COLUMNS.filter((c) => c.group === 'location').map((c) => c.key);
+    expect(loc[0]).toBe('outletStatus'); // immediately after the pinned outlet identity
+    // Neither new column un-pins the identity (they are NOT in the `outlet` group) nor is excel-only.
+    expect(CURATED_COLUMNS.find((c) => c.key === 'outletStatus')).toMatchObject({ group: 'location' });
+    expect(CURATED_COLUMNS.find((c) => c.key === 'outletStatus')?.excelOnly).toBeFalsy();
+    expect(CURATED_COLUMNS.find((c) => c.key === 'activityStatus')).toMatchObject({ group: 'overall' });
+    expect(CURATED_COLUMNS.find((c) => c.key === 'activityStatus')?.excelOnly).toBeFalsy();
+    // The outlet (pinned) group is still exactly the two identity columns.
+    expect(CURATED_COLUMNS.filter((c) => c.group === 'outlet').map((c) => c.key)).toEqual(['outletCode', 'outletName']);
+  });
+});
+
+// ── Outlet Status tone mapping ──────────────────────────────────────────────────────────────────
+
+describe('outletStatusCell — Site.status → chip + tone', () => {
+  it('ACTIVE → green "Active"', () => {
+    expect(outletStatusCell('ACTIVE')).toEqual({ t: 'status', v: 'Active', tone: 'approved' });
+  });
+  it('INACTIVE → neutral "Inactive"', () => {
+    expect(outletStatusCell('INACTIVE')).toEqual({ t: 'status', v: 'Inactive', tone: 'neutral' });
+  });
+  it('SUSPENDED (future value) → red "Suspended"', () => {
+    expect(outletStatusCell('SUSPENDED')).toEqual({ t: 'status', v: 'Suspended', tone: 'rejected' });
+  });
+  it('absent / unknown → neutral (never a crash)', () => {
+    expect(outletStatusCell(null)).toEqual({ t: 'status', v: 'Unknown', tone: 'neutral' });
+    expect(outletStatusCell(undefined)).toEqual({ t: 'status', v: 'Unknown', tone: 'neutral' });
+    expect(outletStatusCell('')).toEqual({ t: 'status', v: 'Unknown', tone: 'neutral' });
+    // A future enum value still surfaces (defensive) rather than being lost.
+    expect(outletStatusCell('ARCHIVED')).toEqual({ t: 'status', v: 'ARCHIVED', tone: 'neutral' });
+  });
+});
+
+// ── Activity Status rollup (the loosely-specified "furthest stage reached" interpretation) ──────
+
+describe('activityStatusCell — execution-pipeline rollup across the whole ladder', () => {
+  const base = (over: Partial<RepRecce>): RepRecce =>
+    ({ status: 'SUBMITTED', hoReviewStatus: 'NONE', installation: null, ...over } as RepRecce);
+
+  it('no recce → neutral "Not started"', () => {
+    expect(activityStatusCell(null)).toEqual({ t: 'status', v: 'Not started', tone: 'neutral' });
+  });
+  it('recce submitted (no further) → "Recce submitted"', () => {
+    expect(activityStatusCell(base({ status: 'SUBMITTED', hoReviewStatus: 'NONE' }))).toEqual({ t: 'status', v: 'Recce submitted', tone: 'pending' });
+  });
+  it('ASM approved, HO pending → "ASM approved"', () => {
+    expect(activityStatusCell(base({ status: 'APPROVED', hoReviewStatus: 'PENDING' }))).toEqual({ t: 'status', v: 'ASM approved', tone: 'pending' });
+  });
+  it('HO approved (installable, not yet installed) → "HO approved"', () => {
+    expect(activityStatusCell(base({ status: 'APPROVED', hoReviewStatus: 'APPROVED' }))).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+  });
+  it('rejected recce (no install) → red "Recce rejected"', () => {
+    expect(activityStatusCell(base({ status: 'REJECTED', hoReviewStatus: 'NONE' }))).toEqual({ t: 'status', v: 'Recce rejected', tone: 'rejected' });
+  });
+  it('installed but not yet audit-approved → "Installed"', () => {
+    expect(activityStatusCell(base({ status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: { status: 'SUBMITTED' } as RepInstallation }))).toEqual({ t: 'status', v: 'Installed', tone: 'pending' });
+    // An audit-rejected-pending-HO install is still "Installed" (the pipeline reached installation).
+    expect(activityStatusCell(base({ installation: { status: 'AUDIT_REJECTED', hoReviewStatus: 'PENDING' } as RepInstallation }))).toEqual({ t: 'status', v: 'Installed', tone: 'pending' });
+  });
+  it('install auditor-rejected AND HO upheld (terminal fail) → red "Install rejected" (not "Installed")', () => {
+    // The recce report is the ONLY place this install appears with no auditStatus/HO column beside it,
+    // so a dead install must not read the same amber "Installed" as one still awaiting audit.
+    expect(activityStatusCell(base({ installation: { status: 'AUDIT_REJECTED', hoReviewStatus: 'REJECTED' } as RepInstallation }))).toEqual({ t: 'status', v: 'Install rejected', tone: 'rejected' });
+  });
+  it('audited (install AUDIT_APPROVED) → green "Audited" — the furthest stage', () => {
+    expect(activityStatusCell(base({ installation: { status: 'AUDIT_APPROVED' } as RepInstallation }))).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+    // An auditor-rejected install that HO overruled to APPROVED also reads "Audited".
+    expect(activityStatusCell(base({ installation: { status: 'AUDIT_REJECTED', hoReviewStatus: 'APPROVED' } as RepInstallation }))).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
   });
 });
 
@@ -274,6 +351,7 @@ const fullSite = (): RepSite => ({
   rsCode: 'WB2.09',
   rsName: 'Das',
   channel: 'GT',
+  status: 'ACTIVE',
   vendor: { name: 'Prime Fleet' },
   recces: [appRecce()],
 });
@@ -291,6 +369,7 @@ describe('buildOutletExecutionRows — app-only outlet (one recce → one row)',
   it('maps the outlet / location / profile cells', () => {
     const { cells } = buildOutletExecutionRows(fullSite())[0];
     expect(cells.outletCode).toEqual({ t: 'text', v: 'A8' });
+    expect(cells.outletStatus).toEqual({ t: 'status', v: 'Active', tone: 'approved' });
     expect(cells.town).toEqual({ t: 'text', v: 'Kalyan' });
     expect(cells.state).toEqual({ t: 'text', v: 'MH' });
     expect(cells.rs).toEqual({ t: 'text', v: 'WB2.09 — Das' });
@@ -315,6 +394,23 @@ describe('buildOutletExecutionRows — app-only outlet (one recce → one row)',
     });
   });
 
+  it('a recce photo carries its markup (element-placement box); an un-annotated one has no markup key', () => {
+    const site = fullSite();
+    const markup = { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] };
+    site.recces[0] = {
+      ...appRecce(),
+      posms: [
+        { ...appRecce().posms[0], markup }, // slot 1 annotated
+        appRecce().posms[1], // slot 2 un-annotated (no markup field)
+      ],
+    };
+    const { cells } = buildRecceRow(site, site.recces[0]);
+    expect(cells.el1Photo).toEqual({ t: 'photo', key: 'r1', viewPath: '/v1/media/view?key=r1', lat: 19.2401, lng: 73.1301, markup });
+    // The un-annotated slot carries NO markup key (byte-identical to pre-change → FE draws no box).
+    expect(cells.el2Photo).toEqual({ t: 'photo', key: 'r2', viewPath: '/v1/media/view?key=r2' });
+    expect('markup' in (cells.el2Photo as Record<string, unknown>)).toBe(false);
+  });
+
   it('element 2: present but dims absent → "NA"; photo without geo → no lat/lng', () => {
     const { cells } = buildOutletExecutionRows(fullSite())[0];
     expect(cells.el2Type).toEqual({ t: 'text', v: 'Danglers' });
@@ -325,6 +421,8 @@ describe('buildOutletExecutionRows — app-only outlet (one recce → one row)',
   it('overall + excel-only audit trail cells (ASM + HO approved)', () => {
     const { cells } = buildOutletExecutionRows(fullSite())[0];
     expect(cells.recceStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
+    // HO-approved recce, not yet installed (recce mode, no installation loaded) → Activity "HO approved".
+    expect(cells.activityStatus).toEqual({ t: 'status', v: 'HO approved', tone: 'approved' });
     expect(cells.capturedOn).toEqual({ t: 'text', v: fmtDateTime(daysAgo(2)) });
     expect(cells.asmApprovedBy).toEqual({ t: 'text', v: 'Asha ASM' });
     expect(cells.asmApprovedOn).toEqual({ t: 'text', v: fmtDateTime(daysAgo(1)) });
@@ -561,6 +659,21 @@ describe('buildRecceRow — installed cells', () => {
     expect(cells.installer).toEqual({ t: 'text', v: 'INST9' });
     expect(cells.auditStatus).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
     expect(cells.beforeAfterGeo).toEqual({ t: 'text', v: '3.2 m · Geo-fence pass' });
+  });
+
+  it('activityStatus rolls up to "Audited" for an audit-approved installed recce', () => {
+    const { cells } = buildRecceRow(installedSite(), installedRecce(), 'installed');
+    expect(cells.activityStatus).toEqual({ t: 'status', v: 'Audited', tone: 'approved' });
+  });
+
+  it('the recce photo carries markup but the INSTALL photo never does (InstallPosm has no markup)', () => {
+    const markup = { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.2, w: 0.3, h: 0.25 }] };
+    const recce = installedRecce();
+    recce.posms[0] = { ...recce.posms[0], markup }; // annotate the recce photo
+    const { cells } = buildRecceRow({ ...installedSite(), recces: [recce] }, recce, 'installed');
+    expect(cells.el1Photo).toMatchObject({ t: 'photo', key: 'r1', markup });
+    // The install photo cell carries NO markup — the FE draws no box over the installed "after" photo.
+    expect('markup' in (cells.el1InstallPhoto as Record<string, unknown>)).toBe(false);
   });
 
   it('excel-only install audit trail filled on a terminal audit outcome', () => {
