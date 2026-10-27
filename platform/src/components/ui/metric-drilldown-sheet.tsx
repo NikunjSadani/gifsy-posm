@@ -399,7 +399,9 @@ export function MetricDrilldownSheet({ open, title, targetKey, onClose, fetcher,
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center"
+      // z-[1200] clears Leaflet's internal z-indexes (panes 400, controls 1000) so this sheet —
+      // backdrop and panel, both inside this container — always renders above the analytics map.
+      className="fixed inset-0 z-[1200] flex items-end sm:items-center justify-center"
       role="dialog"
       aria-modal="true"
       aria-label={title}

@@ -62,11 +62,14 @@ export default function GeoMapInner({ points, onSelect }: GeoMapInnerProps) {
   const center: [number, number] = plotted.length ? [plotted[0].lat, plotted[0].lng] : INDIA_CENTER;
 
   return (
+    // `isolate relative z-0` gives the map its OWN stacking context. Leaflet assigns very high
+    // z-indexes internally (panes 400, controls 1000); without an isolated context those escape
+    // and render above page modals (the drill-down sheet). Containing them here is the root fix.
     <MapContainer
       center={center}
       zoom={plotted.length ? 11 : 5}
       scrollWheelZoom
-      className="h-full w-full"
+      className="h-full w-full isolate relative z-0"
       style={{ height: '100%', width: '100%' }}
     >
       <TileLayer

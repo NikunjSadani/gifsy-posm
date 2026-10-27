@@ -68,7 +68,7 @@ export const PORTAL_ROLES: Record<'admin' | 'review' | 'audit' | 'vendor' | 'fie
 /** The home route for a role — where the guard sends a user who lands on a portal they can't use. */
 export function getRoleHome(role?: string | null): string {
   if (!role) return '/auth/login';
-  if (PORTAL_ROLES.admin.includes(role)) return '/admin';
+  if (PORTAL_ROLES.admin.includes(role)) return '/admin/analytics';
   if (PORTAL_ROLES.review.includes(role)) return '/review';
   if (PORTAL_ROLES.audit.includes(role)) return '/audit';
   if (PORTAL_ROLES.vendor.includes(role)) return '/vendor';

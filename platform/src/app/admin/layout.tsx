@@ -6,10 +6,11 @@
  * - Guards the whole `/admin/*` tree to the admin roles (GIFSY_ADMIN / CLIENT_ADMIN). The
  *   edge proxy already role-gates page navigation (ROLE_ROUTES['/admin']); this client guard
  *   is the in-app mirror that bounces a wrong-role/no-session user before any masters UI renders.
- * - Sticky red Kwality header + a grouped LEFT sidebar (Overview · Masters · Operations · Reports,
- *   Settings pinned at the foot). The nav outgrew a horizontal tab bar at 11 items (the last tabs
+ * - Sticky red Kwality header + a grouped LEFT sidebar (Masters · Operations · Reports,
+ *   Settings pinned at the foot). The nav outgrew a horizontal tab bar (the last tabs
  *   scrolled off-screen, hiding Settings); a grouped sidebar keeps every destination visible and
  *   gives the sections meaning. On < lg screens the sidebar collapses into a hamburger drawer.
+ *   There is no "Overview" item — the admin portal lands on Analytics (`/admin` redirects there).
  */
 
 import { useEffect, useState } from 'react';
@@ -17,7 +18,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LogOut, LayoutGrid, Building2, Users, Tags, MapPin, ClipboardList, BarChart3,
+  LogOut, Building2, Users, Tags, MapPin, ClipboardList, BarChart3,
   Mail, Settings, HelpCircle, ShieldCheck, ClipboardCheck, FileSpreadsheet, Menu, X, type LucideIcon,
 } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/require-auth';
@@ -37,10 +38,9 @@ interface NavSection {
   items: NavItem[];
 }
 
-/** Grouped by the KIND of thing each destination is: a quick-glance home, reference data you set
- *  up once, the day-to-day work queues, then the read-outs. Settings lives in its own foot block. */
+/** Grouped by the KIND of thing each destination is: reference data you set up once, the
+ *  day-to-day work queues, then the read-outs. Settings lives in its own foot block. */
 const SECTIONS: NavSection[] = [
-  { items: [{ href: '/admin', label: 'Overview', icon: LayoutGrid, exact: true }] },
   {
     title: 'Masters',
     items: [

@@ -6,8 +6,9 @@
  */
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Ban, RotateCcw, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Ban, RotateCcw, Search, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
@@ -342,10 +343,20 @@ export default function SitesPage() {
               {!loading && !loadError && <span className="text-gray-400">{total} total</span>}
             </p>
           </div>
-          <Button variant="primary" onClick={openCreate}>
-            <Plus className="h-4 w-4" />
-            New outlet
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Jump to the full recce/installation report for these outlets (existing route). */}
+            <Link
+              href="/admin/execution-report"
+              className="inline-flex items-center justify-center gap-1.5 font-medium transition-colors px-3 py-1.5 text-sm rounded-lg bg-transparent border border-gray-300 text-gray-700 hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-400"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Recce Report
+            </Link>
+            <Button variant="primary" onClick={openCreate}>
+              <Plus className="h-4 w-4" />
+              New outlet
+            </Button>
+          </div>
         </div>
 
         {/* Search + filters */}

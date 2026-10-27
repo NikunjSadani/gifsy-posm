@@ -59,6 +59,10 @@ describe('POSM role homes', () => {
     expect(getRoleHome('AUDITOR')).toBe('/audit');
     expect(getRoleHome(null)).toBe('/auth/login');
   });
+  it('lands admin roles on Analytics (not the removed Masters overview)', () => {
+    expect(getRoleHome('CLIENT_ADMIN')).toBe('/admin/analytics');
+    expect(getRoleHome('GIFSY_ADMIN')).toBe('/admin/analytics');
+  });
   it('has the POSM role set', () => {
     expect(PORTAL_ROLES.vendor).toContain('VENDOR_HO');
   });

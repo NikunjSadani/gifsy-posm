@@ -200,7 +200,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
   CLIENT_ADMIN: {
     role: 'CLIENT_ADMIN',
     label: ROLE_LABELS.CLIENT_ADMIN,
-    home: '/admin',
+    home: '/admin/analytics',
     showFieldNotes: false,
     intro:
       'You run the program for your organisation: set up the masters (vendors, users, Element types, outlets), configure capture rules, assign ad-hoc tasks, and watch progress through analytics and reports. You can also open the review and audit consoles.',
@@ -259,7 +259,7 @@ export const HELP_CONTENT: Record<HelpRole, RoleGuide> = {
   GIFSY_ADMIN: {
     role: 'GIFSY_ADMIN',
     label: ROLE_LABELS.GIFSY_ADMIN,
-    home: '/admin',
+    home: '/admin/analytics',
     showFieldNotes: false,
     intro:
       'As Platform Admin you have the same admin screens as a Client Admin — vendors, users, Element types, outlets, manual tasks, analytics, reports and settings — but your view spans every tenant on the platform rather than a single organisation.',
