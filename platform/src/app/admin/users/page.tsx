@@ -22,6 +22,8 @@ import { FormDialog } from '@/components/admin/form-dialog';
 import { ConfirmDialog } from '@/components/admin/confirm-dialog';
 import { StatusBadge } from '@/components/admin/status-badge';
 import { UploadPanel } from '@/components/admin/upload-panel';
+import { BulkActionPanel } from '@/components/admin/bulk-action-panel';
+import { Modal } from '@/components/ui/modal';
 import { usersApi, vendorsApi, type UserCreate, type UserUpdate } from '@/lib/admin/api';
 import {
   MANAGED_ROLES,
@@ -56,6 +58,8 @@ export default function UsersPage() {
   const [confirm, setConfirm] = useState<AdminUser | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+
+  const [bulkDeactivateOpen, setBulkDeactivateOpen] = useState(false);
 
   const phoneId = useId();
 
@@ -259,10 +263,16 @@ export default function UsersPage() {
           <h1 className="text-xl font-bold text-gray-900">Users</h1>
           <p className="text-sm text-gray-500 mt-0.5">Admins, ASMs, auditors and vendor logins.</p>
         </div>
-        <Button variant="primary" onClick={openCreate}>
-          <Plus className="h-4 w-4" />
-          New user
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setBulkDeactivateOpen(true)}>
+            <Ban className="h-4 w-4" />
+            Bulk deactivate
+          </Button>
+          <Button variant="primary" onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            New user
+          </Button>
+        </div>
       </div>
 
       <div className="mb-4 max-w-sm">
@@ -405,6 +415,22 @@ export default function UsersPage() {
         error={confirmError}
         onConfirm={doDeactivate}
       />
+
+      {/* Bulk deactivate users */}
+      <Modal
+        open={bulkDeactivateOpen}
+        onOpenChange={setBulkDeactivateOpen}
+        title="Bulk deactivate users"
+      >
+        <BulkActionPanel
+          instructions="Upload an .xlsx with an email column; listed active users are deactivated."
+          templateUrl={usersApi.bulkDeactivateTemplateUrl}
+          templateFileName="user-deactivate-template.xlsx"
+          reportBaseName="user-deactivate"
+          upload={usersApi.bulkDeactivate}
+          onDone={() => void load()}
+        />
+      </Modal>
     </div>
   );
 }

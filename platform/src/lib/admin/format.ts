@@ -13,6 +13,8 @@ export interface UploadSummary {
   successCount: number;
   errorCount: number;
   hasErrorFile: boolean;
+  /** Whether the backend returned a downloadable success report. */
+  hasSuccessFile: boolean;
 }
 
 /**
@@ -44,6 +46,7 @@ export function summarizeUpload(res: BulkUploadResult): UploadSummary {
     successCount,
     errorCount,
     hasErrorFile: !!res.errorFileBase64,
+    hasSuccessFile: !!res.successFileBase64,
   };
 }
 
@@ -68,6 +71,15 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 
 /** Trigger a browser download of the base64 .xlsx rejection report. */
 export function downloadErrorReport(base64: string, fileName = 'outlet-upload-errors.xlsx'): void {
+  triggerXlsxDownload(base64, fileName);
+}
+
+/** Trigger a browser download of the base64 .xlsx success report (processed rows + action). */
+export function downloadSuccessReport(base64: string, fileName = 'import-success.xlsx'): void {
+  triggerXlsxDownload(base64, fileName);
+}
+
+function triggerXlsxDownload(base64: string, fileName: string): void {
   const blob = base64ToBlob(base64, XLSX_MIME);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -76,7 +88,9 @@ export function downloadErrorReport(base64: string, fileName = 'outlet-upload-er
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Defer the revoke so the click's download has definitely started (consistent with the template
+  // download path); revoking synchronously can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 /** Human display for a phone stored as +91XXXXXXXXXX or a bare 10-digit string. */

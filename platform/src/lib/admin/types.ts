@@ -124,7 +124,7 @@ export interface SiteFilters {
   limit?: number;
 }
 
-/** POST /v1/sites/bulk-upload response. */
+/** POST /v1/sites/bulk-upload (and the bulk-deactivate endpoints) response. */
 export interface BulkUploadResult {
   batchId: string;
   rowCount: number;
@@ -132,6 +132,8 @@ export interface BulkUploadResult {
   errorCount: number;
   /** base64 .xlsx rejection report; null when every row succeeded. */
   errorFileBase64: string | null;
+  /** base64 .xlsx success report (processed rows + action); null when successCount is 0. */
+  successFileBase64: string | null;
 }
 
 /** The bulk-upload template columns (first row of the .xlsx). Mirrors api SITE_UPLOAD_HEADERS. */

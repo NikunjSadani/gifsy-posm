@@ -16,11 +16,13 @@ import { DataTable, type Column } from '@/components/admin/data-table';
 import { FormDialog } from '@/components/admin/form-dialog';
 import { ConfirmDialog } from '@/components/admin/confirm-dialog';
 import { StatusBadge } from '@/components/admin/status-badge';
-import { UploadPanel } from '@/components/admin/upload-panel';
+import { BulkActionPanel } from '@/components/admin/bulk-action-panel';
+import { Modal } from '@/components/ui/modal';
 import { sitesApi, vendorsApi, usersApi, type SiteCreate, type SiteUpdate } from '@/lib/admin/api';
-import { SITE_UPLOAD_HEADERS, SITE_UPLOAD_REQUIRED_HEADERS, type Site, type SiteStatus, type Vendor, type AdminUser } from '@/lib/admin/types';
+import { type Site, type SiteStatus, type Vendor, type AdminUser } from '@/lib/admin/types';
 import { validateSite, isValid, type FieldErrors } from '@/lib/admin/validation';
 import { formatCoords } from '@/lib/admin/format';
+import { cn } from '@/lib/utils';
 
 type Editing = { mode: 'create' } | { mode: 'edit'; site: Site } | null;
 type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
@@ -67,6 +69,9 @@ export default function SitesPage() {
   const searchId = useId();
 
   const [editing, setEditing] = useState<Editing>(null);
+  // The "New outlet" modal is tabbed; EDIT stays on the plain single-entry FormDialog.
+  const [createTab, setCreateTab] = useState<'single' | 'bulk'>('single');
+  const [bulkDeactivateOpen, setBulkDeactivateOpen] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -152,6 +157,7 @@ export default function SitesPage() {
 
   const openCreate = () => {
     setEditing({ mode: 'create' });
+    setCreateTab('single');
     setForm({ ...emptyForm });
     setFieldErrors({});
     setFormError(null);
@@ -332,6 +338,158 @@ export default function SitesPage() {
     },
   ];
 
+  // The outlet field grid is shared between the "New outlet → Single entry" tab and the Edit dialog.
+  const outletFields = (
+    <div className="grid grid-cols-2 gap-3">
+      <Input
+        label="Code"
+        placeholder="e.g. STORE-001"
+        value={form.code}
+        onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+        error={fieldErrors.code}
+        maxLength={100}
+        autoFocus
+      />
+      <Input
+        label="Name"
+        placeholder="Outlet name"
+        value={form.name}
+        onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+        error={fieldErrors.name}
+        maxLength={200}
+      />
+      <Input
+        label="Phone"
+        placeholder="Contact phone"
+        value={form.phone}
+        onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+        maxLength={20}
+      />
+      <Input
+        label="Town"
+        placeholder="Town"
+        value={form.town}
+        onChange={(e) => setForm((f) => ({ ...f, town: e.target.value }))}
+        maxLength={120}
+      />
+      <Input
+        label="Latitude"
+        placeholder="-90 to 90"
+        type="number"
+        inputMode="decimal"
+        value={form.lat}
+        onChange={(e) => setForm((f) => ({ ...f, lat: e.target.value }))}
+        error={fieldErrors.lat}
+      />
+      <Input
+        label="Longitude"
+        placeholder="-180 to 180"
+        type="number"
+        inputMode="decimal"
+        value={form.lng}
+        onChange={(e) => setForm((f) => ({ ...f, lng: e.target.value }))}
+        error={fieldErrors.lng}
+      />
+      <Input
+        label="RS code"
+        placeholder="Retailer/route code"
+        value={form.rsCode}
+        onChange={(e) => setForm((f) => ({ ...f, rsCode: e.target.value }))}
+        error={fieldErrors.rsCode}
+        maxLength={60}
+      />
+      <Input
+        label="RS name"
+        placeholder="Retailer/distributor name"
+        value={form.rsName}
+        onChange={(e) => setForm((f) => ({ ...f, rsName: e.target.value }))}
+        maxLength={160}
+      />
+      <Input
+        label="Region"
+        placeholder="Region"
+        value={form.region}
+        onChange={(e) => setForm((f) => ({ ...f, region: e.target.value }))}
+        maxLength={120}
+      />
+      <Input
+        label="State"
+        placeholder="State"
+        value={form.state}
+        onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
+        maxLength={120}
+      />
+      <Input
+        label="Cluster"
+        placeholder="Cluster"
+        value={form.cluster}
+        onChange={(e) => setForm((f) => ({ ...f, cluster: e.target.value }))}
+        maxLength={120}
+      />
+      <Input
+        label="Beat name"
+        placeholder="Beat name"
+        value={form.beatName}
+        onChange={(e) => setForm((f) => ({ ...f, beatName: e.target.value }))}
+        error={fieldErrors.beatName}
+        maxLength={120}
+      />
+      <Input
+        label="Channel"
+        placeholder="e.g. GT / MT"
+        value={form.channel}
+        onChange={(e) => setForm((f) => ({ ...f, channel: e.target.value }))}
+        maxLength={60}
+      />
+      <Input
+        label="Address"
+        placeholder="Street address"
+        value={form.address}
+        onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+        maxLength={300}
+      />
+      <Input
+        label="Pincode"
+        placeholder="Postal pincode"
+        value={form.pincode}
+        onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value }))}
+        maxLength={20}
+      />
+      <Select
+        label="GSB allowed at this outlet"
+        options={[
+          { value: 'false', label: 'No' },
+          { value: 'true', label: 'Yes' },
+        ]}
+        value={form.gsbAllowed ? 'true' : 'false'}
+        onValueChange={(v) => setForm((f) => ({ ...f, gsbAllowed: v === 'true' }))}
+      />
+      <Select
+        label="Status"
+        options={[
+          { value: 'ACTIVE', label: 'Active' },
+          { value: 'INACTIVE', label: 'Inactive' },
+        ]}
+        value={form.status}
+        onValueChange={(v) => setForm((f) => ({ ...f, status: v as SiteStatus }))}
+      />
+      <Select
+        label="Vendor (optional)"
+        placeholder="Unassigned"
+        options={[{ value: '', label: 'Unassigned' }, ...activeVendorOptions]}
+        value={form.vendorId}
+        onValueChange={(v) => setForm((f) => ({ ...f, vendorId: v }))}
+      />
+      <Select
+        label="ASM (optional)"
+        placeholder="Unassigned"
+        options={[{ value: '', label: 'Unassigned' }, ...asmOptions]}
+        value={form.asmUserId}
+        onValueChange={(v) => setForm((f) => ({ ...f, asmUserId: v }))}
+      />
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -352,6 +510,10 @@ export default function SitesPage() {
               <FileSpreadsheet className="h-4 w-4" />
               Recce Report
             </Link>
+            <Button variant="outline" onClick={() => setBulkDeactivateOpen(true)}>
+              <Ban className="h-4 w-4" />
+              Bulk deactivate
+            </Button>
             <Button variant="primary" onClick={openCreate}>
               <Plus className="h-4 w-4" />
               New outlet
@@ -406,7 +568,7 @@ export default function SitesPage() {
           emptyDescription={
             search || vendorFilter || statusFilter !== 'ALL'
               ? 'Try a different search or filter.'
-              : 'Create an outlet or bulk-upload from Excel below.'
+              : 'Create an outlet, or bulk-upload from Excel via the “New outlet” dialog.'
           }
           rowClassName={(s) => (s.status === 'ACTIVE' ? undefined : 'opacity-60')}
         />
@@ -441,184 +603,110 @@ export default function SitesPage() {
         )}
       </div>
 
-      <UploadPanel
-        title="Bulk upload outlets (Excel)"
-        description={
-          <>Upload an .xlsx / .xls file. Existing outlets (matched by <code className="text-xs">code</code>) are
-          updated; new codes are created. Max 5 MB / 5000 rows per file.</>
-        }
-        headers={SITE_UPLOAD_HEADERS}
-        requiredHeaders={SITE_UPLOAD_REQUIRED_HEADERS}
-        hint={
-          <>
-            <code>vendor_code</code> resolves to a vendor and <code>asm_phone</code> to an ASM user in this
-            tenant; <code>lat</code>/<code>lng</code> must be supplied together; <code>status</code> is ACTIVE or INACTIVE.
-          </>
-        }
-        upload={sitesApi.bulkUpload}
-        templateUrl="/api/sites/bulk-upload/template"
-        templateFileName="outlet-upload-template.xlsx"
-        onUploaded={() => void load()}
-      />
-
-      <FormDialog
-        open={editing !== null}
+      {/* New outlet — tabbed: single entry OR bulk upload. Built on the lower-level Modal
+          because FormDialog's single fixed submit footer can't serve two tabs. */}
+      <Modal
+        open={editing?.mode === 'create'}
         onOpenChange={(o) => !o && setEditing(null)}
-        title={editing?.mode === 'edit' ? 'Edit outlet' : 'New outlet'}
-        submitLabel={editing?.mode === 'edit' ? 'Save changes' : 'Create outlet'}
+        title="New outlet"
+      >
+        <div className="flex flex-col gap-4">
+          {/* Segmented toggle */}
+          <div
+            role="tablist"
+            aria-label="New outlet mode"
+            className="inline-flex self-start rounded-lg bg-gray-100 p-0.5"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={createTab === 'single'}
+              onClick={() => setCreateTab('single')}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                createTab === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700',
+              )}
+            >
+              Single entry
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={createTab === 'bulk'}
+              onClick={() => setCreateTab('bulk')}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                createTab === 'bulk' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700',
+              )}
+            >
+              Bulk upload
+            </button>
+          </div>
+
+          {createTab === 'single' ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!saving) submit();
+              }}
+              className="flex flex-col gap-4"
+            >
+              {formError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                  {formError}
+                </div>
+              )}
+              {outletFields}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <Button type="button" variant="outline" onClick={() => setEditing(null)} disabled={saving}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="primary" loading={saving}>
+                  Create outlet
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <BulkActionPanel
+              instructions="Existing outlets matched by code are updated; new codes created."
+              templateUrl="/api/sites/bulk-upload/template"
+              templateFileName="outlet-upload-template.xlsx"
+              reportBaseName="outlet-upload"
+              upload={sitesApi.bulkUpload}
+              onDone={() => void load()}
+            />
+          )}
+        </div>
+      </Modal>
+
+      {/* Edit outlet — plain single-entry form (no toggle). */}
+      <FormDialog
+        open={editing?.mode === 'edit'}
+        onOpenChange={(o) => !o && setEditing(null)}
+        title="Edit outlet"
+        submitLabel="Save changes"
         loading={saving}
         error={formError}
         onSubmit={submit}
       >
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Code"
-            placeholder="e.g. STORE-001"
-            value={form.code}
-            onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-            error={fieldErrors.code}
-            maxLength={100}
-            autoFocus
-          />
-          <Input
-            label="Name"
-            placeholder="Outlet name"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            error={fieldErrors.name}
-            maxLength={200}
-          />
-          <Input
-            label="Phone"
-            placeholder="Contact phone"
-            value={form.phone}
-            onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-            maxLength={20}
-          />
-          <Input
-            label="Town"
-            placeholder="Town"
-            value={form.town}
-            onChange={(e) => setForm((f) => ({ ...f, town: e.target.value }))}
-            maxLength={120}
-          />
-          <Input
-            label="Latitude"
-            placeholder="-90 to 90"
-            type="number"
-            inputMode="decimal"
-            value={form.lat}
-            onChange={(e) => setForm((f) => ({ ...f, lat: e.target.value }))}
-            error={fieldErrors.lat}
-          />
-          <Input
-            label="Longitude"
-            placeholder="-180 to 180"
-            type="number"
-            inputMode="decimal"
-            value={form.lng}
-            onChange={(e) => setForm((f) => ({ ...f, lng: e.target.value }))}
-            error={fieldErrors.lng}
-          />
-          <Input
-            label="RS code"
-            placeholder="Retailer/route code"
-            value={form.rsCode}
-            onChange={(e) => setForm((f) => ({ ...f, rsCode: e.target.value }))}
-            error={fieldErrors.rsCode}
-            maxLength={60}
-          />
-          <Input
-            label="RS name"
-            placeholder="Retailer/distributor name"
-            value={form.rsName}
-            onChange={(e) => setForm((f) => ({ ...f, rsName: e.target.value }))}
-            maxLength={160}
-          />
-          <Input
-            label="Region"
-            placeholder="Region"
-            value={form.region}
-            onChange={(e) => setForm((f) => ({ ...f, region: e.target.value }))}
-            maxLength={120}
-          />
-          <Input
-            label="State"
-            placeholder="State"
-            value={form.state}
-            onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
-            maxLength={120}
-          />
-          <Input
-            label="Cluster"
-            placeholder="Cluster"
-            value={form.cluster}
-            onChange={(e) => setForm((f) => ({ ...f, cluster: e.target.value }))}
-            maxLength={120}
-          />
-          <Input
-            label="Beat name"
-            placeholder="Beat name"
-            value={form.beatName}
-            onChange={(e) => setForm((f) => ({ ...f, beatName: e.target.value }))}
-            error={fieldErrors.beatName}
-            maxLength={120}
-          />
-          <Input
-            label="Channel"
-            placeholder="e.g. GT / MT"
-            value={form.channel}
-            onChange={(e) => setForm((f) => ({ ...f, channel: e.target.value }))}
-            maxLength={60}
-          />
-          <Input
-            label="Address"
-            placeholder="Street address"
-            value={form.address}
-            onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
-            maxLength={300}
-          />
-          <Input
-            label="Pincode"
-            placeholder="Postal pincode"
-            value={form.pincode}
-            onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value }))}
-            maxLength={20}
-          />
-          <Select
-            label="GSB allowed at this outlet"
-            options={[
-              { value: 'false', label: 'No' },
-              { value: 'true', label: 'Yes' },
-            ]}
-            value={form.gsbAllowed ? 'true' : 'false'}
-            onValueChange={(v) => setForm((f) => ({ ...f, gsbAllowed: v === 'true' }))}
-          />
-          <Select
-            label="Status"
-            options={[
-              { value: 'ACTIVE', label: 'Active' },
-              { value: 'INACTIVE', label: 'Inactive' },
-            ]}
-            value={form.status}
-            onValueChange={(v) => setForm((f) => ({ ...f, status: v as SiteStatus }))}
-          />
-          <Select
-            label="Vendor (optional)"
-            placeholder="Unassigned"
-            options={[{ value: '', label: 'Unassigned' }, ...activeVendorOptions]}
-            value={form.vendorId}
-            onValueChange={(v) => setForm((f) => ({ ...f, vendorId: v }))}
-          />
-          <Select
-            label="ASM (optional)"
-            placeholder="Unassigned"
-            options={[{ value: '', label: 'Unassigned' }, ...asmOptions]}
-            value={form.asmUserId}
-            onValueChange={(v) => setForm((f) => ({ ...f, asmUserId: v }))}
-          />
-        </div>
+        {outletFields}
       </FormDialog>
+
+      {/* Bulk deactivate outlets */}
+      <Modal
+        open={bulkDeactivateOpen}
+        onOpenChange={setBulkDeactivateOpen}
+        title="Bulk deactivate outlets"
+      >
+        <BulkActionPanel
+          instructions="Upload an .xlsx with a code column; listed active outlets are set to Inactive."
+          templateUrl={sitesApi.bulkDeactivateTemplateUrl}
+          templateFileName="outlet-deactivate-template.xlsx"
+          reportBaseName="outlet-deactivate"
+          upload={sitesApi.bulkDeactivate}
+          onDone={() => void load()}
+        />
+      </Modal>
 
       <ConfirmDialog
         open={confirm !== null}

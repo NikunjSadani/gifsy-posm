@@ -103,6 +103,10 @@ export const usersApi = {
   deactivate: (id: string) => api.del<AdminUser>(`/api/users/${id}`),
   reactivate: (id: string) => api.patch<AdminUser>(`/api/users/${id}`, { isActive: true }),
   bulkUpload: (file: File) => bulkUploadUsers(file),
+  /** Bulk-deactivate by .xlsx (required column `email`). */
+  bulkDeactivate: (file: File) => bulkDeactivateUsers(file),
+  /** Auth-gated blank .xlsx template for the bulk-deactivate upload. */
+  bulkDeactivateTemplateUrl: '/api/users/bulk-deactivate/template',
 };
 
 // ── Sites ─────────────────────────────────────────────────────────────────────
@@ -171,6 +175,10 @@ export const sitesApi = {
   /** Reactivate a soft-deleted site. */
   reactivate: (id: string) => api.patch<Site>(`/api/sites/${id}`, { status: 'ACTIVE' }),
   bulkUpload: (file: File) => bulkUploadSites(file),
+  /** Bulk-deactivate by .xlsx (required column `code`). */
+  bulkDeactivate: (file: File) => bulkDeactivateSites(file),
+  /** Auth-gated blank .xlsx template for the bulk-deactivate upload. */
+  bulkDeactivateTemplateUrl: '/api/sites/bulk-deactivate/template',
 };
 
 /**
@@ -186,6 +194,16 @@ export function bulkUploadSites(file: File): Promise<ApiResponse<BulkUploadResul
 /** Bulk-upload users (same multipart contract as sites). */
 export function bulkUploadUsers(file: File): Promise<ApiResponse<BulkUploadResult>> {
   return bulkUploadFile('/api/users/bulk-upload', file);
+}
+
+/** Bulk-deactivate sites by .xlsx (multipart `file`; required column `code`). */
+export function bulkDeactivateSites(file: File): Promise<ApiResponse<BulkUploadResult>> {
+  return bulkUploadFile('/api/sites/bulk-deactivate', file);
+}
+
+/** Bulk-deactivate users by .xlsx (multipart `file`; required column `email`). */
+export function bulkDeactivateUsers(file: File): Promise<ApiResponse<BulkUploadResult>> {
+  return bulkUploadFile('/api/users/bulk-deactivate', file);
 }
 
 async function bulkUploadFile(endpoint: string, file: File): Promise<ApiResponse<BulkUploadResult>> {

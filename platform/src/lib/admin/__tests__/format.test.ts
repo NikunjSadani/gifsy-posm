@@ -8,6 +8,7 @@ const makeResult = (over: Partial<BulkUploadResult>): BulkUploadResult => ({
   successCount: 0,
   errorCount: 0,
   errorFileBase64: null,
+  successFileBase64: null,
   ...over,
 });
 
@@ -37,6 +38,10 @@ describe('summarizeUpload', () => {
   it('singular row wording', () => {
     const s = summarizeUpload(makeResult({ rowCount: 1, successCount: 1, errorCount: 0 }));
     expect(s.headline).toContain('1 row ');
+  });
+  it('exposes hasSuccessFile from the success report payload', () => {
+    expect(summarizeUpload(makeResult({ successFileBase64: 'AAAA' })).hasSuccessFile).toBe(true);
+    expect(summarizeUpload(makeResult({ successFileBase64: null })).hasSuccessFile).toBe(false);
   });
 });
 

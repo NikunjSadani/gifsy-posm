@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import { UploadCloud, FileSpreadsheet, Download, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { ApiResponse } from '@/lib/api-client';
-import { summarizeUpload, downloadErrorReport } from '@/lib/admin/format';
+import { summarizeUpload, downloadErrorReport, downloadSuccessReport } from '@/lib/admin/format';
 import type { BulkUploadResult } from '@/lib/admin/types';
 import { cn } from '@/lib/utils';
 
@@ -204,15 +204,29 @@ export function UploadPanel({
                 <span>Imported: <strong className="text-emerald-700">{summary.successCount}</strong></span>
                 <span>Rejected: <strong className="text-red-700">{summary.errorCount}</strong></span>
               </div>
-              {summary.hasErrorFile && result?.errorFileBase64 && (
-                <button
-                  type="button"
-                  onClick={() => downloadErrorReport(result.errorFileBase64!)}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Download rejected rows (with reasons)
-                </button>
+              {(summary.hasErrorFile || summary.hasSuccessFile) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {summary.hasErrorFile && result?.errorFileBase64 && (
+                    <button
+                      type="button"
+                      onClick={() => downloadErrorReport(result.errorFileBase64!)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download rejected rows (with reasons)
+                    </button>
+                  )}
+                  {summary.hasSuccessFile && result?.successFileBase64 && (
+                    <button
+                      type="button"
+                      onClick={() => downloadSuccessReport(result.successFileBase64!)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download success report
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </div>
