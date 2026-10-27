@@ -13,6 +13,11 @@ import {
   recceLifecycleLabel,
   installLifecycleLabel,
   siteStatusLabel,
+  siteFunnelStage,
+  recceFunnelStage,
+  installFunnelStage,
+  funnelBadge,
+  funnelStageToGeo,
   DRILLDOWN_XLSX_HEADERS,
   drilldownXlsxRow,
 } from '../common/drilldown-record';
@@ -481,36 +486,28 @@ export class AnalyticsService {
     const truncated = sites.length > AnalyticsService.GEO_CAP;
     const page = truncated ? sites.slice(0, AnalyticsService.GEO_CAP) : sites;
 
-    // Rank for folding many recces → the single furthest recce stage a site has reached. An
-    // ASM-approved recce resolves to HO_APPROVED only once HO has signed off; otherwise ASM_APPROVED
-    // (installable vs merely ASM-approved — never conflated). A SUBMITTED/REJECTED recce is RECCED.
-    const recceStageOf = (r: { status: string; hoReviewStatus: string }) =>
-      r.status === 'APPROVED'
-        ? r.hoReviewStatus === 'APPROVED'
-          ? 'HO_APPROVED'
-          : 'ASM_APPROVED'
-        : 'RECCED';
-    const RECCE_RANK: Record<string, number> = { RECCED: 1, ASM_APPROVED: 2, HO_APPROVED: 3 };
+    // Fold EVERY recce + install of a site into the single furthest execution-funnel stage via the
+    // ONE shared ladder (siteFunnelStage — also behind the "Total outlets" drill-down badge), then
+    // collapse it to the 6-value heatmap vocabulary. ONE source of truth, so the map and the
+    // drill-down can never drift. (The geo install select is lean `status`-only; the fold tolerates
+    // a missing hoReviewStatus, so a rejected install still reads INSTALLED here, as before.)
+    const recceStatusForStage: Partial<Record<ReturnType<typeof siteFunnelStage>, string>> = {
+      HO_APPROVED: 'APPROVED',
+      ASM_APPROVED: 'APPROVED',
+      RECCE_SUBMITTED: 'SUBMITTED',
+      RECCE_REJECTED: 'REJECTED',
+    };
 
     const points = page.map((site) => {
-      // Fold across ALL of the site's installs (not installs[0]) → a site with multiple installed
-      // recces (app and/or manual) is AUDITED if ANY install is audit-approved, else INSTALLED.
-      const hasInstall = site.installs.length > 0;
+      const stage = siteFunnelStage(site.recces, site.installs);
+      const furthestStage = funnelStageToGeo(stage);
+      // A representative raw status for the map tooltip: the install's own status when installed,
+      // else the furthest recce rung mapped back to a raw recce status (NONE when nothing captured).
       const hasAudited = site.installs.some((i) => i.status === 'AUDIT_APPROVED');
-      // Fold across ALL of the site's recces (not recces[0]) → the single furthest-stage recce, so a
-      // site with 1 app + N manual recces is classified by its best stage, deterministically.
-      let furthestStage:
-        | 'NONE' | 'RECCED' | 'ASM_APPROVED' | 'HO_APPROVED' | 'INSTALLED' | 'AUDITED' = 'NONE';
-      let bestRecce: { status: string; hoReviewStatus: string } | null = null;
-      for (const r of site.recces) {
-        const stage = recceStageOf(r);
-        if (!bestRecce || RECCE_RANK[stage] > RECCE_RANK[recceStageOf(bestRecce)]) {
-          bestRecce = r;
-          furthestStage = stage;
-        }
-      }
-      if (hasInstall) furthestStage = hasAudited ? 'AUDITED' : 'INSTALLED';
-      const latestStatus = (hasAudited ? 'AUDIT_APPROVED' : site.installs[0]?.status) ?? bestRecce?.status ?? 'NONE';
+      const latestStatus =
+        (hasAudited ? 'AUDIT_APPROVED' : site.installs[0]?.status) ??
+        recceStatusForStage[stage] ??
+        'NONE';
       return {
         siteId: site.id,
         code: site.code,
@@ -714,7 +711,11 @@ export class AnalyticsService {
 
   // ── Enriched drill-down selects + row→item mappers (shared by drilldown + xlsx) ────
 
-  /** Site fields for the outlet-universe metric (+ vendor name for the enriched shape). */
+  /**
+   * Site fields for the outlet-universe metric (+ vendor name for the enriched shape). The lean
+   * `recces`/`installs` relations ride the SAME paginated site query (nested select, NOT an N+1)
+   * so {@link siteItem} can fold the outlet's furthest execution-funnel stage via `siteFunnelStage`.
+   */
   private static readonly SITE_DRILL_SELECT = {
     id: true,
     code: true,
@@ -722,12 +723,19 @@ export class AnalyticsService {
     town: true,
     status: true,
     vendor: { select: { name: true } },
+    // A site carries MANY recces (1 app + N manual) and MANY installs; the funnel fold folds across
+    // all of them. Lean status-only selects — bounded by the site page (limit ≤ 200), no media/joins.
+    recces: { select: { status: true, hoReviewStatus: true } },
+    installs: { select: { status: true, hoReviewStatus: true } },
   } as const;
 
   /** Installation fields + its site/vendor + the fulfilled recce's capture date + element lines. */
   private static readonly INSTALL_DRILL_SELECT = {
     id: true,
     status: true,
+    // The HO-override outcome — orthogonal to `status`; the funnel fold reads it so an HO-upheld
+    // audit rejection reads the terminal "Install rejected" (vs an in-flight "Installed").
+    hoReviewStatus: true,
     capturedAt: true,
     // The "Recce Date" column must carry the RECCE's capture date even on install-stage rows, so pull
     // it from the installation→recce relation (Installation.recceId is unique → exactly one recce).
@@ -752,6 +760,10 @@ export class AnalyticsService {
   private siteItem(
     r: Prisma.SiteGetPayload<{ select: typeof AnalyticsService.SITE_DRILL_SELECT }>,
   ): DrilldownRecordItem {
+    // The outlet's furthest execution-funnel stage, folded across ALL its recces + installs via the
+    // ONE shared ladder (also behind the geo heatmap) — defensive `?? []` so a lean/legacy mock row
+    // without the relations reads "Not started" rather than throwing.
+    const { funnelStage, funnelTone } = funnelBadge(siteFunnelStage(r.recces ?? [], r.installs ?? []));
     return {
       id: r.id,
       outletCode: r.code,
@@ -764,6 +776,8 @@ export class AnalyticsService {
       elementSummary: null,
       dimensions: null,
       statusLabel: siteStatusLabel(r.status),
+      funnelStage,
+      funnelTone,
     };
   }
 
@@ -775,6 +789,8 @@ export class AnalyticsService {
       dimensions: p.reccePosm?.dimensions,
     }));
     const { elementSummary, dimensions } = summarizeElements(lines);
+    // Install-stage funnel rung: Installed vs Audited vs the terminal Install rejected (HO-upheld).
+    const { funnelStage, funnelTone } = funnelBadge(installFunnelStage(i.status, i.hoReviewStatus));
     return {
       id: i.id,
       outletCode: i.site.code,
@@ -788,6 +804,8 @@ export class AnalyticsService {
       elementSummary,
       dimensions,
       statusLabel: installLifecycleLabel(i.status),
+      funnelStage,
+      funnelTone,
     };
   }
 
@@ -799,6 +817,8 @@ export class AnalyticsService {
       dimensions: p.dimensions,
     }));
     const { elementSummary, dimensions } = summarizeElements(lines);
+    // Recce-stage funnel rung from this recce's OWN status/hoReviewStatus (no install context).
+    const { funnelStage, funnelTone } = funnelBadge(recceFunnelStage(r.status, r.hoReviewStatus));
     return {
       id: r.id,
       outletCode: r.site.code,
@@ -813,6 +833,8 @@ export class AnalyticsService {
       elementSummary,
       dimensions,
       statusLabel: recceLifecycleLabel(r.status, r.hoReviewStatus),
+      funnelStage,
+      funnelTone,
     };
   }
 

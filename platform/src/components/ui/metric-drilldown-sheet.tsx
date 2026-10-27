@@ -95,6 +95,24 @@ function statusTone(status: string | null): string {
   return 'bg-gray-100 text-gray-600';
 }
 
+/**
+ * Chip classes for the EXECUTION-FUNNEL badge, keyed by the backend `funnelTone`. Matches the
+ * report's status-cell tones (outlet-execution.helper / report-cell): approved=green, pending=amber,
+ * rejected=red, neutral/unknown=grey — so the funnel badge reads identically to the report.
+ */
+function funnelToneClass(tone: string | null | undefined): string {
+  switch (tone) {
+    case 'approved':
+      return 'bg-emerald-50 text-emerald-700';
+    case 'pending':
+      return 'bg-amber-50 text-amber-700';
+    case 'rejected':
+      return 'bg-red-50 text-red-700';
+    default:
+      return 'bg-gray-100 text-gray-600';
+  }
+}
+
 /** Short, locale-stable date for a recce/install capture ISO; '' when absent/unparseable. */
 function formatRecceDate(iso: string | null): string {
   if (!iso) return '';
@@ -141,11 +159,26 @@ function RecordRow({ item, href }: { item: ApprovalRecord; href: string | null }
             {item.outletName}
             <span className="ml-1.5 text-xs font-normal text-gray-400">{item.outletCode}</span>
           </p>
-          {statusText && (
-            <span
-              className={`shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(statusText)}`}
-            >
-              {statusText}
+          {/* Status + execution-funnel badges. `flex-wrap` + `justify-end` lets the two chips stack
+              under each other at phone width instead of squeezing the outlet name. The funnel chip is
+              shown only when it ADDS information — on a recce/install row its stage equals the status
+              label (two identical chips), so we suppress it there and keep it on the outlet universe. */}
+          {(statusText || (item.funnelStage && item.funnelStage !== statusText)) && (
+            <span className="shrink-0 flex flex-wrap items-center justify-end gap-1">
+              {statusText && (
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(statusText)}`}
+                >
+                  {statusText}
+                </span>
+              )}
+              {item.funnelStage && item.funnelStage !== statusText && (
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${funnelToneClass(item.funnelTone)}`}
+                >
+                  {item.funnelStage}
+                </span>
+              )}
             </span>
           )}
         </div>

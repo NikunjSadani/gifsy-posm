@@ -34,6 +34,17 @@ export interface DrilldownRecordItem {
   dimensions: string | null;
   /** Human lifecycle label (Not started / Submitted / ASM approved / HO approved / Rejected / …). */
   statusLabel: string | null;
+  // ── Execution-funnel badge (analytics drill-down; see {@link funnelBadge}) ─────
+  /**
+   * Clean label for the outlet's/record's position in the EXECUTION FUNNEL, using the same ladder
+   * as the report's Activity Status: Not started → Recce submitted → ASM approved → HO approved →
+   * Installed → Audited, plus the terminal Recce rejected / Install rejected rungs. Optional: the
+   * analytics drill-down populates it (+ {@link funnelTone}); the ASM approval funnel (already
+   * stage-segmented) omits both, so the FE renders this second badge only when present.
+   */
+  funnelStage?: string;
+  /** Tone for the funnel badge, matching the report's status-cell tones. */
+  funnelTone?: FunnelTone;
 }
 
 /** An element-type line-count bucket in the drill-down breakdown. */
@@ -99,6 +110,172 @@ export function installLifecycleLabel(status: string | null | undefined): string
 /** The HUMAN site-status label for the outlet universe metric (ACTIVE → "Active", …). */
 export function siteStatusLabel(status: string | null | undefined): string {
   return titleCase(status);
+}
+
+// ── Execution-funnel ladder (ONE source of truth; see analytics.service geo + site drill-down) ──
+
+/**
+ * The execution-funnel ladder, as the owner-facing report's Activity Status: the positive rungs
+ * NOT_STARTED → RECCE_SUBMITTED → ASM_APPROVED → HO_APPROVED → INSTALLED → AUDITED, plus the two
+ * terminal failure rungs RECCE_REJECTED (a rejected recce that went no further) and INSTALL_REJECTED
+ * (an installation the auditor rejected AND HO upheld). This is the internal enum; {@link funnelBadge}
+ * maps it to the clean label + tone the UI shows.
+ */
+export type FunnelStage =
+  | 'NOT_STARTED'
+  | 'RECCE_SUBMITTED'
+  | 'ASM_APPROVED'
+  | 'HO_APPROVED'
+  | 'INSTALLED'
+  | 'AUDITED'
+  | 'RECCE_REJECTED'
+  | 'INSTALL_REJECTED';
+
+/** A funnel-badge tone — same vocabulary as the report's `StatusTone` (outlet-execution.helper). */
+export type FunnelTone = 'neutral' | 'pending' | 'approved' | 'rejected';
+
+/** Clean label + tone for one {@link FunnelStage}. Tones mirror the report's `activityStatusCell`. */
+const FUNNEL_BADGE: Record<FunnelStage, { funnelStage: string; funnelTone: FunnelTone }> = {
+  NOT_STARTED: { funnelStage: 'Not started', funnelTone: 'neutral' },
+  RECCE_SUBMITTED: { funnelStage: 'Recce submitted', funnelTone: 'pending' },
+  ASM_APPROVED: { funnelStage: 'ASM approved', funnelTone: 'pending' },
+  HO_APPROVED: { funnelStage: 'HO approved', funnelTone: 'approved' },
+  INSTALLED: { funnelStage: 'Installed', funnelTone: 'pending' },
+  AUDITED: { funnelStage: 'Audited', funnelTone: 'approved' },
+  RECCE_REJECTED: { funnelStage: 'Recce rejected', funnelTone: 'rejected' },
+  INSTALL_REJECTED: { funnelStage: 'Install rejected', funnelTone: 'rejected' },
+};
+
+/** Map a {@link FunnelStage} to the drill-down row's `{ funnelStage, funnelTone }` badge fields. */
+export function funnelBadge(stage: FunnelStage): { funnelStage: string; funnelTone: FunnelTone } {
+  return FUNNEL_BADGE[stage];
+}
+
+/** Minimal recce shape the funnel fold reads (status + optional HO review outcome). */
+export interface FunnelRecceInput {
+  status: string | null | undefined;
+  hoReviewStatus?: string | null | undefined;
+}
+/** Minimal installation shape the funnel fold reads (status + optional HO review outcome). */
+export interface FunnelInstallInput {
+  status: string | null | undefined;
+  hoReviewStatus?: string | null | undefined;
+}
+
+/**
+ * One recce's funnel stage with NO installation context (recce-stage drill-down rows). Mirrors
+ * {@link recceLifecycleLabel}: rejected → HO approved → ASM approved → submitted; a null status
+ * (no recce) → not started.
+ */
+export function recceFunnelStage(
+  status: string | null | undefined,
+  hoReviewStatus: string | null | undefined,
+): FunnelStage {
+  if (!status) return 'NOT_STARTED';
+  if (status === 'REJECTED') return 'RECCE_REJECTED';
+  if (hoReviewStatus === 'APPROVED') return 'HO_APPROVED';
+  if (status === 'APPROVED') return 'ASM_APPROVED';
+  return 'RECCE_SUBMITTED'; // SUBMITTED, HO not yet approved
+}
+
+/**
+ * One installation's funnel stage (install-stage drill-down rows). Audited once the auditor
+ * approved OR HO overruled to approved; the terminal INSTALL_REJECTED only when the auditor
+ * rejected AND HO upheld that rejection; otherwise still in-flight → INSTALLED.
+ */
+export function installFunnelStage(
+  status: string | null | undefined,
+  hoReviewStatus: string | null | undefined,
+): FunnelStage {
+  if (status === 'AUDIT_APPROVED' || hoReviewStatus === 'APPROVED') return 'AUDITED';
+  if (status === 'AUDIT_REJECTED' && hoReviewStatus === 'REJECTED') return 'INSTALL_REJECTED';
+  return 'INSTALLED';
+}
+
+/** Rank the positive recce rungs so a site's MANY recces fold to the single furthest one reached. */
+const POSITIVE_RECCE_RANK: Partial<Record<FunnelStage, number>> = {
+  RECCE_SUBMITTED: 1,
+  ASM_APPROVED: 2,
+  HO_APPROVED: 3,
+};
+
+/**
+ * Fold ALL of a site's recces + installs into the single FURTHEST execution-funnel stage it has
+ * reached — the ONE source of truth shared by the analytics geo heatmap (via {@link funnelStageToGeo})
+ * and the "Total outlets" site drill-down. An installation is downstream of the recce ladder, so an
+ * installed/audited outlet rolls up past the recce rungs; a site whose ONLY install is a terminal
+ * HO-upheld rejection reads INSTALL_REJECTED, and a site with only rejected recce(s) (no install)
+ * reads RECCE_REJECTED. A missing `hoReviewStatus` (e.g. the lean geo install select) is tolerated.
+ */
+export function siteFunnelStage(
+  recces: FunnelRecceInput[],
+  installs: FunnelInstallInput[],
+): FunnelStage {
+  // Installs first — they dominate the recce rungs.
+  let anyInstall = false;
+  let anyAudited = false;
+  let anyLiveInstall = false; // an install that is NOT a terminal HO-upheld rejection
+  for (const i of installs ?? []) {
+    anyInstall = true;
+    const st = installFunnelStage(i.status, i.hoReviewStatus);
+    if (st === 'AUDITED') anyAudited = true;
+    else if (st === 'INSTALLED') anyLiveInstall = true;
+    // INSTALL_REJECTED contributes to neither (terminal fail).
+  }
+  if (anyAudited) return 'AUDITED';
+  if (anyLiveInstall) return 'INSTALLED';
+  if (anyInstall) return 'INSTALL_REJECTED'; // installs exist but ALL terminal-rejected
+
+  // No installation — the furthest recce rung reached.
+  let best: FunnelStage | null = null;
+  let anyRejected = false;
+  let anyRecce = false;
+  for (const r of recces ?? []) {
+    anyRecce = true;
+    const st = recceFunnelStage(r.status, r.hoReviewStatus);
+    if (st === 'RECCE_REJECTED') {
+      anyRejected = true;
+      continue;
+    }
+    if (st === 'NOT_STARTED') continue; // null-status recce (pathological) — ignore
+    const rank = POSITIVE_RECCE_RANK[st] ?? 0;
+    const bestRank = best ? (POSITIVE_RECCE_RANK[best] ?? 0) : -1;
+    if (rank > bestRank) best = st;
+  }
+  if (best) return best;
+  if (anyRejected) return 'RECCE_REJECTED';
+  if (anyRecce) return 'RECCE_SUBMITTED'; // defensive: a recce present but unrankable
+  return 'NOT_STARTED';
+}
+
+/** The 6-value furthest-stage heatmap vocabulary (NO rejected rungs — see analytics geo). */
+export type SiteFurthestStage =
+  | 'NONE'
+  | 'RECCED'
+  | 'ASM_APPROVED'
+  | 'HO_APPROVED'
+  | 'INSTALLED'
+  | 'AUDITED';
+
+/**
+ * Collapse the full {@link FunnelStage} to the 6-value heatmap vocabulary the geo map uses: a
+ * rejected recce still counts as coverage (→ RECCED) and any installation (even a rejected one)
+ * still counts as INSTALLED — preserving the map's original furthest-stage semantics exactly.
+ */
+const FUNNEL_TO_GEO: Record<FunnelStage, SiteFurthestStage> = {
+  NOT_STARTED: 'NONE',
+  RECCE_SUBMITTED: 'RECCED',
+  RECCE_REJECTED: 'RECCED',
+  ASM_APPROVED: 'ASM_APPROVED',
+  HO_APPROVED: 'HO_APPROVED',
+  INSTALLED: 'INSTALLED',
+  INSTALL_REJECTED: 'INSTALLED',
+  AUDITED: 'AUDITED',
+};
+
+/** The geo heatmap's furthest stage for a site — {@link siteFunnelStage} collapsed to 6 values. */
+export function funnelStageToGeo(stage: FunnelStage): SiteFurthestStage {
+  return FUNNEL_TO_GEO[stage];
 }
 
 /** UPPER_SNAKE / lowercase → "Title case"; empty / null → "". */

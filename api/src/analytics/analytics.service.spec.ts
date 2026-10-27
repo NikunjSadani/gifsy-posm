@@ -481,7 +481,12 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
   it('total-outlets: lists scoped SITES (site fragment), recceId null, byElementType []', async () => {
     const { prisma, fns } = makePrisma();
     fns.site.findMany.mockResolvedValue([
-      { id: 's1', code: 'C1', name: 'N1', town: 'Pune', status: 'ACTIVE' },
+      // Outlet with an HO-approved recce + an audit-approved install → funnel folds to "Audited".
+      {
+        id: 's1', code: 'C1', name: 'N1', town: 'Pune', status: 'ACTIVE',
+        recces: [{ status: 'APPROVED', hoReviewStatus: 'APPROVED' }],
+        installs: [{ status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' }],
+      },
     ]);
     fns.site.count.mockResolvedValue(1);
     const svc = new AnalyticsService(prisma);
@@ -491,6 +496,8 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     expect(res.items[0]).toMatchObject({ id: 's1', outletCode: 'C1', outletName: 'N1', town: 'Pune', recceId: null, status: 'ACTIVE' });
     // Enriched outlet row: no capture/element data, human status label, vendor null (none on mock).
     expect(res.items[0]).toMatchObject({ recceDate: null, elementSummary: null, dimensions: null, vendorName: null, statusLabel: 'Active' });
+    // Execution-funnel badge: the outlet's furthest rung, folded across its recces + installs.
+    expect(res.items[0]).toMatchObject({ funnelStage: 'Audited', funnelTone: 'approved' });
     expect(res.byElementType).toEqual([]);
     expect(res).toMatchObject({ total: 1, limit: 50 });
     // Keyset: no page index in the response, and the first page carries no cursor.
@@ -514,6 +521,8 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
     expect(res.items[0]).toMatchObject({ id: 'r1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: 'r1', status: 'SUBMITTED', statusLabel: 'Submitted' });
+    // Execution-funnel badge from the recce's own status (no install context).
+    expect(res.items[0]).toMatchObject({ funnelStage: 'Recce submitted', funnelTone: 'pending' });
     // MANUAL recce: listed (count matches tile) but recceId null (un-linkable).
     expect(res.items[1]).toMatchObject({ id: 'r2', recceId: null });
   });
@@ -585,6 +594,8 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
 
     expect(res.items[0]).toMatchObject({ id: 'i1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: null, status: 'AUDIT_APPROVED', statusLabel: 'Audited' });
+    // Execution-funnel badge from the install's status (an audit-approved install → Audited).
+    expect(res.items[0]).toMatchObject({ funnelStage: 'Audited', funnelTone: 'approved' });
     // Breakdown rides the install scope through the back-relation (no new query surface).
     expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({
       installPosm: { installation: { clientId: 'c1', status: 'AUDIT_APPROVED' } },
@@ -752,6 +763,8 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
       elementSummary: 'Glow Sign Board, Banner',
       dimensions: '4 × 3 ft', // de-duped across the two same-sized elements
       statusLabel: 'HO approved', // APPROVED + hoReviewStatus APPROVED → terminal good
+      funnelStage: 'HO approved', // execution-funnel rung from this recce's own status
+      funnelTone: 'approved',
     });
     // The enriched recce select pulls the vendor + element lines for the summary.
     expect(fns.recce.findMany.mock.calls[0][0].select).toMatchObject({

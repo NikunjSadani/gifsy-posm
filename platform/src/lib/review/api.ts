@@ -140,6 +140,15 @@ export interface ApprovalRecord {
   dimensions: string | null;
   /** Human lifecycle label (Not started / Submitted / ASM approved / HO approved / Rejected / …). */
   statusLabel: string | null;
+  /**
+   * Execution-funnel stage label (Not started / Recce submitted / ASM approved / HO approved /
+   * Installed / Audited / Recce rejected / Install rejected). Populated by the analytics drill-down;
+   * the ASM approval funnel (already stage-segmented) omits it, so the sheet renders this second
+   * badge only when present.
+   */
+  funnelStage?: string | null;
+  /** Tone for the funnel badge, matching the report's status-cell tones. */
+  funnelTone?: 'neutral' | 'pending' | 'approved' | 'rejected' | null;
 }
 
 /**

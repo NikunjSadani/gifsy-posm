@@ -9,6 +9,11 @@ import {
   drilldownXlsxRow,
   xlsxDate,
   DRILLDOWN_XLSX_HEADERS,
+  siteFunnelStage,
+  recceFunnelStage,
+  installFunnelStage,
+  funnelBadge,
+  funnelStageToGeo,
   type DrilldownRecordItem,
 } from './drilldown-record';
 
@@ -34,6 +39,116 @@ describe('drilldown-record — human lifecycle labels', () => {
     expect(siteStatusLabel('ACTIVE')).toBe('Active');
     expect(siteStatusLabel('INACTIVE')).toBe('Inactive');
     expect(siteStatusLabel(null)).toBe('');
+  });
+});
+
+describe('drilldown-record — execution-funnel ladder', () => {
+  it('funnelBadge: clean label + report-matching tone per rung', () => {
+    expect(funnelBadge('NOT_STARTED')).toEqual({ funnelStage: 'Not started', funnelTone: 'neutral' });
+    expect(funnelBadge('RECCE_SUBMITTED')).toEqual({ funnelStage: 'Recce submitted', funnelTone: 'pending' });
+    expect(funnelBadge('ASM_APPROVED')).toEqual({ funnelStage: 'ASM approved', funnelTone: 'pending' });
+    expect(funnelBadge('HO_APPROVED')).toEqual({ funnelStage: 'HO approved', funnelTone: 'approved' });
+    expect(funnelBadge('INSTALLED')).toEqual({ funnelStage: 'Installed', funnelTone: 'pending' });
+    expect(funnelBadge('AUDITED')).toEqual({ funnelStage: 'Audited', funnelTone: 'approved' });
+    expect(funnelBadge('RECCE_REJECTED')).toEqual({ funnelStage: 'Recce rejected', funnelTone: 'rejected' });
+    expect(funnelBadge('INSTALL_REJECTED')).toEqual({ funnelStage: 'Install rejected', funnelTone: 'rejected' });
+  });
+
+  it('recceFunnelStage: null → not started; the recce rungs + rejection', () => {
+    expect(recceFunnelStage(null, null)).toBe('NOT_STARTED');
+    expect(recceFunnelStage('SUBMITTED', 'NONE')).toBe('RECCE_SUBMITTED');
+    expect(recceFunnelStage('APPROVED', 'PENDING')).toBe('ASM_APPROVED');
+    expect(recceFunnelStage('APPROVED', 'APPROVED')).toBe('HO_APPROVED');
+    // A MANUAL recce (no ASM stage) jumps straight to HO approved once HO signs off.
+    expect(recceFunnelStage('SUBMITTED', 'APPROVED')).toBe('HO_APPROVED');
+    expect(recceFunnelStage('REJECTED', 'NONE')).toBe('RECCE_REJECTED');
+  });
+
+  it('installFunnelStage: Installed / Audited / terminal Install rejected (HO-upheld)', () => {
+    expect(installFunnelStage('SUBMITTED', 'NONE')).toBe('INSTALLED');
+    expect(installFunnelStage('AUDIT_APPROVED', 'NONE')).toBe('AUDITED');
+    // HO overruled an audit rejection → approved → Audited (the two axes honoured).
+    expect(installFunnelStage('AUDIT_REJECTED', 'APPROVED')).toBe('AUDITED');
+    // Auditor rejected AND HO upheld → the terminal fail.
+    expect(installFunnelStage('AUDIT_REJECTED', 'REJECTED')).toBe('INSTALL_REJECTED');
+    // Audit-rejected but HO still pending → in-flight, not terminal.
+    expect(installFunnelStage('AUDIT_REJECTED', 'PENDING')).toBe('INSTALLED');
+  });
+
+  describe('siteFunnelStage — folds all recces + installs to the furthest rung', () => {
+    it('no recce, no install → Not started', () => {
+      expect(siteFunnelStage([], [])).toBe('NOT_STARTED');
+    });
+
+    it('recce-only: picks the furthest recce rung across many recces', () => {
+      expect(siteFunnelStage([{ status: 'SUBMITTED', hoReviewStatus: 'NONE' }], [])).toBe('RECCE_SUBMITTED');
+      // A later HO-approved recce wins over an earlier submitted one.
+      expect(
+        siteFunnelStage(
+          [
+            { status: 'SUBMITTED', hoReviewStatus: 'NONE' },
+            { status: 'APPROVED', hoReviewStatus: 'APPROVED' },
+          ],
+          [],
+        ),
+      ).toBe('HO_APPROVED');
+      // ASM-approved (HO pending) is below HO-approved.
+      expect(siteFunnelStage([{ status: 'APPROVED', hoReviewStatus: 'PENDING' }], [])).toBe('ASM_APPROVED');
+    });
+
+    it('a live recce beside a rejected one → the live rung (not rejected)', () => {
+      expect(
+        siteFunnelStage(
+          [
+            { status: 'REJECTED', hoReviewStatus: 'NONE' },
+            { status: 'SUBMITTED', hoReviewStatus: 'NONE' },
+          ],
+          [],
+        ),
+      ).toBe('RECCE_SUBMITTED');
+    });
+
+    it('ALL recces rejected, no install → Recce rejected', () => {
+      expect(siteFunnelStage([{ status: 'REJECTED', hoReviewStatus: 'NONE' }], [])).toBe('RECCE_REJECTED');
+    });
+
+    it('an installation dominates the recce rungs: Installed, then Audited', () => {
+      const recce = [{ status: 'APPROVED', hoReviewStatus: 'APPROVED' }];
+      expect(siteFunnelStage(recce, [{ status: 'SUBMITTED', hoReviewStatus: 'NONE' }])).toBe('INSTALLED');
+      // AUDITED if ANY install is audit-approved.
+      expect(
+        siteFunnelStage(recce, [
+          { status: 'SUBMITTED', hoReviewStatus: 'NONE' },
+          { status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' },
+        ]),
+      ).toBe('AUDITED');
+    });
+
+    it('the ONLY install is a terminal HO-upheld rejection → Install rejected', () => {
+      expect(
+        siteFunnelStage(
+          [{ status: 'APPROVED', hoReviewStatus: 'APPROVED' }],
+          [{ status: 'AUDIT_REJECTED', hoReviewStatus: 'REJECTED' }],
+        ),
+      ).toBe('INSTALL_REJECTED');
+    });
+
+    it('tolerates a lean install select (no hoReviewStatus) — any install reads Installed', () => {
+      // The geo heatmap selects install `status` only; a rejected install still folds to INSTALLED.
+      expect(siteFunnelStage([], [{ status: 'AUDIT_REJECTED' }])).toBe('INSTALLED');
+      expect(siteFunnelStage([{ status: 'APPROVED' }], [{ status: 'AUDIT_APPROVED' }])).toBe('AUDITED');
+    });
+  });
+
+  it('funnelStageToGeo: collapses to the 6-value heatmap vocabulary (rejected rungs fold back)', () => {
+    expect(funnelStageToGeo('NOT_STARTED')).toBe('NONE');
+    expect(funnelStageToGeo('RECCE_SUBMITTED')).toBe('RECCED');
+    expect(funnelStageToGeo('RECCE_REJECTED')).toBe('RECCED'); // a rejected recce still = coverage
+    expect(funnelStageToGeo('ASM_APPROVED')).toBe('ASM_APPROVED');
+    expect(funnelStageToGeo('HO_APPROVED')).toBe('HO_APPROVED');
+    expect(funnelStageToGeo('INSTALLED')).toBe('INSTALLED');
+    expect(funnelStageToGeo('INSTALL_REJECTED')).toBe('INSTALLED'); // any install = INSTALLED
+    expect(funnelStageToGeo('AUDITED')).toBe('AUDITED');
   });
 });
 

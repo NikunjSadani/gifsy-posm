@@ -80,6 +80,44 @@ describe('MetricDrilldownSheet', () => {
     expect(screen.getByText('Not started')).toBeInTheDocument();
   });
 
+  it('renders the execution-funnel badge next to the status badge when present', async () => {
+    const funnelItem: ApprovalRecord = {
+      id: 'f1',
+      outletCode: 'KW-9',
+      outletName: 'Shop Nine',
+      town: 'Nagpur',
+      recceId: null,
+      status: 'ACTIVE',
+      recceDate: null,
+      vendorName: null,
+      elementSummary: null,
+      dimensions: null,
+      statusLabel: 'Active',
+      funnelStage: 'Install rejected',
+      funnelTone: 'rejected',
+    };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue({ success: true, data: { items: [funnelItem], byElementType: [], total: 1 } });
+    render(<MetricDrilldownSheet open title="Total outlets" onClose={() => {}} fetcher={fetcher} />);
+    await screen.findByText('Shop Nine');
+    // Both the outlet-status chip AND the funnel-stage chip render.
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    const funnel = screen.getByText('Install rejected');
+    expect(funnel).toBeInTheDocument();
+    // Rejected tone → red classes (matching the report's status-cell tones).
+    expect(funnel.className).toContain('text-red-700');
+  });
+
+  it('omits the funnel badge when the row carries no funnelStage (ASM approval funnel)', async () => {
+    render(<MetricDrilldownSheet open title="Recce" onClose={() => {}} fetcher={successFetcher()} onItemHref={href} />);
+    await screen.findByText('Shop One');
+    // ITEMS carry no funnelStage, so only the single status badge renders per row.
+    expect(screen.getByText('HO approved')).toBeInTheDocument();
+    expect(screen.queryByText('Installed')).toBeNull();
+    expect(screen.queryByText('Audited')).toBeNull();
+  });
+
   it('shows an Export Excel button when exportHref is set and there are records', async () => {
     render(
       <MetricDrilldownSheet
