@@ -10,6 +10,7 @@ import {
   xlsxDate,
   DRILLDOWN_XLSX_HEADERS,
   siteFunnelStage,
+  latestRecceFunnelStage,
   recceFunnelStage,
   installFunnelStage,
   funnelBadge,
@@ -73,6 +74,44 @@ describe('drilldown-record — execution-funnel ladder', () => {
     expect(installFunnelStage('AUDIT_REJECTED', 'REJECTED')).toBe('INSTALL_REJECTED');
     // Audit-rejected but HO still pending → in-flight, not terminal.
     expect(installFunnelStage('AUDIT_REJECTED', 'PENDING')).toBe('INSTALLED');
+  });
+
+  describe('latestRecceFunnelStage — the LATEST recce stage for the outlet badge', () => {
+    it('no recces → Not started', () => {
+      expect(latestRecceFunnelStage([])).toBe('NOT_STARTED');
+    });
+    it('picks the most-recent recce by capture date and folds in ITS installation', () => {
+      // Older recce submitted; newer recce HO-approved + audit-approved install → latest = Audited.
+      expect(
+        latestRecceFunnelStage([
+          { capturedAt: new Date('2026-01-10'), status: 'SUBMITTED', hoReviewStatus: 'NONE', installation: null },
+          { capturedAt: new Date('2026-02-20'), status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: { status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' } },
+        ]),
+      ).toBe('AUDITED');
+    });
+    it('a NEW submitted recce is shown as-is even when an OLDER recce was installed (latest, not furthest)', () => {
+      expect(
+        latestRecceFunnelStage([
+          { capturedAt: new Date('2026-01-10'), status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: { status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' } },
+          { capturedAt: new Date('2026-03-01'), status: 'SUBMITTED', hoReviewStatus: 'NONE', installation: null },
+        ]),
+      ).toBe('RECCE_SUBMITTED');
+    });
+    it('latest recce with an HO-upheld terminal install rejection → Install rejected', () => {
+      expect(
+        latestRecceFunnelStage([
+          { capturedAt: new Date('2026-02-20'), status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: { status: 'AUDIT_REJECTED', hoReviewStatus: 'REJECTED' } },
+        ]),
+      ).toBe('INSTALL_REJECTED');
+    });
+    it('falls back to receivedAt when capturedAt is absent; undated recces sort oldest', () => {
+      expect(
+        latestRecceFunnelStage([
+          { receivedAt: new Date('2026-05-01'), status: 'APPROVED', hoReviewStatus: 'PENDING', installation: null },
+          { status: 'SUBMITTED', hoReviewStatus: 'NONE', installation: null }, // undated → oldest
+        ]),
+      ).toBe('ASM_APPROVED');
+    });
   });
 
   describe('siteFunnelStage — folds all recces + installs to the furthest rung', () => {

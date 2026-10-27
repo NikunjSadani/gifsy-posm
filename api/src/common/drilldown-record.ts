@@ -248,6 +248,40 @@ export function siteFunnelStage(
   return 'NOT_STARTED';
 }
 
+/** One recce for the LATEST-recce fold: a sort date + the recce's own installation (if any). */
+export interface LatestRecceInput extends FunnelRecceInput {
+  capturedAt?: Date | string | null;
+  receivedAt?: Date | string | null;
+  /** The recce's own installation (to-one), or null/absent until it is installed. */
+  installation?: FunnelInstallInput | null;
+}
+
+/**
+ * The execution-funnel stage of the outlet's LATEST recce (by capture date), for the "Total outlets"
+ * drill-down BADGE — a RECORD view answering "what is the current state of work at this outlet". This
+ * is deliberately NOT {@link siteFunnelStage} (the furthest-stage fold that still drives the geo
+ * heatmap): here the single most-recent recce is shown as-is, with its OWN installation folded in
+ * exactly like the report's per-recce Activity Status column — so a newer recce is never masked by an
+ * older one, and vice-versa. No recces → NOT_STARTED. Ties on date keep the first-seen recce.
+ */
+export function latestRecceFunnelStage(recces: LatestRecceInput[]): FunnelStage {
+  if (!recces || recces.length === 0) return 'NOT_STARTED';
+  const timeOf = (r: LatestRecceInput) => {
+    const d = r.capturedAt ?? r.receivedAt ?? null;
+    const t = d ? new Date(d).getTime() : NaN;
+    return Number.isNaN(t) ? -Infinity : t; // undated recces sort oldest
+  };
+  let latest = recces[0];
+  let latestT = timeOf(latest);
+  for (let i = 1; i < recces.length; i++) {
+    const t = timeOf(recces[i]);
+    if (t > latestT) { latest = recces[i]; latestT = t; }
+  }
+  return latest.installation
+    ? installFunnelStage(latest.installation.status, latest.installation.hoReviewStatus)
+    : recceFunnelStage(latest.status, latest.hoReviewStatus);
+}
+
 /** The 6-value furthest-stage heatmap vocabulary (NO rejected rungs — see analytics geo). */
 export type SiteFurthestStage =
   | 'NONE'

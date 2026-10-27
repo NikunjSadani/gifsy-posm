@@ -481,11 +481,14 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
   it('total-outlets: lists scoped SITES (site fragment), recceId null, byElementType []', async () => {
     const { prisma, fns } = makePrisma();
     fns.site.findMany.mockResolvedValue([
-      // Outlet with an HO-approved recce + an audit-approved install → funnel folds to "Audited".
+      // Outlet whose LATEST recce (2026-02) has an audit-approved install → badge "Audited". An older
+      // recce (2026-01) sits beneath it and must NOT change the latest-recce badge.
       {
         id: 's1', code: 'C1', name: 'N1', town: 'Pune', status: 'ACTIVE',
-        recces: [{ status: 'APPROVED', hoReviewStatus: 'APPROVED' }],
-        installs: [{ status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' }],
+        recces: [
+          { capturedAt: new Date('2026-01-10'), status: 'SUBMITTED', hoReviewStatus: 'NONE', installation: null },
+          { capturedAt: new Date('2026-02-20'), status: 'APPROVED', hoReviewStatus: 'APPROVED', installation: { status: 'AUDIT_APPROVED', hoReviewStatus: 'NONE' } },
+        ],
       },
     ]);
     fns.site.count.mockResolvedValue(1);
@@ -496,7 +499,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     expect(res.items[0]).toMatchObject({ id: 's1', outletCode: 'C1', outletName: 'N1', town: 'Pune', recceId: null, status: 'ACTIVE' });
     // Enriched outlet row: no capture/element data, human status label, vendor null (none on mock).
     expect(res.items[0]).toMatchObject({ recceDate: null, elementSummary: null, dimensions: null, vendorName: null, statusLabel: 'Active' });
-    // Execution-funnel badge: the outlet's furthest rung, folded across its recces + installs.
+    // Execution-funnel badge: the LATEST recce's own stage (its install folded in) — "Audited".
     expect(res.items[0]).toMatchObject({ funnelStage: 'Audited', funnelTone: 'approved' });
     expect(res.byElementType).toEqual([]);
     expect(res).toMatchObject({ total: 1, limit: 50 });

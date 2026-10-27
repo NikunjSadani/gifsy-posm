@@ -14,6 +14,7 @@ import {
   installLifecycleLabel,
   siteStatusLabel,
   siteFunnelStage,
+  latestRecceFunnelStage,
   recceFunnelStage,
   installFunnelStage,
   funnelBadge,
@@ -486,11 +487,12 @@ export class AnalyticsService {
     const truncated = sites.length > AnalyticsService.GEO_CAP;
     const page = truncated ? sites.slice(0, AnalyticsService.GEO_CAP) : sites;
 
-    // Fold EVERY recce + install of a site into the single furthest execution-funnel stage via the
-    // ONE shared ladder (siteFunnelStage — also behind the "Total outlets" drill-down badge), then
-    // collapse it to the 6-value heatmap vocabulary. ONE source of truth, so the map and the
-    // drill-down can never drift. (The geo install select is lean `status`-only; the fold tolerates
-    // a missing hoReviewStatus, so a rejected install still reads INSTALLED here, as before.)
+    // The GEO heatmap colours each outlet by the single FURTHEST execution-funnel stage it has
+    // reached (coverage view), via `siteFunnelStage`, collapsed to the 6-value heatmap vocabulary.
+    // (The "Total outlets" drill-down BADGE instead shows the LATEST recce's stage — a current-state
+    // view — so the map and that badge intentionally answer different questions while sharing the one
+    // per-recce ladder.) The geo install select is lean `status`-only; the fold tolerates a missing
+    // hoReviewStatus, so a rejected install still reads INSTALLED here, as before.
     const recceStatusForStage: Partial<Record<ReturnType<typeof siteFunnelStage>, string>> = {
       HO_APPROVED: 'APPROVED',
       ASM_APPROVED: 'APPROVED',
@@ -713,8 +715,10 @@ export class AnalyticsService {
 
   /**
    * Site fields for the outlet-universe metric (+ vendor name for the enriched shape). The lean
-   * `recces`/`installs` relations ride the SAME paginated site query (nested select, NOT an N+1)
-   * so {@link siteItem} can fold the outlet's furthest execution-funnel stage via `siteFunnelStage`.
+   * `recces` relation (with each recce's own `installation`) rides the SAME paginated site query
+   * (nested select, NOT an N+1) so {@link siteItem} can show the LATEST recce's execution-funnel
+   * stage via `latestRecceFunnelStage` — the "current state of work" badge (distinct from the geo
+   * heatmap's furthest-stage `siteFunnelStage`).
    */
   private static readonly SITE_DRILL_SELECT = {
     id: true,
@@ -723,10 +727,18 @@ export class AnalyticsService {
     town: true,
     status: true,
     vendor: { select: { name: true } },
-    // A site carries MANY recces (1 app + N manual) and MANY installs; the funnel fold folds across
-    // all of them. Lean status-only selects — bounded by the site page (limit ≤ 200), no media/joins.
-    recces: { select: { status: true, hoReviewStatus: true } },
-    installs: { select: { status: true, hoReviewStatus: true } },
+    // A site carries MANY recces (1 app + N manual); the badge shows the most-recent one's stage,
+    // folding in THAT recce's own installation. Lean select (dates + status + the to-one install),
+    // bounded by the site page (limit ≤ 200) — no media/joins, no N+1.
+    recces: {
+      select: {
+        capturedAt: true,
+        receivedAt: true,
+        status: true,
+        hoReviewStatus: true,
+        installation: { select: { status: true, hoReviewStatus: true } },
+      },
+    },
   } as const;
 
   /** Installation fields + its site/vendor + the fulfilled recce's capture date + element lines. */
@@ -760,10 +772,11 @@ export class AnalyticsService {
   private siteItem(
     r: Prisma.SiteGetPayload<{ select: typeof AnalyticsService.SITE_DRILL_SELECT }>,
   ): DrilldownRecordItem {
-    // The outlet's furthest execution-funnel stage, folded across ALL its recces + installs via the
-    // ONE shared ladder (also behind the geo heatmap) — defensive `?? []` so a lean/legacy mock row
-    // without the relations reads "Not started" rather than throwing.
-    const { funnelStage, funnelTone } = funnelBadge(siteFunnelStage(r.recces ?? [], r.installs ?? []));
+    // The badge shows the LATEST recce's own activity stage (its installation folded in) — a
+    // "current state of work" view, so a newer recce is never masked by an older one. Distinct from
+    // the geo heatmap's furthest-stage fold. Defensive `?? []` so a lean/legacy mock row without the
+    // relation reads "Not started" rather than throwing.
+    const { funnelStage, funnelTone } = funnelBadge(latestRecceFunnelStage(r.recces ?? []));
     return {
       id: r.id,
       outletCode: r.code,
