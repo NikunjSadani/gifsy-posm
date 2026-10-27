@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { KpiCards } from '@/components/analytics/KpiCards';
 import { WaterfallFunnel } from '@/components/analytics/WaterfallFunnel';
+import { ElementFunnel } from '@/components/analytics/ElementFunnel';
 import { GeoMap } from '@/components/analytics/GeoMap';
 import { VendorScorecards } from '@/components/analytics/VendorScorecards';
 import { ExportButton } from '@/components/analytics/ExportButton';
@@ -140,6 +141,14 @@ export default function VendorDashboardPage() {
           title="Your outlets"
         />
       </div>
+
+      {/* The SAME funnel broken down per element type — directly below the execution funnel. */}
+      <ElementFunnel
+        rows={summary.data?.elementFunnels ?? null}
+        loading={summary.loading}
+        error={summary.error}
+        onRetry={loadSummary}
+      />
 
       <VendorScorecards
         items={scorecards.data}

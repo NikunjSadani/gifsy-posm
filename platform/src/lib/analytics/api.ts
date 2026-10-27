@@ -55,10 +55,28 @@ export interface SummaryManual {
   pendingReview: number;
 }
 
+/**
+ * One element type's execution funnel at ELEMENT grain (element LINES, not recces) — the summary
+ * funnel broken down per PosmType. Mirrors the backend `ElementFunnel` shape. `pendingInstall` is
+ * derived server-side as max(hoApproved − installed, 0). Rendered by the shared `ElementFunnel`
+ * component on the ASM console + the Vendor-HO dashboard only.
+ */
+export interface ElementFunnelRow {
+  code: string;
+  name: string;
+  recced: number;
+  asmApproved: number;
+  hoApproved: number;
+  pendingInstall: number;
+  installed: number;
+}
+
 export interface AnalyticsSummary {
   waterfall: SummaryWaterfall;
   kpis: SummaryKpis;
   byRecceMode: SummaryByRecceMode;
+  /** The funnel broken down per element type (PosmType), element-grain. Ordered recced desc, name. */
+  elementFunnels: ElementFunnelRow[];
   manual: SummaryManual;
 }
 

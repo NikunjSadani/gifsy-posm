@@ -29,6 +29,27 @@ import { DrilldownMetric, DrilldownQueryDto } from './dto/drilldown-query.dto';
 export type { DrilldownRecordItem, ElementTypeCount } from '../common/drilldown-record';
 
 /**
+ * One element type's execution funnel at ELEMENT grain (ReccePosm / InstallPosm ROWS, not recces).
+ * Each stage mirrors the summary funnel's where-clause but counts element lines of this PosmType,
+ * scoped identically to the rest of summary. `pendingInstall` is derived (hoApproved − installed,
+ * floored at 0). Returned in the `summary` response as `elementFunnels`.
+ */
+export interface ElementFunnel {
+  code: string;
+  name: string;
+  /** ReccePosm of this type in scoped recces (ANY status). */
+  recced: number;
+  /** ReccePosm of this type whose recce is status APPROVED && approvedById set (ASM-signed-off). */
+  asmApproved: number;
+  /** ReccePosm of this type whose recce is status APPROVED && hoReviewStatus APPROVED (installable). */
+  hoApproved: number;
+  /** Derived: max(hoApproved − installed, 0) — installable element lines not yet installed. */
+  pendingInstall: number;
+  /** InstallPosm of this type in scoped installs (counted via the reccePosm back-relation). */
+  installed: number;
+}
+
+/**
  * A resolved read-scope for the caller, applied UNIFORMLY to every analytics query. It is the
  * single security chokepoint of this module — build once (`resolveScope`), then AND the right
  * predicate into every count / findMany / groupBy so no endpoint can leak a fleet or a tenant.
@@ -206,7 +227,10 @@ export class AnalyticsService {
       }),
     ]);
 
-    const avgTurnaroundDays = await this.avgTurnaround(s.install);
+    const [avgTurnaroundDays, elementFunnels] = await Promise.all([
+      this.avgTurnaround(s.install),
+      this.elementFunnels(s),
+    ]);
 
     const kpis: Record<string, number | null> = {
       // ASM-approval rate = ASM-approved among DECIDED recces (approved + rejected); null when
@@ -230,9 +254,82 @@ export class AnalyticsService {
       // Recce-event split by entry path (app = total − manual). `manualTasks` below is the unrelated
       // generic manual-task lane; this is the APP-vs-MANUAL recce classification.
       byRecceMode: { app: recced - recceManual, manual: recceManual },
+      // The SAME funnel broken down per element type (PosmType), at element grain. Consumed only by
+      // the ASM console + the Vendor-HO dashboard (NOT admin analytics) — the FE decides where to show it.
+      elementFunnels,
       kpis,
       manual: { openTasks, pendingReview: manualPendingReview },
     };
+  }
+
+  /**
+   * Per-PosmType execution funnel at ELEMENT grain — the summary funnel broken down by element type.
+   * Counts ReccePosm / InstallPosm ROWS (not recces), each stage mirroring the summary stage's
+   * where-clause but reached through the parent `recce` / `installPosm → installation` relation, so
+   * the passed {@link Scope} confines it IDENTICALLY to the rest of summary (vendor → own fleet,
+   * ASM → territory, admin → tenant, un-assumed OWNER → platform). Bounded: four groupBy-by-posmType
+   * queries + one PosmType lookup, assembled in JS — never an N+1 per type. A type appears in the
+   * result iff it has ≥1 element line in ANY stage within scope; ordered by `recced` desc then name.
+   */
+  private async elementFunnels(s: Scope): Promise<ElementFunnel[]> {
+    // Each stage's recce predicate mirrors summary EXACTLY, reached through the ReccePosm→recce relation.
+    const asmRecce: Prisma.RecceWhereInput = { ...s.recce, status: 'APPROVED', approvedById: { not: null } };
+    const hoRecce: Prisma.RecceWhereInput = { ...s.recce, status: 'APPROVED', hoReviewStatus: 'APPROVED' };
+
+    const [reccedG, asmG, hoG, installedG, pendingG] = await Promise.all([
+      // recced: element lines in ANY-status scoped recces.
+      this.prisma.reccePosm.groupBy({ by: ['posmTypeId'], where: { recce: s.recce }, _count: { _all: true } }),
+      // asmApproved: element lines whose recce is ASM-signed-off (status APPROVED && approvedById set).
+      this.prisma.reccePosm.groupBy({ by: ['posmTypeId'], where: { recce: asmRecce }, _count: { _all: true } }),
+      // hoApproved: element lines whose recce is HO-approved / installable.
+      this.prisma.reccePosm.groupBy({ by: ['posmTypeId'], where: { recce: hoRecce }, _count: { _all: true } }),
+      // installed: element lines with a linked InstallPosm whose installation is in scope — counted via
+      // the reccePosm back-relation (installPosm ↔ reccePosm is 1:1, so this equals the InstallPosm count).
+      this.prisma.reccePosm.groupBy({ by: ['posmTypeId'], where: { installPosm: { installation: s.install } }, _count: { _all: true } }),
+      // pendingInstall: HO-approved element lines with NO install yet — counted DIRECTLY (not
+      // hoApproved−installed). The direct count can't go negative if a future direct-install path or a
+      // resubmit-after-install ever makes `installed` exceed `hoApproved` (which a subtraction+clamp
+      // would silently hide as 0). "Not installed" = no InstallPosm at all; an audit-rejected install
+      // still has an InstallPosm, so it reads as installed, not pending (matches the `installed` count).
+      this.prisma.reccePosm.groupBy({ by: ['posmTypeId'], where: { recce: hoRecce, installPosm: { is: null } }, _count: { _all: true } }),
+    ]);
+
+    const ids = new Set<string>();
+    const toMap = (groups: { posmTypeId: string; _count: { _all: number } }[]): Map<string, number> => {
+      const m = new Map<string, number>();
+      for (const g of groups) {
+        m.set(g.posmTypeId, g._count._all);
+        ids.add(g.posmTypeId);
+      }
+      return m;
+    };
+    const recced = toMap(reccedG);
+    const asm = toMap(asmG);
+    const ho = toMap(hoG);
+    const installed = toMap(installedG);
+    const pending = toMap(pendingG);
+    if (ids.size === 0) return [];
+
+    // Names/codes for only the types that appeared in scope. These ids come from scoped ReccePosm
+    // rows, so they already belong to the caller's tenant — the same (unscoped) lookup pattern as
+    // the drill-down `elementBreakdown`.
+    const types = await this.prisma.posmType.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, code: true, name: true },
+    });
+
+    const rows = types.map((t) => ({
+      code: t.code,
+      name: t.name,
+      recced: recced.get(t.id) ?? 0,
+      asmApproved: asm.get(t.id) ?? 0,
+      hoApproved: ho.get(t.id) ?? 0,
+      // Directly counted (HO-approved element lines with no InstallPosm) — see the groupBy comment.
+      pendingInstall: pending.get(t.id) ?? 0,
+      installed: installed.get(t.id) ?? 0,
+    }));
+    rows.sort((a, b) => b.recced - a.recced || a.name.localeCompare(b.name));
+    return rows;
   }
 
   /**

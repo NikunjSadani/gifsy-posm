@@ -25,14 +25,20 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { fetchWaterfall, fetchQueue, fetchRecords, recordsExportUrl, type Waterfall, type ApprovalRecord } from '@/lib/review/api';
+import { fetchSummary, type ElementFunnelRow } from '@/lib/analytics/api';
 import { Spinner } from '@/components/ui/spinner';
 import { MetricDrilldownSheet } from '@/components/ui/metric-drilldown-sheet';
+import { ElementFunnel } from '@/components/analytics/ElementFunnel';
 
 interface DashboardState {
   loading: boolean;
   error: string | null;
   waterfall: Waterfall | null;
   pending: number | null;
+  /** Per-element funnel for this ASM's territory (from the scoped analytics summary). */
+  elementFunnels: ElementFunnelRow[] | null;
+  /** True only when the elementFunnels fetch itself failed (the funnel/queue may still have loaded). */
+  elementFunnelsError: boolean;
 }
 
 /** The active drill-down target (which funnel stage the sheet is showing), or null when closed. */
@@ -53,18 +59,29 @@ export default function ReviewDashboardPage() {
     error: null,
     waterfall: null,
     pending: null,
+    elementFunnels: null,
+    elementFunnelsError: false,
   });
   const [drill, setDrill] = useState<DrillTarget | null>(null);
 
   const load = useCallback(async () => {
-    setState((s) => ({ ...s, loading: true, error: null }));
-    const [wf, queue] = await Promise.all([fetchWaterfall(), fetchQueue({ limit: 1 })]);
+    setState((s) => ({ ...s, loading: true, error: null, elementFunnelsError: false }));
+    // The element-wise funnel rides the SCOPED analytics summary (territory-confined server-side for
+    // an ASM). It loads/fails INDEPENDENTLY of the approval waterfall + queue, so a summary error
+    // never blanks the main dashboard.
+    const [wf, queue, summary] = await Promise.all([
+      fetchWaterfall(),
+      fetchQueue({ limit: 1 }),
+      fetchSummary(),
+    ]);
     setState({
       loading: false,
-      // Surface an error only if BOTH failed; otherwise show what we have.
+      // Surface the top-level error only if BOTH the waterfall AND queue failed; otherwise show what we have.
       error: !wf.success && !queue.success ? wf.error || 'Could not load the dashboard.' : null,
       waterfall: wf.success ? wf.data : null,
       pending: queue.success ? queue.data.total : null,
+      elementFunnels: summary.success ? summary.data.elementFunnels : null,
+      elementFunnelsError: !summary.success,
     });
   }, []);
 
@@ -200,6 +217,16 @@ export default function ReviewDashboardPage() {
               </div>
             )}
           </div>
+
+          {/* The SAME funnel broken down per element type — directly below the execution funnel. */}
+          <ElementFunnel
+            rows={state.elementFunnels}
+            // Show the spinner on a manual Refresh (content stays mounted once loaded) rather than
+            // leaving stale element rows while the rest of the dashboard re-animates.
+            loading={state.loading && !state.elementFunnelsError}
+            error={state.elementFunnelsError ? 'The element funnel could not be loaded right now.' : null}
+            onRetry={() => void load()}
+          />
         </>
       )}
 

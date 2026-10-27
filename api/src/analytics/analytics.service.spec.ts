@@ -206,6 +206,110 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
   });
 });
 
+describe('AnalyticsService.summary — elementFunnels (per-PosmType, element grain)', () => {
+  it('empty when no element lines are in scope', async () => {
+    const { prisma } = makePrisma(); // reccePosm.groupBy defaults to []
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+    expect(res.elementFunnels).toEqual([]);
+  });
+
+  it('assembles per-type stage counts, counts pendingInstall directly, orders by recced desc then name', async () => {
+    const { prisma, fns } = makePrisma();
+    // reccePosm.groupBy is called 5×, IN ORDER: recced, asmApproved, hoApproved, installed, pendingInstall.
+    // pendingInstall is counted DIRECTLY (HO-approved element lines with no InstallPosm) — only groups
+    // with ≥1 appear, so Banner/Shelf (0) are absent and default to 0.
+    // GSB: recced 5, asm 4, ho 3, installed 1, pending 2.
+    // Banner: recced 5, asm 2, ho 2, installed 2, pending 0 (ties GSB on recced → name breaks it).
+    // Shelf: recced 2, asm 0, ho 0, installed 0, pending 0.
+    fns.reccePosm.groupBy
+      .mockResolvedValueOnce([
+        { posmTypeId: 'p-gsb', _count: { _all: 5 } },
+        { posmTypeId: 'p-ban', _count: { _all: 5 } },
+        { posmTypeId: 'p-shelf', _count: { _all: 2 } },
+      ])
+      .mockResolvedValueOnce([
+        { posmTypeId: 'p-gsb', _count: { _all: 4 } },
+        { posmTypeId: 'p-ban', _count: { _all: 2 } },
+      ])
+      .mockResolvedValueOnce([
+        { posmTypeId: 'p-gsb', _count: { _all: 3 } },
+        { posmTypeId: 'p-ban', _count: { _all: 2 } },
+      ])
+      .mockResolvedValueOnce([
+        { posmTypeId: 'p-gsb', _count: { _all: 1 } },
+        { posmTypeId: 'p-ban', _count: { _all: 2 } },
+      ])
+      .mockResolvedValueOnce([
+        { posmTypeId: 'p-gsb', _count: { _all: 2 } }, // pendingInstall: GSB only
+      ]);
+    fns.posmType.findMany.mockResolvedValue([
+      { id: 'p-gsb', code: 'GSB', name: 'Glow Sign Board' },
+      { id: 'p-ban', code: 'BAN', name: 'Banner' },
+      { id: 'p-shelf', code: 'SHF', name: 'Shelf' },
+    ]);
+
+    const svc = new AnalyticsService(prisma);
+    const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+
+    expect(res.elementFunnels).toEqual([
+      // recced 5 (tie) → name: "Banner" sorts before "Glow Sign Board".
+      { code: 'BAN', name: 'Banner', recced: 5, asmApproved: 2, hoApproved: 2, pendingInstall: 0, installed: 2 },
+      { code: 'GSB', name: 'Glow Sign Board', recced: 5, asmApproved: 4, hoApproved: 3, pendingInstall: 2, installed: 1 },
+      { code: 'SHF', name: 'Shelf', recced: 2, asmApproved: 0, hoApproved: 0, pendingInstall: 0, installed: 0 },
+    ]);
+  });
+
+  it('each stage mirrors the summary where-clause, reached through the reccePosm→recce / installPosm relation', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 1 } }]);
+    fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'A', name: 'Alpha' }]);
+    const svc = new AnalyticsService(prisma);
+    await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
+
+    const calls = fns.reccePosm.groupBy.mock.calls;
+    // recced: any-status scoped recce.
+    expect(calls[0][0].where).toEqual({ recce: { clientId: 'c1' } });
+    // asmApproved: APPROVED && approvedById set (ASM-signed-off), same as summary `approved`.
+    expect(calls[1][0].where).toEqual({ recce: { clientId: 'c1', status: 'APPROVED', approvedById: { not: null } } });
+    // hoApproved: APPROVED && hoReviewStatus APPROVED (installable).
+    expect(calls[2][0].where).toEqual({ recce: { clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED' } });
+    // installed: via the InstallPosm back-relation, installation in scope.
+    expect(calls[3][0].where).toEqual({ installPosm: { installation: { clientId: 'c1' } } });
+    // pendingInstall: HO-approved element lines with NO InstallPosm (directly counted, not derived).
+    expect(calls[4][0].where).toEqual({ recce: { clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED' }, installPosm: { is: null } });
+    // All grouped by the PosmType.
+    for (const c of calls) expect(c[0].by).toEqual(['posmTypeId']);
+  });
+
+  it('VENDOR_HO: element funnels confined to their fleet via the site relation (isolation)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 1 } }]);
+    fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'A', name: 'Alpha' }]);
+    const svc = new AnalyticsService(prisma);
+    await svc.summary(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }));
+
+    const calls = fns.reccePosm.groupBy.mock.calls;
+    // recce-side stages ride the recce scope (clientId + site.vendorId).
+    expect(calls[0][0].where).toEqual({ recce: { clientId: 'c1', site: { vendorId: 'v-7' } } });
+    // installed rides the install scope (clientId + site.vendorId).
+    expect(calls[3][0].where).toEqual({ installPosm: { installation: { clientId: 'c1', site: { vendorId: 'v-7' } } } });
+    expect(JSON.stringify(calls)).not.toContain('v-OTHER');
+  });
+
+  it('ASM: element funnels territory-pinned (site.asmUserId)', async () => {
+    const { prisma, fns } = makePrisma();
+    fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 1 } }]);
+    fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'A', name: 'Alpha' }]);
+    const svc = new AnalyticsService(prisma);
+    await svc.summary(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }));
+
+    const calls = fns.reccePosm.groupBy.mock.calls;
+    expect(calls[0][0].where).toEqual({ recce: { clientId: 'c1', site: { asmUserId: 'asm-3' } } });
+    expect(calls[3][0].where).toEqual({ installPosm: { installation: { clientId: 'c1', site: { asmUserId: 'asm-3' } } } });
+  });
+});
+
 describe('AnalyticsService.vendorScorecards — scoping', () => {
   it('VENDOR_HO: vendor universe pinned to their own id (only their row)', async () => {
     const { prisma, fns } = makePrisma();
