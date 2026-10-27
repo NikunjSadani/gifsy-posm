@@ -145,7 +145,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 <Image src="/kwality-walls-logo.png" alt="Kwality Wall's" width={44} height={44} priority />
               </div>
               <div className="min-w-0">
-                <p className="text-white font-black text-sm tracking-wide leading-tight truncate">
+                <p className="text-white font-black text-base tracking-wide leading-tight truncate">
                   Field Execution — Admin
                 </p>
                 <p className="text-[var(--brand-accent)] text-[10px] font-semibold tracking-widest uppercase">
