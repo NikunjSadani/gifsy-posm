@@ -40,6 +40,20 @@ body {
   overflow-x: hidden;   /* prevent any element overflow reaching the viewport */
 }
 
+/* iOS auto-zoom guard — on touch devices (no hover, coarse pointer), render form
+   controls at 16px so iOS Safari has no reason to auto-zoom on focus (it zooms in on
+   any sub-16px input and never zooms back out on blur). This only affects touch
+   phones/tablets; desktop keeps the smaller text-sm sizing. We do NOT set
+   maximum-scale/user-scalable on the viewport, so pinch-zoom stays available for
+   accessibility. Checkboxes/radios are excluded (their size is not text-driven). */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Scrollbar styling — Kwality red thumb */
 ::-webkit-scrollbar {
   width: 6px;

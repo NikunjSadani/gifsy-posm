@@ -367,7 +367,12 @@ export function PosmCaptureCard({
 
       {/* Photo */}
       <label className="mb-1.5 block text-xs font-medium text-gray-600">Photo</label>
-      <CameraCapture value={file} onChange={onPhoto} disabled={uploading} label="Take Element photo" />
+      {/* The raw camera preview is shown only BEFORE a box is placed. Once `markup` is set we
+          render a single box-overlay image (below) instead, so the same photo is not shown twice.
+          The box-overlay image carries its own Retake control, so no capture affordance is lost. */}
+      {!markup && (
+        <CameraCapture value={file} onChange={onPhoto} disabled={uploading} label="Take Element photo" />
+      )}
 
       {/* Status line */}
       <div className="mt-3 min-h-[1.25rem] text-xs">
@@ -443,25 +448,42 @@ export function PosmCaptureCard({
                   <MarkupOverlay markup={markup} />
                 </div>
               )}
-              <div className="flex items-center gap-2 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
-                <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
-                <span className="flex-1 font-medium">Element box placed</span>
-                <button
-                  type="button"
-                  onClick={openMarkup}
-                  className="shrink-0 font-semibold text-[var(--brand-primary)] underline active:scale-95 transition-transform"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={clearMarkup}
-                  aria-label="Clear Element box"
-                  className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
-                >
-                  <X className="h-3.5 w-3.5" />
-                  Clear
-                </button>
+              {/* Controls for the single box-overlay image: Retake (discard photo + box → the
+                  camera capture zone reappears), Edit (re-open the box placer), Clear (drop the
+                  box but keep the photo). flex-wrap keeps all three legible/tappable at phone
+                  width. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-[var(--brand-primary-light)] px-3 py-2 text-xs text-gray-800">
+                <span className="inline-flex items-center gap-1.5 font-medium">
+                  <PenSquare className="h-3.5 w-3.5 shrink-0 text-[var(--brand-primary)]" />
+                  Element box placed
+                </span>
+                <span className="ml-auto inline-flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={retakePhoto}
+                    className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-600 active:scale-95 transition-transform"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Retake
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openMarkup}
+                    className="inline-flex shrink-0 items-center gap-1 font-semibold text-[var(--brand-primary)] underline active:scale-95 transition-transform"
+                  >
+                    <PenSquare className="h-3.5 w-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearMarkup}
+                    aria-label="Clear Element box"
+                    className="inline-flex shrink-0 items-center gap-1 font-semibold text-gray-500 active:scale-95 transition-transform"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Clear
+                  </button>
+                </span>
               </div>
             </div>
           ) : (
