@@ -129,6 +129,38 @@ describe('SitesService.bulkUpload', () => {
     expect(statusRow[2]).toBe("'=cmd|'/c calc'!A1");
   });
 
+  it('success file: a mixed batch lists each imported row with its Created / Updated action', async () => {
+    // UPD1 already exists (→ Updated); NEW1 does not (→ Created, so it must carry rs_code + beat_name).
+    const { prisma, upsert } = makePrisma({ existingCodes: ['UPD1'] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([
+      { code: 'UPD1', name: 'Updated Outlet' },
+      { code: 'NEW1', name: 'New Outlet', rs_code: 'RS1', beat_name: 'Beat 1' },
+    ]);
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(2);
+    expect(res.errorCount).toBe(0);
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(res.successFileBase64).toBeTruthy();
+
+    const rows = readErrorFile(res.successFileBase64 as string);
+    expect(rows[0]).toEqual(['code', 'name', 'action']);
+    const byCode = new Map(rows.slice(1).map((r) => [r[0], r[2]]));
+    expect(byCode.get('UPD1')).toBe('Updated');
+    expect(byCode.get('NEW1')).toBe('Created');
+  });
+
+  it('success file: an all-error batch yields successFileBase64: null', async () => {
+    const { prisma, upsert } = makePrisma({ existingCodes: [] });
+    const svc = new SitesService(prisma);
+    const buffer = buildXlsxBuffer([{ name: 'NoCode' }]); // missing code → rejected
+    const res = await svc.bulkUpload(admin, { originalname: 'x.xlsx', buffer } as Express.Multer.File);
+    expect(res.successCount).toBe(0);
+    expect(res.errorCount).toBe(1);
+    expect(res.successFileBase64).toBeNull();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it('rejects an unknown vendor code with a per-row error', async () => {
     const { prisma } = makePrisma();
     const svc = new SitesService(prisma);

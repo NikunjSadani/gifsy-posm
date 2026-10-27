@@ -37,6 +37,30 @@ export const SITE_UPLOAD_HEADERS = [
 export const SITE_UPLOAD_REQUIRED_HEADERS = ['code', 'name'] as const;
 
 /**
+ * Header row of the base64 SUCCESS report returned by a bulk upload — the rows that were
+ * imported, each labelled `Created` (the code did not exist in the tenant before this batch)
+ * or `Updated` (an existing code). Lets an admin confirm exactly what the upload changed.
+ */
+export const SITE_SUCCESS_HEADERS = ['code', 'name', 'action'] as const;
+
+/**
+ * Bulk-DEACTIVATE column contract. A single-sheet .xlsx whose ONLY required column is `code`
+ * (matched case-INSENSITIVELY on ingest). Each code is resolved to a Site in the caller's tenant
+ * and, if ACTIVE, deactivated via the same soft-delete the single endpoint uses.
+ */
+export const SITE_DEACTIVATE_HEADERS = ['code'] as const;
+export const SITE_DEACTIVATE_REQUIRED_HEADERS = ['code'] as const;
+
+/** Header row of the bulk-deactivate rejection report (bad / missing / unknown codes + reason). */
+export const SITE_DEACTIVATE_ERROR_HEADERS = ['row_number', 'code', 'error_remarks'] as const;
+
+/**
+ * Header row of the bulk-deactivate SUCCESS report — the codes acted on, each labelled
+ * `Deactivated` (was ACTIVE, now INACTIVE) or `Already inactive` (a no-op success).
+ */
+export const SITE_DEACTIVATE_SUCCESS_HEADERS = ['code', 'name', 'action'] as const;
+
+/**
  * Header row of the base64 rejection report returned by a bulk upload. Mirrors the
  * source columns (so a user can fix in place) plus `row_number` and `error_remarks`.
  */

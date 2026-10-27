@@ -54,6 +54,32 @@ export class SitesController {
     return this.sites.bulkUpload(user, file);
   }
 
+  /**
+   * GET /v1/sites/bulk-deactivate/template — a blank .xlsx (only a `code` header) to fill and
+   * re-upload to the bulk-deactivate endpoint. Declared before the POST and before `:id`.
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
+  @Get('bulk-deactivate/template')
+  deactivateTemplate(): StreamableFile {
+    return new StreamableFile(this.sites.buildDeactivateTemplate(), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="outlet-deactivate-template.xlsx"',
+    });
+  }
+
+  /**
+   * POST /v1/sites/bulk-deactivate — deactivate outlets in bulk from an .xlsx of `code`s. Each
+   * ACTIVE outlet is soft-deleted via the same mechanism as the single endpoint; an already-inactive
+   * code is a no-op success; an unknown code is an error row. Returns the shared BulkUploadResult.
+   */
+  @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
+  @Post('bulk-deactivate')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  bulkDeactivate(@CurrentUser() user: JwtPayload, @UploadedFile() file: Express.Multer.File) {
+    return this.sites.bulkDeactivate(user, file);
+  }
+
   /** POST /v1/sites — create. */
   @Roles('GIFSY_ADMIN', 'CLIENT_ADMIN')
   @Post()

@@ -1,7 +1,7 @@
 import {
   BadRequestException, Injectable, NotFoundException,
 } from '@nestjs/common';
-import { Prisma, SiteStatus } from '@prisma/client';
+import { Prisma, Site, SiteStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,6 +9,7 @@ import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope, platformWide } from '../common/tenant-scope';
 import { normalizeEmail } from '../common/password';
 import { aoaToSheetSafe } from '../common/xlsx';
+import { BulkUploadResult } from '../common/bulk-result';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
 import { ListSitesDto } from './dto/list-sites.dto';
@@ -16,7 +17,26 @@ import {
   SITE_UPLOAD_HEADERS,
   SITE_UPLOAD_REQUIRED_HEADERS,
   SITE_ERROR_HEADERS,
+  SITE_SUCCESS_HEADERS,
+  SITE_DEACTIVATE_HEADERS,
+  SITE_DEACTIVATE_REQUIRED_HEADERS,
+  SITE_DEACTIVATE_ERROR_HEADERS,
+  SITE_DEACTIVATE_SUCCESS_HEADERS,
 } from './sites.constants';
+
+/** A row of the bulk-deactivate rejection report — a bad / missing / unknown code + reason. */
+interface SiteDeactivateErrorRow {
+  rowNumber: number;
+  code: string;
+  reason: string;
+}
+
+/** A row of the bulk-deactivate success report — code, name, and the action taken. */
+interface SiteDeactivateSuccessRow {
+  code: string;
+  name: string;
+  action: 'Deactivated' | 'Already inactive';
+}
 
 /** A rejected upload row — echoes the source cell values plus the reason. */
 interface SiteErrorRow {
@@ -411,18 +431,32 @@ export class SitesService {
   // ── Deactivate (scoped soft-delete) ──────────────────────────────────────────
   async deactivate(user: JwtPayload, id: string) {
     const existing = await this.get(user, id); // enforces scope
+    return this.performDeactivate(user, existing);
+  }
+
+  /**
+   * The SHARED soft-delete mechanism used by BOTH the single `deactivate()` and the bulk-deactivate
+   * upload: flip status → INACTIVE and write the `DEACTIVATE` audit entry. Callers are responsible
+   * for scoping (resolving `existing` within the caller's tenant/scope) before calling this. Never
+   * inline a bare status update elsewhere — route through here so the audit trail is never skipped.
+   */
+  private async performDeactivate(user: JwtPayload, existing: Site) {
     const updated = await this.prisma.site.update({
-      where: { id },
+      where: { id: existing.id },
       data: { status: SiteStatus.INACTIVE },
     });
-    await this.writeAudit(user, 'UPDATE', id, this.snapshot(existing), this.snapshot(updated), {
-      event: 'DEACTIVATE',
-    });
+    await this.writeAudit(
+      user, 'UPDATE', existing.id, this.snapshot(existing), this.snapshot(updated),
+      { event: 'DEACTIVATE' },
+    );
     return updated;
   }
 
   // ── Bulk upload ────────────────────────────────────────────────────────────────
-  async bulkUpload(user: JwtPayload, file: Express.Multer.File | undefined) {
+  async bulkUpload(
+    user: JwtPayload,
+    file: Express.Multer.File | undefined,
+  ): Promise<BulkUploadResult> {
     // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
     if (platformWide(user)) {
       throw new BadRequestException('Assume a tenant before creating tenant data.');
@@ -745,6 +779,158 @@ export class SitesService {
       successCount: successRows.length,
       errorCount: errorRows.length,
       errorFileBase64: errorRows.length > 0 ? this.buildErrorFile(errorRows) : null,
+      // The imported rows + Created/Updated label. A row's code present in `existingCodes` (the
+      // pre-batch snapshot taken above) was an UPDATE; otherwise the upsert CREATED a new outlet.
+      successFileBase64:
+        successRows.length > 0 ? this.buildSuccessFile(successRows, existingCodes) : null,
+    };
+  }
+
+  // ── Bulk deactivate ──────────────────────────────────────────────────────────
+  /**
+   * Bulk soft-delete by upload: an .xlsx whose only required column is `code`. For each code
+   * (tenant-scoped): an ACTIVE site is deactivated via the SAME {@link performDeactivate} the single
+   * endpoint uses (status→INACTIVE + DEACTIVATE audit); an already-INACTIVE site is a no-op SUCCESS;
+   * an unknown code is an ERROR row. Admin-only + tenant-pinned (the controller @Roles floor plus the
+   * platformWide refusal below). Returns the shared {@link BulkUploadResult} shape.
+   */
+  async bulkDeactivate(
+    user: JwtPayload,
+    file: Express.Multer.File | undefined,
+  ): Promise<BulkUploadResult> {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    if (platformWide(user)) {
+      throw new BadRequestException('Assume a tenant before deactivating tenant data.');
+    }
+    if (!file) {
+      throw new BadRequestException(
+        'No file provided. Attach an .xlsx or .xls file with the field name "file".',
+      );
+    }
+    const clientId = user.clientId;
+    const extension = (file.originalname.split('.').pop() ?? '').toLowerCase();
+    if (!['xlsx', 'xls'].includes(extension)) {
+      throw new BadRequestException(
+        'Invalid file type. Please upload an .xlsx or .xls file using the downloaded template.',
+      );
+    }
+
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: false });
+    } catch {
+      throw new BadRequestException('Could not parse the Excel file. Please use the template.');
+    }
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) throw new BadRequestException('The Excel file appears to be empty.');
+
+    const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(
+      workbook.Sheets[sheetName],
+      { raw: true, defval: '' },
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException('The Excel file has no data rows (only a header row found).');
+    }
+
+    const fileKeys = Object.keys(rows[0]).map((k) => k.trim().toLowerCase());
+    const missing = SITE_DEACTIVATE_REQUIRED_HEADERS.filter((h) => !fileKeys.includes(h));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Missing required columns: ${missing.join(', ')}. Please use the downloaded template.`,
+      );
+    }
+    // F2: reject an oversized sheet BEFORE the per-row loop (each row does DB work).
+    if (rows.length > MAX_UPLOAD_ROWS) {
+      throw new BadRequestException(
+        `Too many rows (${rows.length}). The maximum per upload is ${MAX_UPLOAD_ROWS}. ` +
+          'Please split the file and upload in batches.',
+      );
+    }
+
+    // Preload the matching sites ONCE (by the sheet's own codes, tenant-scoped) so resolution is
+    // in-memory, not N queries. Matched EXACTLY, the same equality the single path keys on.
+    const fileCodes = new Set<string>();
+    for (const row of rows) {
+      const lower: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(row)) lower[k.trim().toLowerCase()] = v;
+      const code = String(lower['code'] ?? '').trim();
+      if (code) fileCodes.add(code);
+    }
+    const sites =
+      fileCodes.size > 0
+        ? await this.prisma.site.findMany({
+            where: { clientId, code: { in: [...fileCodes] } },
+          })
+        : [];
+    const siteByCode = new Map(sites.map((s) => [s.code, s]));
+
+    const successRows: SiteDeactivateSuccessRow[] = [];
+    const errorRows: SiteDeactivateErrorRow[] = [];
+    const seenCodes = new Set<string>(); // within-file de-dup
+
+    // Process sequentially so each deactivation routes through the shared single-record mechanism
+    // (status→INACTIVE + DEACTIVATE audit per site) exactly as the single endpoint does.
+    for (let i = 0; i < rows.length; i++) {
+      const rowNumber = i + 2; // row 1 = header
+      const lower: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rows[i])) lower[k.trim().toLowerCase()] = v;
+      const code = String(lower['code'] ?? '').trim();
+
+      const addError = (reason: string) => errorRows.push({ rowNumber, code, reason });
+
+      if (!code) { addError('code is required'); continue; }
+      // De-dup on the EXACT code — the same equality `siteByCode`/the unique index key on, so two
+      // genuinely distinct outlets that differ only in case ("shop1" vs "SHOP1") are both processed.
+      if (seenCodes.has(code)) {
+        addError(`Duplicate code "${code}" appears more than once in this file`);
+        continue;
+      }
+      seenCodes.add(code);
+
+      const site = siteByCode.get(code);
+      if (!site) { addError('outlet code not found'); continue; }
+
+      if (site.status === SiteStatus.INACTIVE) {
+        successRows.push({ code: site.code, name: site.name, action: 'Already inactive' });
+        continue;
+      }
+      // A transient per-row failure becomes an error row — never aborts the batch, so the rows
+      // already committed are still reported (retry is idempotent: already-inactive = no-op success).
+      try {
+        await this.performDeactivate(user, site);
+        successRows.push({ code: site.code, name: site.name, action: 'Deactivated' });
+      } catch (e) {
+        addError(e instanceof Error ? e.message : 'could not deactivate this outlet');
+      }
+    }
+
+    const batchId = randomUUID();
+    // Batch-level ingestion audit (the per-site DEACTIVATE entries are written by performDeactivate).
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'IMPORT',
+        entityType: 'SITE',
+        entityId: batchId,
+        actorId: user.sub,
+        metadata: {
+          event: 'SITE_BULK_DEACTIVATE',
+          clientId,
+          fileName: file.originalname,
+          rowCount: rows.length,
+          successCount: successRows.length,
+          errorCount: errorRows.length,
+        },
+      },
+    });
+
+    return {
+      batchId,
+      rowCount: rows.length,
+      successCount: successRows.length,
+      errorCount: errorRows.length,
+      errorFileBase64: errorRows.length > 0 ? this.buildDeactivateErrorFile(errorRows) : null,
+      successFileBase64:
+        successRows.length > 0 ? this.buildDeactivateSuccessFile(successRows) : null,
     };
   }
 
@@ -772,6 +958,55 @@ export class SitesService {
     ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 4 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Errors');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    return buf.toString('base64');
+  }
+
+  /**
+   * Build the base64 SUCCESS report for a bulk upload — the imported rows + a Created/Updated label.
+   * A code present in `existingCodes` (the pre-batch snapshot) was an UPDATE; otherwise a CREATE.
+   * CSV-injection-safe via aoaToSheetSafe.
+   */
+  private buildSuccessFile(successRows: SiteSuccessRow[], existingCodes: Set<string>): string {
+    const headers = [...SITE_SUCCESS_HEADERS];
+    const data = successRows.map((r) => [
+      r.code,
+      r.name,
+      existingCodes.has(r.code) ? 'Updated' : 'Created',
+    ]);
+    return this.buildBase64Sheet(headers, data, 'Imported');
+  }
+
+  /** The bulk-deactivate rejection report (bad / missing / unknown codes + reason). */
+  private buildDeactivateErrorFile(errorRows: SiteDeactivateErrorRow[]): string {
+    const headers = [...SITE_DEACTIVATE_ERROR_HEADERS];
+    const data = errorRows.map((r) => [r.rowNumber, r.code, r.reason]);
+    return this.buildBase64Sheet(headers, data, 'Errors');
+  }
+
+  /** The bulk-deactivate success report (code, name, Deactivated / Already inactive). */
+  private buildDeactivateSuccessFile(successRows: SiteDeactivateSuccessRow[]): string {
+    const headers = [...SITE_DEACTIVATE_SUCCESS_HEADERS];
+    const data = successRows.map((r) => [r.code, r.name, r.action]);
+    return this.buildBase64Sheet(headers, data, 'Deactivated');
+  }
+
+  /** A blank single-sheet .xlsx (header row only) — the bulk-deactivate download template. */
+  buildDeactivateTemplate(): Buffer {
+    const headers = [...SITE_DEACTIVATE_HEADERS];
+    const ws = aoaToSheetSafe([headers]);
+    ws['!cols'] = headers.map((h) => ({ wch: h.length + 8 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Outlets');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
+  /** Shared single-sheet base64 .xlsx builder (CSV-injection-safe via aoaToSheetSafe). */
+  private buildBase64Sheet(headers: string[], data: unknown[][], sheet: string): string {
+    const ws = aoaToSheetSafe([headers, ...data]);
+    ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 6 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheet);
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
     return buf.toString('base64');
   }

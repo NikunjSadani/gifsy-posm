@@ -25,6 +25,24 @@ export const USER_UPLOAD_HEADERS = [
 /** Columns whose presence is asserted before any row is processed. */
 export const USER_UPLOAD_REQUIRED_HEADERS = ['email', 'name', 'role'] as const;
 
+/**
+ * Bulk-DEACTIVATE column contract. A single-sheet .xlsx whose ONLY required column is `email`
+ * (matched case-INSENSITIVELY, normalized like the login path). Each email is resolved to a user
+ * in the caller's tenant and, if active, deactivated via the SAME path as the single endpoint
+ * (isActive=false + immediate session eviction), preserving the self / last-admin guards.
+ */
+export const USER_DEACTIVATE_HEADERS = ['email'] as const;
+export const USER_DEACTIVATE_REQUIRED_HEADERS = ['email'] as const;
+
+/** Header row of the bulk-deactivate rejection report (bad / missing / unknown emails + reason). */
+export const USER_DEACTIVATE_ERROR_HEADERS = ['row_number', 'email', 'error_remarks'] as const;
+
+/**
+ * Header row of the bulk-deactivate SUCCESS report — the emails acted on, each labelled
+ * `Deactivated` (was active, now inactive) or `Already inactive` (a no-op success).
+ */
+export const USER_DEACTIVATE_SUCCESS_HEADERS = ['email', 'name', 'action'] as const;
+
 /** Header row of the base64 rejection report (mirrors the source columns + row_number + reason).
  *  NOTE: `password` is intentionally OMITTED from the rejection report so a plaintext password is
  *  never echoed back into a downloadable file. */

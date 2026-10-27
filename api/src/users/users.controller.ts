@@ -64,6 +64,31 @@ export class UsersController {
     return this.users.bulkUpload(user, file);
   }
 
+  /**
+   * GET /v1/users/bulk-deactivate/template — a blank .xlsx (only an `email` header) to fill and
+   * re-upload to the bulk-deactivate endpoint.
+   */
+  @Get('bulk-deactivate/template')
+  deactivateTemplate(): StreamableFile {
+    return new StreamableFile(this.users.buildDeactivateTemplate(), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="user-deactivate-template.xlsx"',
+    });
+  }
+
+  /**
+   * POST /v1/users/bulk-deactivate — deactivate logins in bulk from an .xlsx of `email`s. Each
+   * active user is deactivated via the same path as the single endpoint (isActive=false + session
+   * eviction, freeing the phone reservation), preserving the self / last-admin guards. An
+   * already-inactive email is a no-op success; an unknown email is an error row.
+   */
+  @Post('bulk-deactivate')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  bulkDeactivate(@CurrentUser() user: JwtPayload, @UploadedFile() file: Express.Multer.File) {
+    return this.users.bulkDeactivate(user, file);
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {

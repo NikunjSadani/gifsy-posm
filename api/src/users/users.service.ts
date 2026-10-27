@@ -15,9 +15,32 @@ import { tenantScope, platformWide } from '../common/tenant-scope';
 import { normalizeIndianPhone } from '../common/phone';
 import { hashPassword, normalizeEmail, MIN_PASSWORD_LENGTH } from '../common/password';
 import { aoaToSheetSafe } from '../common/xlsx';
+import { BulkUploadResult } from '../common/bulk-result';
 import { CreateUserDto, ManagedRole, MANAGED_ROLES } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { USER_UPLOAD_HEADERS, USER_UPLOAD_REQUIRED_HEADERS, USER_ERROR_HEADERS } from './users.constants';
+import {
+  USER_UPLOAD_HEADERS,
+  USER_UPLOAD_REQUIRED_HEADERS,
+  USER_ERROR_HEADERS,
+  USER_DEACTIVATE_HEADERS,
+  USER_DEACTIVATE_REQUIRED_HEADERS,
+  USER_DEACTIVATE_ERROR_HEADERS,
+  USER_DEACTIVATE_SUCCESS_HEADERS,
+} from './users.constants';
+
+/** A row of the bulk-deactivate rejection report — a bad / missing / unknown email + reason. */
+interface UserDeactivateErrorRow {
+  rowNumber: number;
+  email: string;
+  reason: string;
+}
+
+/** A row of the bulk-deactivate success report — email, name, and the action taken. */
+interface UserDeactivateSuccessRow {
+  email: string;
+  name: string;
+  action: 'Deactivated' | 'Already inactive';
+}
 
 /** A rejected bulk-upload row — echoes the source cells plus the reason. */
 interface UserErrorRow {
@@ -217,6 +240,24 @@ export class UsersService {
     const existing = await this.findScopedOrThrow(user, id);
     // F6: never let a caller deactivate themselves, nor strip the tenant's last active admin.
     await this.assertNotTenantLockout(user, existing);
+    return this.performDeactivate(user, existing);
+  }
+
+  /**
+   * The SHARED deactivation mechanism used by BOTH the single `deactivate()` and the bulk-deactivate
+   * upload: flip isActive=false, audit DELETE, and IMMEDIATELY evict every live session (so a
+   * disabled login is cut off at once, not merely within the access-token TTL). NOTE: in POSM
+   * `(clientId, phone)` is a FULL unique, not a partial-on-active index, so deactivation does NOT
+   * free the phone for reuse — phone is only an optional contact here (login is email+password).
+   * Callers must have already resolved `existing` within
+   * the caller's tenant AND run the self / last-admin lockout guards; this method performs no guard
+   * of its own. Never inline a bare isActive update elsewhere — route through here so the eviction +
+   * audit are never skipped.
+   */
+  private async performDeactivate(
+    user: JwtPayload,
+    existing: { id: string; clientId: string; role: string; isActive: boolean },
+  ) {
     const updated = await this.prisma.user.update({
       where: { id: existing.id },
       data: { isActive: false },
@@ -505,6 +546,193 @@ export class UsersService {
       errorCount: errorRows.length,
       errorFileBase64: errorRows.length > 0 ? this.buildUserErrorFile(errorRows) : null,
     };
+  }
+
+  // ── Bulk deactivate (Excel) ──────────────────────────────────────────────────────
+  /**
+   * Excel bulk-DEACTIVATE of logins by email. For each email (tenant-scoped, normalized like the
+   * login path): an ACTIVE user is deactivated via the SAME {@link performDeactivate} the single
+   * endpoint uses (isActive=false + session eviction); an already-inactive user is a no-op SUCCESS;
+   * an unknown email is an ERROR.
+   *
+   * SAFETY: every guard the single path enforces is preserved — the self-target and last-active-admin
+   * lockout guards ({@link assertNotTenantLockout}) run per ACTIVE row and, when they would throw,
+   * become an error row instead of aborting the whole batch. GIFSY_ADMIN operator accounts are
+   * excluded from resolution (as the single path does), so a sheet row can never disable an operator.
+   * Processed SEQUENTIALLY so the last-admin count reflects each committed deactivation.
+   */
+  async bulkDeactivate(
+    user: JwtPayload,
+    file: Express.Multer.File | undefined,
+  ): Promise<BulkUploadResult> {
+    // F8: an un-assumed GIFSY_ADMIN has no tenant context — refuse tenant-data writes.
+    this.assertTenantContext(user);
+    if (!file) {
+      throw new BadRequestException(
+        'No file provided. Attach an .xlsx or .xls file with the field name "file".',
+      );
+    }
+    const clientId = user.clientId;
+    const extension = (file.originalname.split('.').pop() ?? '').toLowerCase();
+    if (!['xlsx', 'xls'].includes(extension)) {
+      throw new BadRequestException(
+        'Invalid file type. Please upload an .xlsx or .xls file using the downloaded template.',
+      );
+    }
+
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: false });
+    } catch {
+      throw new BadRequestException('Could not parse the Excel file. Please use the template.');
+    }
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) throw new BadRequestException('The Excel file appears to be empty.');
+
+    const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(
+      workbook.Sheets[sheetName],
+      { raw: true, defval: '' },
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException('The Excel file has no data rows (only a header row found).');
+    }
+
+    const fileKeys = Object.keys(rows[0]).map((k) => k.trim().toLowerCase());
+    const missing = USER_DEACTIVATE_REQUIRED_HEADERS.filter((h) => !fileKeys.includes(h));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Missing required columns: ${missing.join(', ')}. Please use the downloaded template.`,
+      );
+    }
+    if (rows.length > MAX_USER_UPLOAD_ROWS) {
+      throw new BadRequestException(
+        `Too many rows (${rows.length}). The maximum per upload is ${MAX_USER_UPLOAD_ROWS}. ` +
+          'Please split the file and upload in batches.',
+      );
+    }
+
+    // Preload the matching tenant users ONCE (normalized emails), EXCLUDING GIFSY_ADMIN operators —
+    // mirroring findScopedOrThrow, so an operator email resolves to "not found" (never disabled).
+    const normalizedEmails = new Set<string>();
+    for (const row of rows) {
+      const lower: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(row)) lower[k.trim().toLowerCase()] = v;
+      const email = String(lower['email'] ?? '').trim();
+      if (email) normalizedEmails.add(normalizeEmail(email));
+    }
+    const users =
+      normalizedEmails.size > 0
+        ? await this.prisma.user.findMany({
+            where: { clientId, role: { not: 'GIFSY_ADMIN' }, email: { in: [...normalizedEmails] } },
+            select: { id: true, clientId: true, email: true, role: true, isActive: true, name: true },
+          })
+        : [];
+    const userByEmail = new Map(
+      users.filter((u) => u.email).map((u) => [(u.email as string).toLowerCase(), u]),
+    );
+
+    const successRows: UserDeactivateSuccessRow[] = [];
+    const errorRows: UserDeactivateErrorRow[] = [];
+    const seenEmails = new Set<string>(); // within-file de-dup (normalized)
+
+    for (let i = 0; i < rows.length; i++) {
+      const rowNumber = i + 2; // row 1 = header
+      const lower: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rows[i])) lower[k.trim().toLowerCase()] = v;
+      const emailRaw = String(lower['email'] ?? '').trim();
+
+      const addError = (reason: string) => errorRows.push({ rowNumber, email: emailRaw, reason });
+
+      if (!emailRaw) { addError('email is required'); continue; }
+      const email = normalizeEmail(emailRaw);
+      if (seenEmails.has(email)) {
+        addError(`Duplicate email "${emailRaw}" appears more than once in this file`);
+        continue;
+      }
+      seenEmails.add(email);
+
+      const target = userByEmail.get(email);
+      if (!target) { addError('user email not found'); continue; }
+
+      if (!target.isActive) {
+        successRows.push({ email: emailRaw, name: target.name, action: 'Already inactive' });
+        continue;
+      }
+
+      // Preserve the single path's guards: self-target + last-active-admin. A throw here becomes an
+      // error row (the caller's own email → "cannot deactivate yourself") rather than aborting.
+      try {
+        await this.assertNotTenantLockout(user, target);
+      } catch (e) {
+        addError(e instanceof Error ? e.message : 'cannot deactivate this user');
+        continue;
+      }
+      // A transient per-row failure becomes an error row — never aborts the batch, so the rows
+      // already committed (deactivated + sessions evicted) are still reported. Retry is idempotent
+      // (already-inactive = no-op success) and the lockout guards re-run on retry.
+      try {
+        await this.performDeactivate(user, target);
+        successRows.push({ email: emailRaw, name: target.name, action: 'Deactivated' });
+      } catch (e) {
+        addError(e instanceof Error ? e.message : 'could not deactivate this user');
+      }
+    }
+
+    const batchId = randomUUID();
+    // Batch-level ingestion audit (the per-user DELETE entries are written by performDeactivate).
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'IMPORT',
+        entityType: 'USER',
+        entityId: batchId,
+        actorId: user.sub,
+        metadata: {
+          event: 'USER_BULK_DEACTIVATE',
+          clientId,
+          fileName: file.originalname,
+          rowCount: rows.length,
+          successCount: successRows.length,
+          errorCount: errorRows.length,
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    return {
+      batchId,
+      rowCount: rows.length,
+      successCount: successRows.length,
+      errorCount: errorRows.length,
+      errorFileBase64:
+        errorRows.length > 0
+          ? this.buildBase64Sheet([...USER_DEACTIVATE_ERROR_HEADERS],
+              errorRows.map((r) => [r.rowNumber, r.email, r.reason]), 'Errors')
+          : null,
+      successFileBase64:
+        successRows.length > 0
+          ? this.buildBase64Sheet([...USER_DEACTIVATE_SUCCESS_HEADERS],
+              successRows.map((r) => [r.email, r.name, r.action]), 'Deactivated')
+          : null,
+    };
+  }
+
+  /** A blank single-sheet .xlsx (only an `email` header) — the bulk-deactivate download template. */
+  buildDeactivateTemplate(): Buffer {
+    const headers = [...USER_DEACTIVATE_HEADERS];
+    const ws = aoaToSheetSafe([headers]);
+    ws['!cols'] = headers.map((h) => ({ wch: h.length + 8 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Users');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
+  /** Shared single-sheet base64 .xlsx builder (CSV-injection-safe via aoaToSheetSafe). */
+  private buildBase64Sheet(headers: string[], data: unknown[][], sheet: string): string {
+    const ws = aoaToSheetSafe([headers, ...data]);
+    ws['!cols'] = headers.map((h) => ({ wch: h === 'error_remarks' ? 60 : h.length + 6 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheet);
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    return buf.toString('base64');
   }
 
   /**
