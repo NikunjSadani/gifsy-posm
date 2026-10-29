@@ -17,6 +17,25 @@ import { CreateManualRecceDto } from './dto/create-manual-recce.dto';
 import { ResubmitRecceDto } from './dto/resubmit-recce.dto';
 import { ListRecceDto } from './dto/list-recce.dto';
 
+/**
+ * Linear conversion factors → feet, for every dimension unit the recce capture UI can record.
+ * The max-area cap is expressed in sq ft, so W×H must be normalised to feet before comparing —
+ * otherwise a value entered in cm/mm/in would compare against a ft cap and silently bypass it.
+ */
+const AREA_UNIT_TO_FT: Record<string, number> = {
+  ft: 1,
+  feet: 1,
+  foot: 1,
+  in: 1 / 12,
+  inch: 1 / 12,
+  inches: 1 / 12,
+  cm: 0.0328084,
+  mm: 0.00328084,
+  m: 3.28084,
+  meter: 3.28084,
+  metre: 3.28084,
+};
+
 /** JSON-safe conversion (Dates → ISO, strips undefined) for the AuditLog Json columns. */
 const toJson = (v: unknown): Prisma.InputJsonValue =>
   JSON.parse(JSON.stringify(v ?? null)) as Prisma.InputJsonValue;
@@ -41,7 +60,8 @@ interface PreparedRecce {
   posmCreate: {
     slotNo: number;
     posmTypeId: string;
-    dimensions: Prisma.InputJsonValue;
+    // A UNIT element stores JSON null (no W×H); a DIMENSION element stores {width,height,unit}.
+    dimensions: Prisma.InputJsonValue | typeof Prisma.JsonNull;
     photo: Prisma.InputJsonValue;
     markup: Prisma.InputJsonValue | typeof Prisma.JsonNull;
     qualityFlags: Prisma.InputJsonValue;
@@ -316,7 +336,7 @@ export class RecceService {
     // gate against the outlet's CURRENT gsbAllowed would turn a later gsbAllowed=false flip into a
     // permanent dead-end (a locked GSB element could never be re-captured). A normal create/manual
     // path still runs the gate unchanged.
-    const prepared = await this.prepare(clientId, recce.site, dto.posms, { skipGsbGate: true });
+    const prepared = await this.prepare(clientId, recce.site, dto.posms, { isResubmit: true });
 
     let duplicate = false;
     let updated;
@@ -544,21 +564,60 @@ export class RecceService {
     clientId: string,
     site: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; gsbAllowed?: boolean; settings?: unknown },
     lines: ReccePosmLineDto[],
-    opts: { skipGsbGate?: boolean } = {},
+    opts: { isResubmit?: boolean } = {},
   ): Promise<PreparedRecce> {
     const posmTypes = await this.assertPosmTypesInTenant(clientId, lines.map((l) => l.posmTypeId));
+    const typeById = new Map(posmTypes.map((p) => [p.id, p]));
 
-    // GSB GATE: the GSB element (the PosmType whose code is "GSB", case-insensitive) may be recced
-    // ONLY at an outlet whose master record is approved for GSB (Site.gsbAllowed === true). Enforced
-    // here, the shared choke-point for the APP (create) and MANUAL (createManual) lanes, so the gate
-    // cannot be bypassed by any FRESH submit path — and BEFORE any media/fence/hash/DB write. A
-    // provisional manual walk-in outlet has gsbAllowed=false by default, so GSB is correctly blocked
-    // there until HO finalises + approves the outlet. The resubmit lane passes skipGsbGate:true — its
-    // element set is locked to the (already-valid) original, so re-applying the gate against the
-    // outlet's CURRENT gsbAllowed would make a later gsbAllowed flip a permanent dead-end.
-    const hasGsb = posmTypes.some((p) => (p.code ?? '').toUpperCase() === 'GSB');
-    if (!opts.skipGsbGate && hasGsb && site.gsbAllowed !== true) {
+    // GSB GATE: an element flagged `isGsb=true` may be recced ONLY at an outlet whose master record is
+    // approved for GSB (Site.gsbAllowed === true). Keyed on the explicit PosmType.isGsb flag (replaces
+    // the former hardcoded code==='GSB' rule). Enforced here, the shared choke-point for the APP
+    // (create) and MANUAL (createManual) lanes, so the gate cannot be bypassed by any FRESH submit path
+    // — and BEFORE any media/fence/hash/DB write. A provisional manual walk-in outlet has
+    // gsbAllowed=false by default, so GSB is correctly blocked there until HO finalises + approves the
+    // outlet. The resubmit lane passes isResubmit:true — its element set is locked to the
+    // (already-valid) original, so re-applying the gate against the outlet's CURRENT gsbAllowed would
+    // make a later gsbAllowed flip a permanent dead-end.
+    const hasGsb = posmTypes.some((p) => p.isGsb === true);
+    if (!opts.isResubmit && hasGsb && site.gsbAllowed !== true) {
       throw new BadRequestException('You can only recce the GSB element at outlets approved for GSB.');
+    }
+
+    // MEASUREMENT + MAX-AREA cap (per element type), enforced before any media/fence/hash/DB write:
+    //   - DIMENSION element: a numeric width + height (and unit) are REQUIRED (today's behaviour); if the
+    //     type has a maxAreaSqFt cap, width*height (sq ft) must be ≤ it, else reject.
+    //   - UNIT element: NO dimensions — any supplied W×H is IGNORED and the line is stored with null
+    //     dimensions (handled in the posmCreate mapping below).
+    for (const l of lines) {
+      const pt = typeById.get(l.posmTypeId);
+      if (!pt || pt.measurement === 'UNIT') continue; // UNIT → no dimension rule / cap
+      const d = l.dimensions;
+      if (
+        !d ||
+        typeof d.width !== 'number' ||
+        typeof d.height !== 'number' ||
+        !Number.isFinite(d.width) ||
+        !Number.isFinite(d.height) ||
+        d.width <= 0 ||
+        d.height <= 0 ||
+        !d.unit
+      ) {
+        throw new BadRequestException('Width and height are required for this element.');
+      }
+      // Max-area cap: skip on resubmit (dims are locked from the original recce — mirror the GSB gate),
+      // and compare in sq ft after normalising the recorded unit so a cm/mm entry can't bypass the cap.
+      if (!opts.isResubmit && pt.maxAreaSqFt != null) {
+        const factor = AREA_UNIT_TO_FT[d.unit.trim().toLowerCase()];
+        if (factor == null) {
+          throw new BadRequestException(`Unsupported dimension unit "${d.unit}" for this element.`);
+        }
+        const areaSqFt = d.width * factor * (d.height * factor);
+        if (areaSqFt > pt.maxAreaSqFt) {
+          throw new BadRequestException(
+            `Element exceeds the maximum size (${pt.maxAreaSqFt} sq ft) for this element type.`,
+          );
+        }
+      }
     }
 
     // Media keys must belong to THIS tenant's media folder (key-ownership guard), AND no two POSM
@@ -646,14 +705,18 @@ export class RecceService {
         geoFenceOk: agg.geoFenceOk,
         capturedAt,
       },
-      posmCreate: lines.map((l, i) => ({
-        slotNo: i + 1,
-        posmTypeId: l.posmTypeId,
-        dimensions: this.dimensionsJson(l.dimensions),
-        photo: this.photoJson(l.photo),
-        markup: l.markup ? (toJson(l.markup) as Prisma.InputJsonValue) : Prisma.JsonNull,
-        qualityFlags: qualityFlags[i],
-      })),
+      posmCreate: lines.map((l, i) => {
+        // UNIT element → store JSON null (no dimensions); DIMENSION → store the entered {width,height,unit}.
+        const isUnit = typeById.get(l.posmTypeId)?.measurement === 'UNIT';
+        return {
+          slotNo: i + 1,
+          posmTypeId: l.posmTypeId,
+          dimensions: isUnit ? Prisma.JsonNull : this.dimensionsJson(l.dimensions!),
+          photo: this.photoJson(l.photo),
+          markup: l.markup ? (toJson(l.markup) as Prisma.InputJsonValue) : Prisma.JsonNull,
+          qualityFlags: qualityFlags[i],
+        };
+      }),
       hashes,
     };
   }
@@ -751,7 +814,9 @@ export class RecceService {
     const unique = [...new Set(ids)];
     const found = await this.prisma.posmType.findMany({
       where: { clientId, id: { in: unique } },
-      select: { id: true, code: true, isActive: true },
+      // isGsb / measurement / maxAreaSqFt drive the element-type config enforced in prepare():
+      // the GSB gate, the DIMENSION-vs-UNIT dimension rule, and the max-area cap.
+      select: { id: true, code: true, isActive: true, isGsb: true, measurement: true, maxAreaSqFt: true },
     });
     const byId = new Map(found.map((p) => [p.id, p]));
     for (const id of unique) {

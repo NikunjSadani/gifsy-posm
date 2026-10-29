@@ -8,6 +8,7 @@ import {
   pathToSvgPoints,
   normAspectFor,
   defaultElementBox,
+  squareElementBox,
   moveElementBox,
   resizeElementBox,
   ELEMENT_BOX_MIN_W,
@@ -156,6 +157,22 @@ describe('markup — Element aspect-box helpers', () => {
     // Fits within half of each dimension and stays fully in-frame.
     expect(r.x + r.w).toBeLessThanOrEqual(1);
     expect(r.y + r.h).toBeLessThanOrEqual(1);
+  });
+
+  it('squareElementBox renders a visually SQUARE box (1:1 on-screen), centered, in-frame', () => {
+    // Square on a non-square image: the box must still READ square on screen.
+    const r = squareElementBox(400, 300);
+    expect(onScreenAspect(r, 400, 300)).toBeCloseTo(1, 6);
+    expect(r.x + r.w).toBeLessThanOrEqual(1);
+    expect(r.y + r.h).toBeLessThanOrEqual(1);
+    // Centered.
+    expect(r.x).toBeCloseTo((1 - r.w) / 2, 6);
+    expect(r.y).toBeCloseTo((1 - r.h) / 2, 6);
+  });
+
+  it('squareElementBox is exactly defaultElementBox with aspect 1', () => {
+    expect(squareElementBox(200, 200)).toEqual(defaultElementBox(1, 200, 200));
+    expect(squareElementBox(400, 300)).toEqual(defaultElementBox(1, 400, 300));
   });
 
   it('moveElementBox translates and clamps the box fully in-frame (size preserved)', () => {

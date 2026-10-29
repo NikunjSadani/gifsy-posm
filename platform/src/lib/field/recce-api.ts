@@ -216,7 +216,8 @@ export function fetchRejectedRecceForSite(siteId: string) {
  */
 export interface ReccePosmBody {
   posmTypeId: string;
-  dimensions: { width: number; height: number; unit: string };
+  /** W×H (feet) for a DIMENSION element; null for a UNIT element (no dimensions). */
+  dimensions: { width: number; height: number; unit: string } | null;
   photo: { key: string; geo: CapturedReccePosm['photo']['geo'] };
   markup: RecceMarkup;
 }

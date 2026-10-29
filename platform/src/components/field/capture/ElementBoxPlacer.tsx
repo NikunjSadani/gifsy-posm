@@ -24,6 +24,7 @@ import {
   buildMarkup,
   clamp01,
   defaultElementBox,
+  squareElementBox,
   moveElementBox,
   resizeElementBox,
   normAspectFor,
@@ -35,9 +36,18 @@ import { useFocusTrap } from '@/components/audit/use-focus-trap';
 
 interface ElementBoxPlacerProps {
   imageUrl: string;
-  /** Real-world element width & height (feet) — fix the box's locked aspect + the on-box label. */
-  width: number;
-  height: number;
+  /**
+   * Real-world element width & height (feet) — fix the box's locked aspect + the on-box label.
+   * Ignored in {@link square} mode (UNIT elements carry no dimensions).
+   */
+  width?: number;
+  height?: number;
+  /**
+   * UNIT mode: the box is a SQUARE (1:1 on-screen), aspect-locked to square (movable + resizable,
+   * always staying square), with NO real-world W×H label — the element has no footprint dimensions.
+   * When false/undefined the box is shaped from `width`×`height` (DIMENSION mode).
+   */
+  square?: boolean;
   initial?: RecceMarkup | null;
   onSave: (markup: RecceMarkup | null) => void;
   onCancel: () => void;
@@ -49,7 +59,7 @@ function firstRect(m: RecceMarkup | null | undefined): MarkupRect | null {
   return s && s.type === 'rect' ? s : null;
 }
 
-export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onCancel }: ElementBoxPlacerProps) {
+export function ElementBoxPlacer({ imageUrl, width, height, square, initial, onSave, onCancel }: ElementBoxPlacerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -58,7 +68,11 @@ export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onC
   // Active drag: move the whole box, or resize via the corner grip. null = idle.
   const drag = useRef<{ mode: 'move' | 'resize'; last: { x: number; y: number } } | null>(null);
 
-  const realAspect = height > 0 ? width / height : 1;
+  // UNIT → a 1:1 locked-square box; DIMENSION → the element's real-world width:height.
+  const realAspect = square ? 1 : height != null && height > 0 && width != null ? width / height : 1;
+  // The seed shape: a square for UNIT, else the W×H-aspect footprint box.
+  const seedBox = (imgW: number, imgH: number) =>
+    square ? squareElementBox(imgW, imgH) : defaultElementBox(realAspect, imgW, imgH);
   useFocusTrap(true, containerRef);
 
   /** Displayed image size (px) + its left/top — the mapping frame for pointer ↔ normalised. */
@@ -79,12 +93,12 @@ export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onC
   const onImgLoad = () => {
     const b = imgBox();
     if (!b) return;
-    setRect((prev) => prev ?? firstRect(initial) ?? defaultElementBox(realAspect, b.width, b.height));
+    setRect((prev) => prev ?? firstRect(initial) ?? seedBox(b.width, b.height));
   };
 
   const reset = () => {
     const b = imgBox();
-    if (b) setRect(defaultElementBox(realAspect, b.width, b.height));
+    if (b) setRect(seedBox(b.width, b.height));
   };
 
   const onPointerDown = (e: ReactPointerEvent) => {
@@ -142,7 +156,8 @@ export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onC
     }
   };
 
-  const dimLabel = `${width} × ${height} ft`;
+  // DIMENSION: the real-world footprint label. UNIT: no dimensions, so no W×H label.
+  const dimLabel = square || width == null || height == null ? null : `${width} × ${height} ft`;
 
   return (
     <div
@@ -202,10 +217,13 @@ export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onC
                   touchAction: 'none',
                 }}
               >
-                {/* Real-world dimension label — honest: this is the element's footprint shape. */}
-                <span className="absolute -top-6 left-0 whitespace-nowrap rounded bg-[var(--brand-primary)] px-1.5 py-0.5 text-[11px] font-bold text-white shadow">
-                  {dimLabel}
-                </span>
+                {/* Real-world dimension label — honest: this is the element's footprint shape.
+                    UNIT elements have no dimensions, so the label is omitted. */}
+                {dimLabel && (
+                  <span className="absolute -top-6 left-0 whitespace-nowrap rounded bg-[var(--brand-primary)] px-1.5 py-0.5 text-[11px] font-bold text-white shadow">
+                    {dimLabel}
+                  </span>
+                )}
                 {/* Corner resize grip (aspect-locked). Oversized hit area for touch. */}
                 <span
                   data-grip="1"
@@ -222,9 +240,18 @@ export function ElementBoxPlacer({ imageUrl, width, height, initial, onSave, onC
 
       {/* Status / honesty note */}
       <div className="min-h-[2.25rem] px-4 text-center text-xs text-white/70">
-        Drag the box to where the <span className="font-semibold text-white/90">{dimLabel}</span> Element
-        will go, and drag the corner to size it. The box keeps the element&apos;s shape — it marks the
-        spot, it isn&apos;t a to-scale measurement.
+        {dimLabel ? (
+          <>
+            Drag the box to where the <span className="font-semibold text-white/90">{dimLabel}</span> Element
+            will go, and drag the corner to size it. The box keeps the element&apos;s shape — it marks the
+            spot, it isn&apos;t a to-scale measurement.
+          </>
+        ) : (
+          <>
+            Drag the box to where the Element will go, and drag the corner to size it. The box marks the
+            spot — it isn&apos;t a to-scale measurement.
+          </>
+        )}
       </div>
 
       {/* Controls */}

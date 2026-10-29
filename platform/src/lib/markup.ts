@@ -198,6 +198,17 @@ export function defaultElementBox(
 }
 
 /**
+ * A centered, visually SQUARE (1:1 on-screen) default Element box, normalised 0..1 to the image
+ * content box. Used for UNIT elements, which carry no real-world W×H — the box still marks WHERE
+ * the element goes, but as a square rather than a footprint-shaped rectangle. Expressed via
+ * {@link defaultElementBox} with `realAspect = 1`, so the image's own pixel aspect is folded in
+ * (a 1:1 box reads square on a non-square photo).
+ */
+export function squareElementBox(imgW: number, imgH: number, fit: number = ELEMENT_BOX_DEFAULT_FIT): MarkupRect {
+  return defaultElementBox(1, imgW, imgH, fit);
+}
+
+/**
  * Translate an Element box by (dx,dy) in normalised space, clamped so it stays fully in-frame
  * (size preserved). Used for drag-to-move.
  */

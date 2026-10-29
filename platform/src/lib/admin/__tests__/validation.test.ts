@@ -54,6 +54,27 @@ describe('validatePosmType', () => {
     expect(e.width).toBeDefined();
     expect(e.height).toBeDefined();
   });
+  it('accepts a positive maxAreaSqFt', () => {
+    expect(isValid(validatePosmType({ code: 'GB', name: 'Glow', maxAreaSqFt: '50' }))).toBe(true);
+  });
+  it('rejects a non-positive or non-numeric maxAreaSqFt', () => {
+    expect(validatePosmType({ code: 'GB', name: 'Glow', maxAreaSqFt: '0' }).maxAreaSqFt).toBeDefined();
+    expect(validatePosmType({ code: 'GB', name: 'Glow', maxAreaSqFt: '-5' }).maxAreaSqFt).toBeDefined();
+    expect(validatePosmType({ code: 'GB', name: 'Glow', maxAreaSqFt: 'abc' }).maxAreaSqFt).toBeDefined();
+  });
+  it('ignores dimensions + maxAreaSqFt for a UNIT element (no size)', () => {
+    // Even a would-be-invalid dim set / cap is ignored once measurement is UNIT.
+    const e = validatePosmType({
+      code: 'GB',
+      name: 'Glow',
+      measurement: 'UNIT',
+      width: '0',
+      height: '',
+      unit: '',
+      maxAreaSqFt: '-1',
+    });
+    expect(isValid(e)).toBe(true);
+  });
 });
 
 describe('validateUser (email login + role ↔ vendor invariant)', () => {

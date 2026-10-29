@@ -49,6 +49,12 @@ interface PosmTypeApi {
   code: string;
   name: string;
   isActive: boolean;
+  /** Authoritative GSB flag (gated per-outlet). */
+  isGsb: boolean;
+  /** DIMENSION → capture W×H; UNIT → no dimensions + a square box. */
+  measurement: 'DIMENSION' | 'UNIT';
+  /** Footprint cap (sq ft) for a DIMENSION element; null = uncapped. */
+  maxAreaSqFt: number | null;
 }
 
 const EMPTY_STATE: PosmCaptureState = { started: false, line: null };
@@ -112,7 +118,20 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       const res = await api.get<PosmTypeApi[]>('/api/posm-types');
       if (!alive) return;
       if (res.success) {
-        setPosmTypes(res.data.filter((t) => t.isActive).map((t) => ({ id: t.id, code: t.code, name: t.name })));
+        setPosmTypes(
+          res.data
+            .filter((t) => t.isActive)
+            .map((t) => ({
+              id: t.id,
+              code: t.code,
+              name: t.name,
+              // Default transitional/absent fields so an older backend payload can't mis-gate or
+              // mis-measure a line (the live backend returns all three).
+              isGsb: t.isGsb ?? false,
+              measurement: t.measurement ?? 'DIMENSION',
+              maxAreaSqFt: t.maxAreaSqFt ?? null,
+            })),
+        );
         setTypesError(null);
       } else {
         setTypesError(

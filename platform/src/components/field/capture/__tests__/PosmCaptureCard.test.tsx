@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { PosmCaptureCard, type PosmTypeOption } from '../PosmCaptureCard';
+import { PosmCaptureCard, type PosmTypeOption, type PosmCaptureState } from '../PosmCaptureCard';
 
 // ── Child-component + IO mocks ───────────────────────────────────────────────
 // The real CameraCapture (getUserMedia) and ElementBoxPlacer (pointer/canvas) are not
@@ -27,8 +27,19 @@ vi.mock('../CameraCapture', () => ({
 }));
 
 vi.mock('../ElementBoxPlacer', () => ({
-  ElementBoxPlacer: ({ onSave }: { onSave: (m: unknown) => void }) => (
-    <div data-testid="box-placer">
+  ElementBoxPlacer: ({
+    onSave,
+    square,
+    width,
+    height,
+  }: {
+    onSave: (m: unknown) => void;
+    square?: boolean;
+    width?: number;
+    height?: number;
+  }) => (
+    // Expose the mode the card passed down so tests can assert UNIT → square box vs DIMENSION → W×H box.
+    <div data-testid="box-placer" data-square={square ? 'true' : 'false'} data-dims={`${width}x${height}`}>
       <button
         type="button"
         onClick={() => onSave({ version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.1, w: 0.3, h: 0.3 }] })}
@@ -77,9 +88,21 @@ afterAll(() => {
 afterEach(cleanup);
 
 const TYPES: PosmTypeOption[] = [
-  { id: 'poster', code: 'PST', name: 'Poster' },
-  { id: 'gsb', code: 'GSB', name: 'Glow Sign Board' },
+  { id: 'poster', code: 'PST', name: 'Poster', isGsb: false, measurement: 'DIMENSION', maxAreaSqFt: null },
+  { id: 'gsb', code: 'GSB', name: 'Glow Sign Board', isGsb: true, measurement: 'DIMENSION', maxAreaSqFt: null },
+  { id: 'sticker', code: 'STK', name: 'Counter Unit', isGsb: false, measurement: 'UNIT', maxAreaSqFt: null },
+  { id: 'capped', code: 'CAP', name: 'Capped Board', isGsb: false, measurement: 'DIMENSION', maxAreaSqFt: 10 },
 ];
+
+/** The latest reported state (onChange fires on every readiness change). */
+function latest(onChange: ReturnType<typeof vi.fn>): PosmCaptureState {
+  return onChange.mock.calls[onChange.mock.calls.length - 1][0] as PosmCaptureState;
+}
+/** The most recent reported state whose line is ready (non-null), or undefined. */
+function lastReadyLine(onChange: ReturnType<typeof vi.fn>) {
+  const states = onChange.mock.calls.map((c) => c[0] as PosmCaptureState);
+  return [...states].reverse().find((s) => s.line)?.line;
+}
 
 describe('PosmCaptureCard — create (editable) mode', () => {
   it('renders an interactive Element-type select and editable dimension inputs', () => {
@@ -206,5 +229,86 @@ describe('PosmCaptureCard — single photo image once a box is placed', () => {
       expect(screen.getByTestId('camera-capture')).toBeInTheDocument();
     });
     expect(screen.queryByAltText('Captured photo with the Element box')).toBeNull();
+  });
+});
+
+describe('PosmCaptureCard — measurement: UNIT vs DIMENSION', () => {
+  it('UNIT element hides the W×H input, uses a SQUARE box, and reports null dimensions', async () => {
+    const onChange = vi.fn();
+    render(<PosmCaptureCard slot={1} posmTypes={TYPES} onChange={onChange} />);
+
+    // Pick the UNIT element → the Dimension (in Ft.) input disappears entirely.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'sticker' } });
+    expect(screen.queryByPlaceholderText('Width')).toBeNull();
+    expect(screen.queryByPlaceholderText('Height')).toBeNull();
+    expect(screen.queryByText('Dimension (in Ft.)')).toBeNull();
+
+    // Take a photo; the box affordance appears and is enabled WITHOUT any dimensions (UNIT).
+    fireEvent.click(screen.getByText('mock-take-photo'));
+    const placeBtn = await screen.findByText('Place Element box');
+    expect(placeBtn.closest('button')).not.toBeDisabled();
+
+    // The placer is told to draw a SQUARE box (not a W×H-seeded one).
+    fireEvent.click(placeBtn);
+    expect(screen.getByTestId('box-placer')).toHaveAttribute('data-square', 'true');
+    fireEvent.click(screen.getByText('mock-save-box'));
+
+    // The ready line carries null dimensions (UNIT elements send no W×H).
+    await waitFor(() => {
+      const line = lastReadyLine(onChange);
+      expect(line).toBeTruthy();
+      expect(line!.dimensions).toBeNull();
+      expect(line!.posmTypeId).toBe('sticker');
+    });
+  });
+
+  it('DIMENSION element keeps the W×H inputs and seeds the box from them (and gates the box on valid dims)', async () => {
+    render(<PosmCaptureCard slot={1} posmTypes={TYPES} onChange={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'poster' } });
+    expect(screen.getByPlaceholderText('Width')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Height')).toBeInTheDocument();
+
+    // Photo taken but no dims yet → the box cannot be placed.
+    fireEvent.click(screen.getByText('mock-take-photo'));
+    const placeBtn = await screen.findByText('Place Element box');
+    expect(placeBtn.closest('button')).toBeDisabled();
+
+    // Enter dims → the box enables and is seeded as a DIMENSION (non-square) box.
+    fireEvent.change(screen.getByPlaceholderText('Width'), { target: { value: '4' } });
+    fireEvent.change(screen.getByPlaceholderText('Height'), { target: { value: '2' } });
+    await waitFor(() => expect(placeBtn.closest('button')).not.toBeDisabled());
+    fireEvent.click(placeBtn);
+    const placer = screen.getByTestId('box-placer');
+    expect(placer).toHaveAttribute('data-square', 'false');
+    expect(placer).toHaveAttribute('data-dims', '4x2');
+  });
+
+  it('over-max W×H shows an inline error and BLOCKS the line until dims are within the cap', async () => {
+    const onChange = vi.fn();
+    render(<PosmCaptureCard slot={1} posmTypes={TYPES} onChange={onChange} />);
+
+    // Capped element: maxAreaSqFt = 10. 4 × 4 = 16 sq ft → over the cap.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'capped' } });
+    fireEvent.change(screen.getByPlaceholderText('Width'), { target: { value: '4' } });
+    fireEvent.change(screen.getByPlaceholderText('Height'), { target: { value: '4' } });
+
+    const err = await screen.findByTestId('posm-overmax-1');
+    expect(err).toHaveTextContent('10 sq ft');
+
+    // Even with a photo + placed box, the line stays blocked while over the cap.
+    fireEvent.click(screen.getByText('mock-take-photo'));
+    fireEvent.click(await screen.findByText('Place Element box'));
+    fireEvent.click(screen.getByText('mock-save-box'));
+    await waitFor(() => expect(latest(onChange).line).toBeNull());
+
+    // Reduce to within the cap (4 × 2 = 8 ≤ 10) → the error clears and the line becomes ready.
+    fireEvent.change(screen.getByPlaceholderText('Height'), { target: { value: '2' } });
+    await waitFor(() => {
+      expect(screen.queryByTestId('posm-overmax-1')).toBeNull();
+      const line = lastReadyLine(onChange);
+      expect(line).toBeTruthy();
+      expect(line!.dimensions).toEqual({ width: 4, height: 2, unit: 'ft' });
+    });
   });
 });

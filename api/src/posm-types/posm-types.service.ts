@@ -70,15 +70,23 @@ export class PosmTypesService {
     }
     const clientId = user.clientId; // writes pin to the caller's tenant
     this.assertOwnImageKey(dto.imageKey, clientId);
+    // A UNIT element has no size: force maxAreaSqFt + defaultDimensions null regardless of input.
+    const measurement = dto.measurement ?? 'DIMENSION';
+    const isUnit = measurement === 'UNIT';
     try {
       const posmType = await this.prisma.posmType.create({
         data: {
           clientId,
           code: dto.code,
           name: dto.name,
-          ...(dto.defaultDimensions !== undefined
-            ? { defaultDimensions: toJson(dto.defaultDimensions) }
-            : {}),
+          isGsb: dto.isGsb ?? false,
+          measurement,
+          maxAreaSqFt: isUnit ? null : (dto.maxAreaSqFt ?? null),
+          ...(isUnit
+            ? { defaultDimensions: Prisma.DbNull }
+            : dto.defaultDimensions !== undefined
+              ? { defaultDimensions: toJson(dto.defaultDimensions) }
+              : {}),
           // Empty string clears the image; a non-empty key sets it.
           ...(dto.imageKey !== undefined ? { imageKey: dto.imageKey || null } : {}),
         },
@@ -93,15 +101,27 @@ export class PosmTypesService {
   async update(user: JwtPayload, id: string, dto: UpdatePosmTypeDto) {
     const existing = await this.findScopedOrThrow(user, id);
     this.assertOwnImageKey(dto.imageKey, existing.clientId);
+    // The measurement in effect AFTER this update (explicit value wins, else the stored one). A UNIT
+    // element — whether this update made it one or it already was — forces maxAreaSqFt + defaultDimensions
+    // null (a unit element has no size/cap), overriding any size/cap in the same payload.
+    const nextMeasurement = dto.measurement ?? existing.measurement;
+    const isUnit = nextMeasurement === 'UNIT';
     try {
       const posmType = await this.prisma.posmType.update({
         where: { id: existing.id },
         data: {
           ...(dto.code !== undefined ? { code: dto.code } : {}),
           ...(dto.name !== undefined ? { name: dto.name } : {}),
-          ...(dto.defaultDimensions !== undefined
-            ? { defaultDimensions: toJson(dto.defaultDimensions) }
-            : {}),
+          ...(dto.isGsb !== undefined ? { isGsb: dto.isGsb } : {}),
+          ...(dto.measurement !== undefined ? { measurement: dto.measurement } : {}),
+          ...(isUnit
+            ? { maxAreaSqFt: null, defaultDimensions: Prisma.DbNull }
+            : {
+                ...(dto.maxAreaSqFt !== undefined ? { maxAreaSqFt: dto.maxAreaSqFt } : {}),
+                ...(dto.defaultDimensions !== undefined
+                  ? { defaultDimensions: toJson(dto.defaultDimensions) }
+                  : {}),
+              }),
           // Empty string clears the image; a non-empty key sets it.
           ...(dto.imageKey !== undefined ? { imageKey: dto.imageKey || null } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),

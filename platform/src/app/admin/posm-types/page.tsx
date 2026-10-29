@@ -10,18 +10,29 @@ import toast from 'react-hot-toast';
 import { Plus, Pencil, Ban, RotateCcw, Search, ImagePlus, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { DataTable, type Column } from '@/components/admin/data-table';
 import { FormDialog } from '@/components/admin/form-dialog';
 import { ConfirmDialog } from '@/components/admin/confirm-dialog';
 import { StatusBadge } from '@/components/admin/status-badge';
 import { posmTypesApi, type PosmTypeCreate, type PosmTypeUpdate } from '@/lib/admin/api';
-import type { PosmType } from '@/lib/admin/types';
+import type { PosmType, PosmDimensions, PosmMeasurement } from '@/lib/admin/types';
 import { validatePosmType, isValid, type FieldErrors } from '@/lib/admin/validation';
 import { uploadMedia, mediaViewUrl } from '@/lib/field/media-upload';
 
 type Editing = { mode: 'create' } | { mode: 'edit'; posmType: PosmType } | null;
 
-const emptyForm = { code: '', name: '', width: '', height: '', unit: '', imageKey: '' };
+const emptyForm = {
+  code: '',
+  name: '',
+  width: '',
+  height: '',
+  unit: '',
+  imageKey: '',
+  isGsb: false,
+  measurement: 'DIMENSION' as PosmMeasurement,
+  maxAreaSqFt: '',
+};
 
 export default function PosmTypesPage() {
   const [items, setItems] = useState<PosmType[]>([]);
@@ -77,6 +88,9 @@ export default function PosmTypesPage() {
       height: p.defaultDimensions?.height != null ? String(p.defaultDimensions.height) : '',
       unit: p.defaultDimensions?.unit ?? '',
       imageKey: p.imageKey ?? '',
+      isGsb: p.isGsb ?? false,
+      measurement: p.measurement ?? 'DIMENSION',
+      maxAreaSqFt: p.maxAreaSqFt != null ? String(p.maxAreaSqFt) : '',
     });
     setFieldErrors({});
     setFormError(null);
@@ -100,23 +114,35 @@ export default function PosmTypesPage() {
     setFieldErrors(errs);
     if (!isValid(errs)) return;
 
-    const hasDims = form.width.trim() !== '' && form.height.trim() !== '' && form.unit.trim() !== '';
-    const dims = hasDims
+    // A UNIT element has no size: dimensions and the max-size cap are always null, regardless of
+    // any stale values the form may still hold. For DIMENSION, collect what was entered.
+    const isDimension = form.measurement === 'DIMENSION';
+    const hasDims =
+      isDimension && form.width.trim() !== '' && form.height.trim() !== '' && form.unit.trim() !== '';
+    const dims: PosmDimensions | null = hasDims
       ? { width: Number(form.width), height: Number(form.height), unit: form.unit.trim() }
-      : undefined;
+      : null;
+    const maxAreaSqFt: number | null =
+      isDimension && form.maxAreaSqFt.trim() !== '' ? Number(form.maxAreaSqFt) : null;
 
-    const base = { code: form.code.trim(), name: form.name.trim() };
+    const base = {
+      code: form.code.trim(),
+      name: form.name.trim(),
+      isGsb: form.isGsb,
+      measurement: form.measurement,
+      // Always send both explicitly so switching to UNIT (or clearing dims) persists as null.
+      defaultDimensions: dims,
+      maxAreaSqFt,
+    };
     setSaving(true);
     setFormError(null);
     let res;
     if (editing?.mode === 'edit') {
       // Always send imageKey so clearing an existing image ('' → null) persists.
       const body: PosmTypeUpdate = { ...base, imageKey: form.imageKey };
-      if (dims) body.defaultDimensions = dims;
       res = await posmTypesApi.update(editing.posmType.id, body);
     } else {
       const body: PosmTypeCreate = { ...base };
-      if (dims) body.defaultDimensions = dims;
       if (form.imageKey) body.imageKey = form.imageKey;
       res = await posmTypesApi.create(body);
     }
@@ -176,8 +202,38 @@ export default function PosmTypesPage() {
         ),
     },
     { key: 'code', header: 'Code', render: (p) => <span className="font-mono text-gray-900">{p.code}</span> },
-    { key: 'name', header: 'Name', render: (p) => <span className="font-medium text-gray-900">{p.name}</span> },
-    { key: 'dims', header: 'Default dimensions', render: (p) => <span className="text-gray-600">{dimsLabel(p)}</span> },
+    {
+      key: 'name',
+      header: 'Name',
+      render: (p) => (
+        <span className="flex items-center gap-1.5">
+          <span className="font-medium text-gray-900">{p.name}</span>
+          {p.isGsb && (
+            <span
+              className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-[var(--brand-primary)] bg-[var(--brand-primary-light)]"
+              title="GSB element — recce only where GSB is allowed"
+            >
+              GSB
+            </span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'dims',
+      header: 'Measurement',
+      render: (p) =>
+        p.measurement === 'UNIT' ? (
+          <span className="text-gray-600">Unit-based</span>
+        ) : (
+          <span className="text-gray-600">
+            {dimsLabel(p)}
+            {p.maxAreaSqFt != null && (
+              <span className="text-gray-400"> · max {p.maxAreaSqFt} sq ft</span>
+            )}
+          </span>
+        ),
+    },
     { key: 'status', header: 'Status', render: (p) => <StatusBadge active={p.isActive} /> },
     {
       key: 'actions',
@@ -267,37 +323,98 @@ export default function PosmTypesPage() {
           error={fieldErrors.name}
           maxLength={160}
         />
+
         <div>
-          <p className="text-sm font-medium text-gray-700 mb-1.5">Default dimensions <span className="font-normal text-gray-400">(optional)</span></p>
-          <div className="grid grid-cols-3 gap-2">
-            <Input
-              aria-label="Default width"
-              placeholder="Width"
-              type="number"
-              inputMode="decimal"
-              value={form.width}
-              onChange={(e) => setForm((f) => ({ ...f, width: e.target.value }))}
-              error={fieldErrors.width}
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.isGsb}
+              onChange={(e) => setForm((f) => ({ ...f, isGsb: e.target.checked }))}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--brand-primary)]"
+              aria-label="This is a GSB element"
             />
-            <Input
-              aria-label="Default height"
-              placeholder="Height"
-              type="number"
-              inputMode="decimal"
-              value={form.height}
-              onChange={(e) => setForm((f) => ({ ...f, height: e.target.value }))}
-              error={fieldErrors.height}
-            />
-            <Input
-              aria-label="Default dimension unit"
-              placeholder="Unit (e.g. cm)"
-              value={form.unit}
-              onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
-              error={fieldErrors.unit}
-              maxLength={16}
-            />
-          </div>
+            <span>
+              <span className="block text-sm font-medium text-gray-700">This is a GSB element</span>
+              <span className="block text-xs text-gray-500 mt-0.5">
+                GSB elements can be recced only at outlets where GSB is allowed.
+              </span>
+            </span>
+          </label>
         </div>
+
+        <Select
+          label="Measurement"
+          options={[
+            { value: 'DIMENSION', label: 'Dimension-based (sq ft)' },
+            { value: 'UNIT', label: 'Unit-based' },
+          ]}
+          value={form.measurement}
+          onValueChange={(v) => {
+            setForm((f) =>
+              v === 'UNIT'
+                ? // A unit element has no size — clear any dims + cap so stale values never persist.
+                  { ...f, measurement: 'UNIT', width: '', height: '', unit: '', maxAreaSqFt: '' }
+                : { ...f, measurement: 'DIMENSION' },
+            );
+            // Drop any size-field validation highlights — the inputs they point at are being
+            // cleared/hidden by the switch, so a lingering red border (and stale error key) would
+            // be wrong. Rebuild without the size keys so `isValid` isn't tripped by dead entries.
+            setFieldErrors((e) => {
+              const { width: _w, height: _h, unit: _u, maxAreaSqFt: _m, ...rest } = e;
+              void _w; void _h; void _u; void _m;
+              return rest;
+            });
+          }}
+        />
+        <p className="-mt-2 text-xs text-gray-500">
+          Dimension-based elements capture a width × height at recce; unit-based elements capture just a photo.
+        </p>
+
+        {form.measurement === 'DIMENSION' && (
+          <>
+            <Input
+              label="Max size (width × height, sq ft)"
+              placeholder="e.g. 50"
+              type="number"
+              inputMode="decimal"
+              value={form.maxAreaSqFt}
+              onChange={(e) => setForm((f) => ({ ...f, maxAreaSqFt: e.target.value }))}
+              error={fieldErrors.maxAreaSqFt}
+              helperText="Blocks a recce whose width × height exceeds this — leave blank for no limit."
+            />
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-1.5">Default dimensions <span className="font-normal text-gray-400">(optional)</span></p>
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  aria-label="Default width"
+                  placeholder="Width"
+                  type="number"
+                  inputMode="decimal"
+                  value={form.width}
+                  onChange={(e) => setForm((f) => ({ ...f, width: e.target.value }))}
+                  error={fieldErrors.width}
+                />
+                <Input
+                  aria-label="Default height"
+                  placeholder="Height"
+                  type="number"
+                  inputMode="decimal"
+                  value={form.height}
+                  onChange={(e) => setForm((f) => ({ ...f, height: e.target.value }))}
+                  error={fieldErrors.height}
+                />
+                <Input
+                  aria-label="Default dimension unit"
+                  placeholder="Unit (e.g. cm)"
+                  value={form.unit}
+                  onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
+                  error={fieldErrors.unit}
+                  maxLength={16}
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         <div>
           <p className="text-sm font-medium text-gray-700 mb-1.5">

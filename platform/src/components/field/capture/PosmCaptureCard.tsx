@@ -5,10 +5,17 @@
  * take a photo (native camera), auto-attach a GPS fix, and upload the photo to get its media
  * key. It manages the geo + upload lifecycle and reports its state upward via `onChange`.
  *
- * The assembled `line` is non-null ONLY when the line is fully ready: a POSM type is chosen,
- * width/height are positive numbers, and a photo has been uploaded WITH a geo fix attached —
- * exactly the shape one `posms[]` entry of the recce POST body needs
- * (`{ posmTypeId, dimensions:{width,height,unit}, photo:{key, geo} }`).
+ * The assembled `line` is non-null ONLY when the line is fully ready: a POSM type is chosen, the
+ * element's measurement is satisfied (a positive, within-cap W×H for a DIMENSION element; nothing
+ * to enter for a UNIT element), a photo has been uploaded WITH a geo fix, and the on-photo Element
+ * box has been placed — exactly the shape one `posms[]` entry of the recce POST body needs
+ * (`{ posmTypeId, dimensions:{width,height,unit}|null, photo:{key, geo}, markup }`).
+ *
+ * Measurement drives capture: a DIMENSION element asks for Width × Height (feet) and seeds a
+ * W×H-shaped Element box; a UNIT element hides the dimension input, sends `dimensions: null`, and
+ * seeds a SQUARE box. A DIMENSION element may also carry `maxAreaSqFt` — a footprint cap that
+ * blocks the line (with an inline error) when width × height exceeds it (the backend hard-rejects
+ * too; this is the live client guard).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -25,12 +32,28 @@ export interface PosmTypeOption {
   code: string;
   name: string;
   isActive?: boolean;
+  /**
+   * Whether this element is a GSB (gated per-outlet). Authoritative backend flag — replaces the
+   * old brittle `code === 'GSB'` match used by {@link gatePosmTypesByGsb}.
+   */
+  isGsb: boolean;
+  /**
+   * How the element is measured. DIMENSION → capture Width × Height (feet) + a W×H-shaped box;
+   * UNIT → no dimensions (sent as null) + a square box.
+   */
+  measurement: 'DIMENSION' | 'UNIT';
+  /**
+   * Maximum footprint area in square feet for a DIMENSION element; null = uncapped. When set, a
+   * captured width × height greater than this blocks the line.
+   */
+  maxAreaSqFt: number | null;
 }
 
 /** One fully-captured recce POSM line — matches a `posms[]` entry of the recce POST body. */
 export interface CapturedReccePosm {
   posmTypeId: string;
-  dimensions: { width: number; height: number; unit: string };
+  /** W×H in feet for a DIMENSION element; null for a UNIT element (no dimensions captured). */
+  dimensions: { width: number; height: number; unit: string } | null;
   photo: { key: string; geo: GeoFix };
   /** On-photo annotation marking WHERE the Element goes — REQUIRED (marking is compulsory). */
   markup: RecceMarkup;
@@ -131,6 +154,20 @@ export function PosmCaptureCard({
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
+  // If the selected element type changes after a box was placed, the box's shape contract
+  // (square for a UNIT element, W×H-aspect for a DIMENSION element) may no longer match the new
+  // element — drop the placed box so the user re-places a correctly-shaped one, instead of
+  // silently submitting a stale mismatched box. Skips the initial mount (incl. a resubmit prefill,
+  // where the type is seeded once and must not be wiped).
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    setMarkup(null);
+  }, [posmTypeId]);
+
   // Keep the latest onChange without retriggering the report effect on every parent render.
   const onChangeRef = useRef(onChange);
   useEffect(() => {
@@ -139,7 +176,25 @@ export function PosmCaptureCard({
 
   const w = Number(width);
   const h = Number(height);
-  const dimsValid = width !== '' && height !== '' && Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0;
+
+  // The selected element drives measurement + the max-size cap. Unknown (nothing selected, or a
+  // type gated out of this outlet's picker on resubmit) falls back to DIMENSION — today's behaviour.
+  const selectedType = posmTypes.find((t) => t.id === posmTypeId);
+  const measurement = selectedType?.measurement ?? 'DIMENSION';
+  const isUnit = measurement === 'UNIT';
+  const maxAreaSqFt = selectedType?.maxAreaSqFt ?? null;
+
+  // DIMENSION needs a positive W×H; UNIT captures no dimensions.
+  const dimsValid =
+    !isUnit && width !== '' && height !== '' && Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0;
+  // Footprint cap (DIMENSION, editable capture only — a locked resubmit keeps the already-accepted
+  // original dims). The backend hard-rejects too; this is the live client guard.
+  const overMax = !isUnit && !lockElementAndDims && dimsValid && maxAreaSqFt != null && w * h > maxAreaSqFt;
+  // The Element box (marking WHERE it goes) is always required. In DIMENSION mode it is shaped from
+  // the W×H so it needs valid dims first; in UNIT mode it is a square box that needs no dims.
+  const canPlaceBox = isUnit || dimsValid;
+  // Measurement is satisfied: UNIT (nothing to enter) OR a valid, within-cap W×H.
+  const dimsReady = isUnit ? true : dimsValid && !overMax;
   const started = posmTypeId !== '' || width !== '' || height !== '' || file !== null || uploaded !== null;
 
   // Human-readable label for the locked Element type (resubmit). Derived from the tenant's POSM
@@ -150,10 +205,10 @@ export function PosmCaptureCard({
 
   // Marking the photo is compulsory: a line is ready only once it also carries a markup (≥1 shape).
   const line: CapturedReccePosm | null =
-    posmTypeId && dimsValid && uploaded && markup && markup.shapes.length > 0
+    posmTypeId && dimsReady && uploaded && markup && markup.shapes.length > 0
       ? {
           posmTypeId,
-          dimensions: { width: w, height: h, unit },
+          dimensions: isUnit ? null : { width: w, height: h, unit },
           photo: { key: uploaded.key, geo: uploaded.geo },
           markup,
         }
@@ -163,7 +218,7 @@ export function PosmCaptureCard({
   useEffect(() => {
     onChangeRef.current({ started, line, error: error ?? undefined });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, error, uploaded?.key, posmTypeId, width, height, unit, markup]);
+  }, [started, error, uploaded?.key, posmTypeId, width, height, unit, markup, measurement, overMax]);
 
   /** Capture a fix and upload the photo. Called when a new photo file is taken. */
   const captureAndUpload = async (picked: File) => {
@@ -211,10 +266,11 @@ export function PosmCaptureCard({
   };
 
   // ── Element-box placement lifecycle ─────────────────────────────────────────
-  /** Open the aspect-box placer over an object-URL of the captured photo. Needs valid dimensions
-   *  (the box is shaped from them), so this is gated on `dimsValid` by its trigger below. */
+  /** Open the aspect-box placer over an object-URL of the captured photo. A DIMENSION element needs
+   *  valid dims first (the box is shaped from them); a UNIT element can place its square box with no
+   *  dims — both captured by `canPlaceBox`, which also gates the trigger below. */
   const openMarkup = () => {
-    if (!file || !dimsValid) return;
+    if (!file || !canPlaceBox) return;
     const url = URL.createObjectURL(file);
     setMarkupUrl(url);
     setMarkupOpen(true);
@@ -246,7 +302,7 @@ export function PosmCaptureCard({
     const typeName = posmTypes.find((t) => t.id === posmTypeId)?.name ?? null;
     const bits = [
       typeName ?? 'No Element type',
-      dimsValid ? `${w}×${h} ft` : null,
+      isUnit ? 'Unit' : dimsValid ? `${w}×${h} ft` : null,
       uploaded ? 'Photo ✓' : null,
       markup && markup.shapes.length > 0 ? 'Box placed' : null,
     ].filter(Boolean) as string[];
@@ -320,49 +376,71 @@ export function PosmCaptureCard({
         </select>
       )}
 
-      {/* Dimensions — captured in feet */}
-      <label className="mb-1.5 block text-xs font-medium text-gray-600">Dimension (in Ft.)</label>
-      {lockElementAndDims ? (
-        // Resubmit: dimensions are fixed to the original submission — read-only, legible.
-        <div className="mb-4 grid grid-cols-2 gap-2">
-          <div
-            data-testid={`posm-width-locked-${slot}`}
-            aria-label="Width (locked)"
-            className="flex items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
-          >
-            <span className="truncate">{width || '—'} ft</span>
-            <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
-          </div>
-          <div
-            data-testid={`posm-height-locked-${slot}`}
-            aria-label="Height (locked)"
-            className="flex items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
-          >
-            <span className="truncate">{height || '—'} ft</span>
-            <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
-          </div>
-        </div>
+      {/* Dimensions — captured in feet. HIDDEN entirely for a UNIT element (it has no dimensions;
+          the line sends `dimensions: null`). */}
+      {isUnit ? (
+        <p className="mb-4 rounded-xl bg-gray-50 px-3 py-2.5 text-xs text-gray-500">
+          This element is counted per unit — no dimensions to enter. Just place the box where it goes.
+        </p>
       ) : (
-        <div className="mb-4 grid grid-cols-2 gap-2">
-          <input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            value={width}
-            onChange={(e) => setWidth(e.target.value)}
-            placeholder="Width"
-            className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
-          />
-          <input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            value={height}
-            onChange={(e) => setHeight(e.target.value)}
-            placeholder="Height"
-            className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
-          />
-        </div>
+        <>
+          <label className="mb-1.5 block text-xs font-medium text-gray-600">Dimension (in Ft.)</label>
+          {lockElementAndDims ? (
+            // Resubmit: dimensions are fixed to the original submission — read-only, legible.
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <div
+                data-testid={`posm-width-locked-${slot}`}
+                aria-label="Width (locked)"
+                className="flex items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
+              >
+                <span className="truncate">{width || '—'} ft</span>
+                <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+              </div>
+              <div
+                data-testid={`posm-height-locked-${slot}`}
+                aria-label="Height (locked)"
+                className="flex items-center justify-between gap-2 rounded-xl border-2 border-gray-200 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-900"
+              >
+                <span className="truncate">{height || '—'} ft</span>
+                <Lock className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+              </div>
+            </div>
+          ) : (
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                value={width}
+                onChange={(e) => setWidth(e.target.value)}
+                placeholder="Width"
+                aria-invalid={overMax || undefined}
+                className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none aria-[invalid=true]:border-red-400"
+              />
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                value={height}
+                onChange={(e) => setHeight(e.target.value)}
+                placeholder="Height"
+                aria-invalid={overMax || undefined}
+                className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none aria-[invalid=true]:border-red-400"
+              />
+            </div>
+          )}
+          {/* Footprint cap — blocks the line (mirrors the backend hard-reject). */}
+          {overMax && maxAreaSqFt != null && (
+            <p
+              role="alert"
+              data-testid={`posm-overmax-${slot}`}
+              className="-mt-2 mb-4 flex items-start gap-1.5 text-xs font-medium text-red-600"
+            >
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>Exceeds the maximum size ({maxAreaSqFt} sq ft) for this element. Reduce the Width or Height.</span>
+            </p>
+          )}
+        </>
       )}
 
       {/* Photo */}
@@ -491,14 +569,14 @@ export function PosmCaptureCard({
               <button
                 type="button"
                 onClick={openMarkup}
-                disabled={!dimsValid}
+                disabled={!canPlaceBox}
                 className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[var(--brand-primary)] px-3 py-2 text-xs font-semibold text-[var(--brand-primary)] active:scale-95 transition-transform disabled:border-gray-200 disabled:text-gray-400"
               >
                 <PenSquare className="h-4 w-4" />
                 Place Element box
               </button>
               <p className="mt-1.5 text-xs text-[var(--brand-primary)]">
-                {dimsValid
+                {canPlaceBox
                   ? 'Required — position the box where the Element will go on the photo.'
                   : 'Enter the Width × Height above first — the box is shaped from them.'}
               </p>
@@ -512,6 +590,7 @@ export function PosmCaptureCard({
           imageUrl={markupUrl}
           width={w}
           height={h}
+          square={isUnit}
           initial={markup}
           onSave={saveMarkup}
           onCancel={closeMarkup}

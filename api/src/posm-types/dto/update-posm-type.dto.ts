@@ -3,11 +3,18 @@ import {
   IsNotEmpty,
   IsOptional,
   IsBoolean,
+  IsNumber,
+  IsPositive,
+  IsIn,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { DimensionsDto } from './create-posm-type.dto';
+import {
+  DimensionsDto,
+  ELEMENT_MEASUREMENTS,
+  ElementMeasurementDto,
+} from './create-posm-type.dto';
 
 /** Partial update of a PosmType. `clientId` can never change. */
 export class UpdatePosmTypeDto {
@@ -37,4 +44,20 @@ export class UpdatePosmTypeDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** GSB-gated element flag. See CreatePosmTypeDto.isGsb. */
+  @IsOptional()
+  @IsBoolean()
+  isGsb?: boolean;
+
+  /** Measurement mode (DIMENSION | UNIT). See CreatePosmTypeDto.measurement. */
+  @IsOptional()
+  @IsIn(ELEMENT_MEASUREMENTS)
+  measurement?: ElementMeasurementDto;
+
+  /** Max size cap (sq ft) for a DIMENSION element; > 0 or `null` to clear. See CreatePosmTypeDto.maxAreaSqFt. */
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  maxAreaSqFt?: number | null;
 }

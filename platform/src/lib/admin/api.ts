@@ -10,6 +10,7 @@ import type {
   Vendor,
   PosmType,
   PosmDimensions,
+  PosmMeasurement,
   AdminUser,
   ManagedRole,
   Site,
@@ -44,17 +45,29 @@ export const vendorsApi = {
 export interface PosmTypeCreate {
   code: string;
   name: string;
-  defaultDimensions?: PosmDimensions;
+  /** null (or omitted) = no default dimensions; a UNIT element always sends null. */
+  defaultDimensions?: PosmDimensions | null;
   /** Reference-photo media key (from /api/media/upload); '' clears it. */
   imageKey?: string;
+  /** GSB element (default false backend-side). */
+  isGsb?: boolean;
+  /** Dimension-based vs unit-based capture (default 'DIMENSION' backend-side). */
+  measurement?: PosmMeasurement;
+  /** Max size cap (sq ft) for DIMENSION elements; null = no limit / N/A for UNIT. */
+  maxAreaSqFt?: number | null;
 }
 export interface PosmTypeUpdate {
   code?: string;
   name?: string;
-  defaultDimensions?: PosmDimensions;
+  /** null clears the default dimensions; a UNIT element always sends null. */
+  defaultDimensions?: PosmDimensions | null;
   /** Reference-photo media key (from /api/media/upload); '' clears it. */
   imageKey?: string;
   isActive?: boolean;
+  isGsb?: boolean;
+  measurement?: PosmMeasurement;
+  /** Max size cap (sq ft) for DIMENSION elements; null = no limit / N/A for UNIT. */
+  maxAreaSqFt?: number | null;
 }
 
 export const posmTypesApi = {

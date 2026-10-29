@@ -275,6 +275,13 @@ describe('submit body carries markup', () => {
     expect(body.posms[0].markup).toEqual(markup);
   });
 
+  it('carries null dimensions through for a UNIT line (no W×H)', () => {
+    void submitRecce('site-1', [line({ dimensions: null })]);
+    const body = bodyOf();
+    expect(body.posms[0].dimensions).toBeNull();
+    expect(body.posms[0].markup).toEqual(markup);
+  });
+
   it("carries each line's own markup (resubmit)", () => {
     const other: RecceMarkup = { version: 1, shapes: [{ type: 'rect', x: 0.1, y: 0.1, w: 0.2, h: 0.2 }] };
     void resubmitRecce('recce-9', [line({ markup }), line({ markup: other })]);

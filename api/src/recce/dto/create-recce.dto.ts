@@ -115,9 +115,15 @@ export class ReccePosmLineDto {
   @IsNotEmpty()
   posmTypeId: string;
 
+  /**
+   * Physical W×H for a DIMENSION element — REQUIRED for one server-side (enforced in
+   * RecceService.prepare, which knows the element's measurement mode). OPTIONAL at the DTO level
+   * because a UNIT element carries no dimensions (they are ignored and stored as null).
+   */
+  @IsOptional()
   @ValidateNested()
   @Type(() => DimensionsDto)
-  dimensions: DimensionsDto;
+  dimensions?: DimensionsDto;
 
   @ValidateNested()
   @Type(() => PhotoDto)

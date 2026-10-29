@@ -240,14 +240,33 @@ model Site {
   @@map("sites")
 }
 
+/// How an element type is sized at recce:
+///   DIMENSION — captured with a physical width × height (the default, legacy behaviour).
+///   UNIT      — captured as a count/presence only; NO dimensions (element + photo). A UNIT
+///               element forces `maxAreaSqFt` and `defaultDimensions` to null (it has no size).
+enum ElementMeasurement {
+  DIMENSION
+  UNIT
+}
+
 model PosmType {
-  id                String  @id @default(cuid())
+  id                String             @id @default(cuid())
   clientId          String
   code              String
   name              String
   defaultDimensions Json? // {width,height,unit} template
   imageKey          String? // reference photo (posm-media/<clientId>/… key) for the field catalogue
-  isActive          Boolean @default(true)
+  isActive          Boolean            @default(true)
+  // Per-element-type configuration (element_type_config migration):
+  //   isGsb       — the GSB-gated element. A recce line of an isGsb=true type may be captured ONLY at
+  //                 a Site with gsbAllowed=true (replaces the former hardcoded code==='GSB' rule). The
+  //                 migration back-fills isGsb=true where upper(code)='GSB'.
+  //   measurement — DIMENSION (W×H, default) vs UNIT (no dimensions).
+  //   maxAreaSqFt — optional size cap for a DIMENSION element: the recce's width*height (sq ft) must be
+  //                 ≤ this. N/A to UNIT elements (forced null).
+  isGsb             Boolean            @default(false)
+  measurement       ElementMeasurement @default(DIMENSION)
+  maxAreaSqFt       Float?
 
   client     Client      @relation(fields: [clientId], references: [id])
   reccePosms ReccePosm[]

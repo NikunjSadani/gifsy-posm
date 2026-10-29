@@ -4,7 +4,7 @@
    Every function returns a field→message map; an empty map means "valid".
 ─────────────────────────────────────────────────────────────────────────────── */
 
-import { MANAGED_ROLES, isVendorRole, type ManagedRole } from './types';
+import { MANAGED_ROLES, isVendorRole, type ManagedRole, type PosmMeasurement } from './types';
 
 export type FieldErrors = Record<string, string>;
 
@@ -32,10 +32,14 @@ export function validateVendor(input: VendorInput): FieldErrors {
 export interface PosmTypeInput {
   code: string;
   name: string;
-  /** Optional dimensions — all three required together when any is supplied. */
+  /** Measurement mode — defaults to DIMENSION. UNIT elements carry no size, so dims + cap are ignored. */
+  measurement?: PosmMeasurement;
+  /** Optional dimensions — all three required together when any is supplied (DIMENSION only). */
   width?: string;
   height?: string;
   unit?: string;
+  /** Optional max-size cap (sq ft); when provided it must be a positive number (DIMENSION only). */
+  maxAreaSqFt?: string;
 }
 
 export function validatePosmType(input: PosmTypeInput): FieldErrors {
@@ -45,17 +49,28 @@ export function validatePosmType(input: PosmTypeInput): FieldErrors {
   if (isBlank(input.name)) errors.name = 'Name is required';
   else if (input.name.trim().length > 160) errors.name = 'Name must be at most 160 characters';
 
-  const anyDim = !isBlank(input.width) || !isBlank(input.height) || !isBlank(input.unit);
-  if (anyDim) {
-    const w = Number(input.width);
-    const h = Number(input.height);
-    if (isBlank(input.width) || !Number.isFinite(w) || w <= 0) {
-      errors.width = 'Width must be a positive number';
+  // Dimensions + max-size cap only apply to DIMENSION elements; a UNIT element has no size.
+  const measurement: PosmMeasurement = input.measurement ?? 'DIMENSION';
+  if (measurement === 'DIMENSION') {
+    const anyDim = !isBlank(input.width) || !isBlank(input.height) || !isBlank(input.unit);
+    if (anyDim) {
+      const w = Number(input.width);
+      const h = Number(input.height);
+      if (isBlank(input.width) || !Number.isFinite(w) || w <= 0) {
+        errors.width = 'Width must be a positive number';
+      }
+      if (isBlank(input.height) || !Number.isFinite(h) || h <= 0) {
+        errors.height = 'Height must be a positive number';
+      }
+      if (isBlank(input.unit)) errors.unit = 'Unit is required when dimensions are set';
     }
-    if (isBlank(input.height) || !Number.isFinite(h) || h <= 0) {
-      errors.height = 'Height must be a positive number';
+
+    if (!isBlank(input.maxAreaSqFt)) {
+      const m = Number(input.maxAreaSqFt);
+      if (!Number.isFinite(m) || m <= 0) {
+        errors.maxAreaSqFt = 'Max size must be a positive number';
+      }
     }
-    if (isBlank(input.unit)) errors.unit = 'Unit is required when dimensions are set';
   }
   return errors;
 }

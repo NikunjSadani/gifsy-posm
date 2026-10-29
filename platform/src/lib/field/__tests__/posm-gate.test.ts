@@ -1,33 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import {
-  GSB_POSM_CODE,
-  gatePosmTypesByGsb,
-  isGsbHiddenForOutlet,
-} from '@/lib/field/posm-gate';
+import { gatePosmTypesByGsb, isGsbHiddenForOutlet } from '@/lib/field/posm-gate';
 
-type Opt = { id: string; code: string; name: string };
+type Opt = { id: string; code: string; name: string; isGsb: boolean };
 
 const TYPES: Opt[] = [
-  { id: '1', code: 'GSB', name: 'Glow Sign Board' },
-  { id: '2', code: 'POSTER', name: 'Poster' },
-  { id: '3', code: 'SHELF', name: 'Shelf strip' },
+  { id: '1', code: 'GSB', name: 'Glow Sign Board', isGsb: true },
+  { id: '2', code: 'POSTER', name: 'Poster', isGsb: false },
+  { id: '3', code: 'SHELF', name: 'Shelf strip', isGsb: false },
 ];
 
-describe('gatePosmTypesByGsb — GSB filter by code', () => {
+describe('gatePosmTypesByGsb — GSB filter by the isGsb flag', () => {
   it('keeps every type when the outlet allows GSB', () => {
     expect(gatePosmTypesByGsb(TYPES, true)).toEqual(TYPES);
   });
 
-  it('removes ONLY the GSB type (matched by code) when the outlet disallows GSB', () => {
+  it('removes ONLY the GSB types (matched by isGsb) when the outlet disallows GSB', () => {
     const out = gatePosmTypesByGsb(TYPES, false);
     expect(out.map((t) => t.code)).toEqual(['POSTER', 'SHELF']);
-    expect(out.some((t) => t.code === GSB_POSM_CODE)).toBe(false);
+    expect(out.some((t) => t.isGsb)).toBe(false);
   });
 
-  it('matches the GSB code exactly — a different-cased code is NOT treated as GSB', () => {
-    const mixed: Opt[] = [{ id: '9', code: 'gsb', name: 'lower' }, ...TYPES.slice(1)];
-    // 'gsb' !== 'GSB' so it is not filtered (mirrors the backend `code === "GSB"`).
-    expect(gatePosmTypesByGsb(mixed, false).map((t) => t.code)).toEqual(['gsb', 'POSTER', 'SHELF']);
+  it('gates on the flag, NOT the code — a GSB-coded type with isGsb:false stays, and a non-GSB-coded type with isGsb:true is hidden', () => {
+    const mixed: Opt[] = [
+      { id: '9', code: 'GSB', name: 'Looks like GSB but is not flagged', isGsb: false },
+      { id: '10', code: 'NEON', name: 'Flagged GSB under a different code', isGsb: true },
+      TYPES[1], // POSTER
+    ];
+    expect(gatePosmTypesByGsb(mixed, false).map((t) => t.code)).toEqual(['GSB', 'POSTER']);
   });
 
   it('is a no-op on a list with no GSB type', () => {

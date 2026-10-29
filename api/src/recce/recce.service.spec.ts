@@ -372,8 +372,8 @@ describe('RecceService', () => {
     expect(tx.recce.update.mock.calls[0][0].data.status).toBe('SUBMITTED');
   });
 
-  it('resubmit BYPASSES the GSB gate: a locked GSB element re-captures even after the outlet flipped gsbAllowed=false', async () => {
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+  it('resubmit BYPASSES the GSB gate: a locked isGsb element re-captures even after the outlet flipped gsbAllowed=false', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
     // The outlet is now gsbAllowed=false — a FRESH GSB create would 400 — but the original recce was
@@ -767,10 +767,10 @@ describe('RecceService', () => {
   // ── GSB element-type gate (recce may include the GSB element only at a gsbAllowed outlet) ──
   const gsbLine = (geo: { lat: number; lng: number }) => ({ ...line(geo), posmTypeId: 'gsb1' });
 
-  it('GSB (app): a GSB element on a gsbAllowed=false outlet → 400, no write', async () => {
+  it('GSB (app): an isGsb element on a gsbAllowed=false outlet → 400, no write', async () => {
     mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
     mockPrisma.recce.findFirst.mockResolvedValue(null);
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] }),
@@ -778,10 +778,11 @@ describe('RecceService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('GSB (app): a lower-case "gsb" code is still gated (case-insensitive) on a gsbAllowed=false outlet → 400', async () => {
+  it('GSB (app): the flag, NOT the code, drives the gate — isGsb=true with a non-"GSB" code is still gated → 400', async () => {
     mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
     mockPrisma.recce.findFirst.mockResolvedValue(null);
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'gsb', isActive: true }]);
+    // code is "BOARD" (not "GSB") but isGsb=true → still gated. Proves the gate keys on the flag.
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'BOARD', isGsb: true, isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     await expect(
       service.create(vendorField, { siteId: 's1', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] }),
@@ -789,10 +790,36 @@ describe('RecceService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('GSB (app): a GSB element on a gsbAllowed=true outlet → OK (submits)', async () => {
+  it('GSB (app): a code "GSB" with isGsb=false is NOT gated (legacy code no longer implies GSB)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: false, isActive: true }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'gsb1', dimensions: { width: 2, height: 3, unit: 'ft' }, photo: { key: KEY }, markup: null, posmType: { id: 'gsb1', code: 'GSB', name: 'GSB' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+    const res = await service.create(vendorField, { siteId: 's1', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] });
+    expect(res.status).toBe('SUBMITTED');
+  });
+
+  it('GSB (app): an isGsb element on a gsbAllowed=true outlet → OK (submits)', async () => {
     mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: true });
     mockPrisma.recce.findFirst.mockResolvedValue(null);
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
 
@@ -821,7 +848,7 @@ describe('RecceService', () => {
   it('GSB (app): a NON-GSB element is always allowed, even on a gsbAllowed=false outlet', async () => {
     mockPrisma.site.findFirst.mockResolvedValue({ ...activeSite, gsbAllowed: false });
     mockPrisma.recce.findFirst.mockResolvedValue(null);
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'FSU', isActive: true }]);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'FSU', isGsb: false, isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
 
@@ -846,9 +873,9 @@ describe('RecceService', () => {
     expect(res.status).toBe('SUBMITTED');
   });
 
-  it('GSB (manual): a GSB element on a provisional walk-in (gsbAllowed=false by default) → 400, no write', async () => {
+  it('GSB (manual): an isGsb element on a provisional walk-in (gsbAllowed=false by default) → 400, no write', async () => {
     manualPrepMocks();
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true }]);
     // No outletId → provisional outlet (gsbAllowed false) → GSB blocked before the transaction.
     await expect(
       service.createManual(vendorField, { outletName: 'Walk-in Shop', posms: [gsbLine({ lat: 19.0761, lng: 72.8771 })] }),
@@ -856,9 +883,9 @@ describe('RecceService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('GSB (manual): a GSB element on an ATTACHED gsbAllowed=true outlet → OK (submits)', async () => {
+  it('GSB (manual): an isGsb element on an ATTACHED gsbAllowed=true outlet → OK (submits)', async () => {
     manualPrepMocks();
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isActive: true }]);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true }]);
     mockPrisma.site.findFirst.mockResolvedValue({ id: 'sExisting', lat: 19.076, lng: 72.877, status: 'ACTIVE', gsbAllowed: true });
     const tx = {
       site: { create: jest.fn() },
@@ -872,5 +899,160 @@ describe('RecceService', () => {
     expect(tx.recce.create).toHaveBeenCalled();
     // The attach lookup selected gsbAllowed so the gate can read it.
     expect(mockPrisma.site.findFirst.mock.calls[0][0].select).toMatchObject({ gsbAllowed: true });
+  });
+
+  // ── Measurement mode + max-area cap (per element type) ──────────────────────────
+  const dimLine = (w: number, h: number) => ({
+    posmTypeId: 'pt1',
+    dimensions: { width: w, height: h, unit: 'ft' },
+    photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771 } },
+    markup: { version: 1 as const, shapes: [{ type: 'rect' as const, x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] },
+  });
+
+  const happyTx = () => {
+    const createdRow = {
+      id: 'r1', status: 'SUBMITTED', version: 1,
+      captureLat: 19.076, captureLng: 72.877, captureAccuracy: null, distanceMeters: 0, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(),
+      rejectionReasonCode: null, rejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: null, photo: { key: KEY }, markup: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { create: jest.fn().mockResolvedValue(createdRow) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      reccePosm: { deleteMany: jest.fn() },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+    return tx;
+  };
+
+  it('AREA CAP: a DIMENSION element with W×H ≤ maxAreaSqFt → OK (submits)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 10 }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    const tx = happyTx();
+    // 2 × 5 = 10 sq ft, exactly at the cap → allowed (≤).
+    const res = await service.create(vendorField, { siteId: 's1', posms: [dimLine(2, 5)] as any });
+    expect(res.status).toBe('SUBMITTED');
+    expect(tx.recce.create).toHaveBeenCalled();
+  });
+
+  it('AREA CAP: a DIMENSION element with W×H > maxAreaSqFt → 400, no write', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 10 }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    // 3 × 4 = 12 > 10 → reject before any write.
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [dimLine(3, 4)] as any }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('DIMENSION element with NO dimensions → 400, no write (dimensions required)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: null }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    const noDims = { posmTypeId: 'pt1', photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771 } }, markup: { version: 1, shapes: [{ type: 'rect', x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] } };
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [noDims as any] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('UNIT element: dimensions NOT required and stored as JSON null (W×H ignored, no cap)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'UNIT', maxAreaSqFt: null }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    const tx = happyTx();
+    // A UNIT line carries NO dimensions.
+    const unitLine = { posmTypeId: 'pt1', photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771 } }, markup: { version: 1, shapes: [{ type: 'rect', x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] } };
+    const res = await service.create(vendorField, { siteId: 's1', posms: [unitLine as any] });
+    expect(res.status).toBe('SUBMITTED');
+    // The persisted ReccePosm row stores JSON null for a UNIT element's dimensions.
+    const written = tx.recce.create.mock.calls[0][0].data.posms.create[0];
+    expect(written.dimensions).toBe(Prisma.JsonNull);
+  });
+
+  // A DIMENSION line with a custom unit, for the unit-normalisation / unsupported-unit cases.
+  const dimLineU = (w: number, h: number, u: string) => ({
+    posmTypeId: 'pt1',
+    dimensions: { width: w, height: h, unit: u },
+    photo: { key: KEY, geo: { lat: 19.0761, lng: 72.8771 } },
+    markup: { version: 1 as const, shapes: [{ type: 'rect' as const, x: 0.2, y: 0.3, w: 0.4, h: 0.25 }] },
+  });
+
+  it('AREA CAP (unit-safe): 2×2 metres (~43 sq ft) is normalised to sq ft → exceeds a 10 sq ft cap → 400, no write', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 10 }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    // Without unit normalisation 2×2 = 4 would slip under a 10 sq ft cap; in metres it is ~43 sq ft.
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [dimLineU(2, 2, 'm')] as any }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('AREA CAP (unit-safe): an unsupported dimension unit when a cap is set → 400, no write', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 10 }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [dimLineU(1, 1, 'parsec')] as any }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('DIMENSION element: a zero/negative dimension → 400, no write (W×H must be positive)', async () => {
+    mockPrisma.site.findFirst.mockResolvedValue(activeSite);
+    mockPrisma.recce.findFirst.mockResolvedValue(null);
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: null }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    await expect(
+      service.create(vendorField, { siteId: 's1', posms: [dimLineU(0, 5, 'ft')] as any }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('resubmit BYPASSES the max-area cap: locked dims re-submit even after the cap was lowered below them', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 1 }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    // Original pt1 @ {2,3,ft} = 6 sq ft, accepted when the cap was higher; the cap is now 1 sq ft.
+    // A FRESH create of 6 sq ft would 400, but a resubmit of the LOCKED dims must not re-apply the
+    // cap (else permanent dead-end), mirroring the GSB-gate bypass.
+    mockPrisma.recce.findFirst.mockResolvedValue(
+      rejectedRecceWithPosms([{ posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } }]),
+    );
+    const updatedRow = {
+      id: 'r1', status: 'SUBMITTED', version: 3,
+      captureLat: null, captureLng: null, captureAccuracy: null, distanceMeters: null, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(), rejectionReasonCode: null, rejectionReason: null,
+      hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { update: jest.fn().mockResolvedValue(updatedRow) },
+      reccePosm: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+
+    const res = await service.resubmit(vendorField, 'r1', {
+      posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } } as any],
+    });
+    expect(res.status).toBe('SUBMITTED');
+    expect(tx.recce.update).toHaveBeenCalled();
   });
 });

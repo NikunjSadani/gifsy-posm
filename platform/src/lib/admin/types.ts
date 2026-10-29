@@ -46,6 +46,13 @@ export interface PosmDimensions {
   unit: string;
 }
 
+/**
+ * How an element is measured at recce:
+ *  - DIMENSION — capture a width × height (sq ft); may carry default dimensions + a max-size cap.
+ *  - UNIT      — capture just a photo (no size); has no dimensions or cap.
+ */
+export type PosmMeasurement = 'DIMENSION' | 'UNIT';
+
 export interface PosmType {
   id: string;
   clientId: string;
@@ -54,6 +61,12 @@ export interface PosmType {
   defaultDimensions?: PosmDimensions | null;
   /** Reference-photo media key for the field catalogue (view via /api/media/view?key=). */
   imageKey?: string | null;
+  /** GSB elements can be recced only at outlets where GSB is allowed (default false). */
+  isGsb: boolean;
+  /** Dimension-based (sq ft) vs unit-based capture (default 'DIMENSION'). */
+  measurement: PosmMeasurement;
+  /** Max width × height (sq ft) a recce may claim for a DIMENSION element; null = no limit. */
+  maxAreaSqFt: number | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

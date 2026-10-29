@@ -99,6 +99,66 @@ describe('PosmTypesService', () => {
     });
   });
 
+  describe('element-type config (isGsb / measurement / maxAreaSqFt)', () => {
+    it('create: persists isGsb, measurement=DIMENSION and a positive maxAreaSqFt', async () => {
+      mockPrisma.posmType.create.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'GSB', name: 'GSB', isActive: true });
+      await service.create(clientAdmin, { code: 'GSB', name: 'GSB', isGsb: true, measurement: 'DIMENSION', maxAreaSqFt: 12 } as any);
+      const data = mockPrisma.posmType.create.mock.calls[0][0].data;
+      expect(data.isGsb).toBe(true);
+      expect(data.measurement).toBe('DIMENSION');
+      expect(data.maxAreaSqFt).toBe(12);
+    });
+
+    it('create: defaults — isGsb=false, measurement=DIMENSION, maxAreaSqFt=null when omitted', async () => {
+      mockPrisma.posmType.create.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'STD', name: 'Std', isActive: true });
+      await service.create(clientAdmin, { code: 'STD', name: 'Std' });
+      const data = mockPrisma.posmType.create.mock.calls[0][0].data;
+      expect(data.isGsb).toBe(false);
+      expect(data.measurement).toBe('DIMENSION');
+      expect(data.maxAreaSqFt).toBeNull();
+    });
+
+    it('create: measurement=UNIT forces maxAreaSqFt=null AND defaultDimensions=DbNull (ignores supplied size)', async () => {
+      mockPrisma.posmType.create.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'UNT', name: 'Unit', isActive: true });
+      await service.create(clientAdmin, {
+        code: 'UNT', name: 'Unit', measurement: 'UNIT', maxAreaSqFt: 5, defaultDimensions: { width: 1, height: 2, unit: 'ft' },
+      } as any);
+      const data = mockPrisma.posmType.create.mock.calls[0][0].data;
+      expect(data.measurement).toBe('UNIT');
+      expect(data.maxAreaSqFt).toBeNull();
+      expect(data.defaultDimensions).toBe(Prisma.DbNull);
+    });
+
+    it('update: setting measurement=UNIT forces maxAreaSqFt=null + defaultDimensions=DbNull even with a cap in the same payload', async () => {
+      mockPrisma.posmType.findFirst.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true, measurement: 'DIMENSION', isGsb: false, maxAreaSqFt: 9 });
+      mockPrisma.posmType.update.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true });
+      await service.update(clientAdmin, 'p1', { measurement: 'UNIT', maxAreaSqFt: 7 } as any);
+      const data = mockPrisma.posmType.update.mock.calls[0][0].data;
+      expect(data.measurement).toBe('UNIT');
+      expect(data.maxAreaSqFt).toBeNull();
+      expect(data.defaultDimensions).toBe(Prisma.DbNull);
+    });
+
+    it('update: an already-UNIT element forces size/cap null even when measurement is not in the payload', async () => {
+      mockPrisma.posmType.findFirst.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true, measurement: 'UNIT', isGsb: false, maxAreaSqFt: null });
+      mockPrisma.posmType.update.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true });
+      await service.update(clientAdmin, 'p1', { maxAreaSqFt: 7 } as any);
+      const data = mockPrisma.posmType.update.mock.calls[0][0].data;
+      expect(data.maxAreaSqFt).toBeNull();
+      expect(data.defaultDimensions).toBe(Prisma.DbNull);
+    });
+
+    it('update: a DIMENSION element applies the provided maxAreaSqFt + isGsb', async () => {
+      mockPrisma.posmType.findFirst.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true, measurement: 'DIMENSION', isGsb: false, maxAreaSqFt: null });
+      mockPrisma.posmType.update.mockResolvedValue({ id: 'p1', clientId: 'kwality', code: 'X', name: 'X', isActive: true });
+      await service.update(clientAdmin, 'p1', { maxAreaSqFt: 15, isGsb: true } as any);
+      const data = mockPrisma.posmType.update.mock.calls[0][0].data;
+      expect(data.maxAreaSqFt).toBe(15);
+      expect(data.isGsb).toBe(true);
+      expect(data.measurement).toBeUndefined(); // not in payload → unchanged
+    });
+  });
+
   describe('by-id scoping', () => {
     it('404s an id outside the caller tenant, with the tenant filter applied', async () => {
       mockPrisma.posmType.findFirst.mockResolvedValue(null);
