@@ -183,12 +183,13 @@ export function SearchableMultiSelect({
       )}
 
       {open && (
-        <ul
-          role="listbox"
-          aria-multiselectable="true"
-          data-testid={`${testIdPrefix}-list`}
-          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-xl border border-gray-200 bg-white py-1 shadow-lg"
-        >
+        <div className="absolute z-50 mt-1 w-full rounded-xl border border-gray-200 bg-white shadow-lg">
+          <ul
+            role="listbox"
+            aria-multiselectable="true"
+            data-testid={`${testIdPrefix}-list`}
+            className="max-h-60 w-full overflow-auto py-1"
+          >
           {filtered.length === 0 ? (
             <li className="px-3 py-2 text-sm text-gray-400">No matches</li>
           ) : (
@@ -226,7 +227,19 @@ export function SearchableMultiSelect({
               );
             })
           )}
-        </ul>
+          </ul>
+          {/* Done — a clear, touch-friendly way to dismiss the multi-select (vs only click-outside / Esc). */}
+          <div className="border-t border-gray-100 p-2">
+            <button
+              type="button"
+              data-testid={`${testIdPrefix}-done`}
+              onClick={() => { setOpen(false); setQuery(''); inputRef.current?.blur(); }}
+              className="w-full rounded-lg bg-[var(--brand-primary)] px-3 py-2 text-sm font-semibold text-white hover:opacity-90 active:scale-[0.99] transition"
+            >
+              Done{values.length > 0 ? ` (${values.length})` : ''}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

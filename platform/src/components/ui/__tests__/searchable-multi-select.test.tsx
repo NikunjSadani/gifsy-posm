@@ -20,6 +20,14 @@ describe('SearchableMultiSelect', () => {
     expect(screen.queryByTestId('b-list')).not.toBeNull();
   });
 
+  it('closes the dropdown when the Done button is clicked', () => {
+    render(<SearchableMultiSelect values={['Beat A']} onChange={() => {}} options={options} testIdPrefix="b" />);
+    fireEvent.focus(screen.getByTestId('b-input'));
+    expect(screen.queryByTestId('b-list')).not.toBeNull(); // open
+    fireEvent.click(screen.getByTestId('b-done'));
+    expect(screen.queryByTestId('b-list')).toBeNull(); // closed via Done
+  });
+
   it('toggles an already-selected option OFF when clicked again', () => {
     const onChange = vi.fn();
     render(
