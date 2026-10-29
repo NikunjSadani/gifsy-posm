@@ -30,6 +30,17 @@ describe('ElementFunnel', () => {
     expect(within(ban).getByTestId('ef-BAN-pendingInstall')).toHaveTextContent('0');
   });
 
+  it('shows a Total row summing each stage column across element types', () => {
+    render(<ElementFunnel rows={rows} />);
+    expect(screen.getByText('Total')).toBeInTheDocument();
+    // GSB + BAN: recced 5+2, asm 4+1, ho 3+1, pending 2+0, installed 1+1.
+    expect(screen.getByTestId('ef-total-recced')).toHaveTextContent('7');
+    expect(screen.getByTestId('ef-total-asmApproved')).toHaveTextContent('5');
+    expect(screen.getByTestId('ef-total-hoApproved')).toHaveTextContent('4');
+    expect(screen.getByTestId('ef-total-pendingInstall')).toHaveTextContent('2');
+    expect(screen.getByTestId('ef-total-installed')).toHaveTextContent('2');
+  });
+
   it('shows the empty state when there are no element rows', () => {
     render(<ElementFunnel rows={[]} />);
     expect(screen.getByTestId('element-funnel-empty')).toBeInTheDocument();

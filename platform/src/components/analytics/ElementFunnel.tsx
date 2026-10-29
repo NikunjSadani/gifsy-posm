@@ -133,6 +133,25 @@ export function ElementFunnel({
                 </tr>
               ))}
             </tbody>
+            {/* Column totals across all element types (element-line counts, matching the caption). */}
+            <tfoot>
+              <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold text-gray-900">
+                <th
+                  scope="row"
+                  className="sticky left-0 z-10 bg-gray-50 px-4 py-3 text-left whitespace-nowrap"
+                >
+                  Total
+                </th>
+                {STAGE_COLUMNS.map((c) => {
+                  const sum = rows.reduce((acc, r) => acc + ((r[c.key] as number) || 0), 0);
+                  return (
+                    <td key={c.key} data-testid={`ef-total-${c.key}`} className="px-4 py-3 text-right tabular-nums">
+                      {sum.toLocaleString()}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
