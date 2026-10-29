@@ -72,6 +72,9 @@ const STATUS_META: Record<
   READY_TO_INSTALL: { label: 'Ready to install', icon: CheckCircle2, tint: 'text-emerald-600', dot: '#16a34a' },
   AWAITING_HO: { label: 'Awaiting HO approval', icon: ShieldCheck, tint: 'text-sky-600', dot: '#0284c7' },
   AWAITING_ASM: { label: 'Awaiting ASM approval', icon: Clock, tint: 'text-amber-600', dot: '#d97706' },
+  // Never rendered — a recce already submitted for installation is dropped from My Work by
+  // groupRecces (not in RECCE_GROUP_ORDER). Present only to satisfy the exhaustive Record type.
+  INSTALLED: { label: 'Submitted for installation', icon: CheckCircle2, tint: 'text-gray-500', dot: '#6b7280' },
 };
 
 export default function MyWorkPage() {

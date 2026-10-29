@@ -72,6 +72,10 @@ export interface RecceListRow {
   rejectionReasonCode: RejectReasonCode | null;
   /** HO's rejection reason — set only when HO sent the recce back (hoReviewStatus === 'REJECTED'). */
   hoRejectionReasonCode: RejectReasonCode | null;
+  /** The recce's installation status (SUBMITTED / AUDIT_APPROVED / AUDIT_REJECTED), or null when it
+   *  has never been installed. Non-null ⇒ the install job is done, so My Work drops it from
+   *  "Ready to install" (a second submit 409s — see classifyRecce). */
+  installStatus: string | null;
 }
 
 /** The `GET /v1/recce` envelope payload (already unwrapped by the api-client). */
@@ -295,7 +299,10 @@ export function submitManualRecce(input: ManualRecceInput) {
  *                       a SUBMITTED MANUAL recce (no ASM stage — straight to HO)
  *   AWAITING_ASM      ← status SUBMITTED on an APP recce                      — read-only
  */
-export type RecceGroupKey = 'NEEDS_RECAPTURE' | 'READY_TO_INSTALL' | 'AWAITING_HO' | 'AWAITING_ASM';
+// 'INSTALLED' is a terminal classification for a recce that already has an installation submitted.
+// It is intentionally NOT in RECCE_GROUP_ORDER, so groupRecces DROPS it from the My Work screen
+// (the rep's install job is done; a second submit would 409).
+export type RecceGroupKey = 'NEEDS_RECAPTURE' | 'READY_TO_INSTALL' | 'AWAITING_HO' | 'AWAITING_ASM' | 'INSTALLED';
 
 /**
  * Group order for the My Work list — action-priority first: re-capture needs the rep, then
@@ -315,6 +322,8 @@ export const RECCE_GROUP_LABELS: Record<RecceGroupKey, string> = {
   READY_TO_INSTALL: 'Ready to install',
   AWAITING_HO: 'Awaiting HO approval',
   AWAITING_ASM: 'Awaiting ASM approval',
+  // Never rendered (not in RECCE_GROUP_ORDER) — present only to satisfy the exhaustive Record type.
+  INSTALLED: 'Submitted for installation',
 };
 
 /** A non-empty group of recces sharing one work-group key. */
@@ -332,11 +341,16 @@ export interface RecceGroup {
  * recce (ASM or HO sent it back, APP or MANUAL alike) needs re-capture. Pure — unit-tested.
  */
 export function classifyRecce(
-  r: Pick<RecceListRow, 'status' | 'hoReviewStatus' | 'recceMode'>,
+  r: Pick<RecceListRow, 'status' | 'hoReviewStatus' | 'recceMode'> & { installStatus?: string | null },
 ): RecceGroupKey {
   if (r.status === 'REJECTED') return 'NEEDS_RECAPTURE';
   if (r.status === 'APPROVED') {
-    return r.hoReviewStatus === 'APPROVED' ? 'READY_TO_INSTALL' : 'AWAITING_HO';
+    if (r.hoReviewStatus === 'APPROVED') {
+      // Already submitted for installation → DONE for the rep (a second submit 409s). Classify it
+      // 'INSTALLED' so groupRecces drops it from My Work instead of offering "Start installation".
+      return r.installStatus ? 'INSTALLED' : 'READY_TO_INSTALL';
+    }
+    return 'AWAITING_HO';
   }
   // SUBMITTED: a manual recce has no ASM stage — it waits on Head-Office, not the ASM.
   return r.recceMode === 'MANUAL' ? 'AWAITING_HO' : 'AWAITING_ASM';

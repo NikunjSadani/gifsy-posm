@@ -44,6 +44,7 @@ function row(partial: Partial<RecceListRow> & Pick<RecceListRow, 'id' | 'status'
     receivedAt: '2026-01-01T00:00:00.000Z',
     rejectionReasonCode: null,
     hoRejectionReasonCode: null,
+    installStatus: null,
     ...partial,
   };
 }
@@ -74,6 +75,25 @@ describe('classifyRecce', () => {
   it('APPROVED but HO not yet approved → AWAITING_HO (PENDING or NONE)', () => {
     expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'PENDING', recceMode: 'APP' })).toBe('AWAITING_HO');
     expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'NONE', recceMode: 'APP' })).toBe('AWAITING_HO');
+  });
+
+  it('APPROVED+HO but ALREADY submitted for installation → INSTALLED (not Ready to install)', () => {
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED', recceMode: 'APP', installStatus: 'SUBMITTED' })).toBe('INSTALLED');
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED', recceMode: 'MANUAL', installStatus: 'AUDIT_APPROVED' })).toBe('INSTALLED');
+    // No installation yet → still ready to install.
+    expect(classifyRecce({ status: 'APPROVED', hoReviewStatus: 'APPROVED', recceMode: 'APP', installStatus: null })).toBe('READY_TO_INSTALL');
+  });
+});
+
+describe('groupRecces — drops recces already submitted for installation', () => {
+  it('an installed recce never appears in any My Work group', () => {
+    const groups = groupRecces([
+      row({ id: '1', status: 'APPROVED', hoReviewStatus: 'APPROVED', installStatus: null }), // ready
+      row({ id: '2', status: 'APPROVED', hoReviewStatus: 'APPROVED', installStatus: 'SUBMITTED' }), // done → dropped
+    ]);
+    const ids = groups.flatMap((g) => g.recces.map((r) => r.id));
+    expect(ids).toEqual(['1']); // only the not-yet-installed recce remains
+    expect(groups.some((g) => g.key === 'INSTALLED')).toBe(false); // no 'INSTALLED' section rendered
   });
 });
 

@@ -433,6 +433,10 @@ export class RecceService {
         include: {
           site: { select: { id: true, code: true, name: true, town: true } },
           posms: { orderBy: { slotNo: 'asc' }, select: { id: true, slotNo: true } },
+          // The recce's installation (to-one), if any — so the field My Work screen can DROP a recce
+          // that's already been submitted for installation instead of still offering "Start
+          // installation" (a second submit 409s; the rep only learns that after opening it).
+          installation: { select: { status: true } },
         },
       }),
       this.prisma.recce.count({ where }),
@@ -446,6 +450,10 @@ export class RecceService {
       recceMode: r.recceMode,
       // The HO review verdict the field app needs to gate installation + render the re-recce banner.
       hoReviewStatus: r.hoReviewStatus,
+      // The recce's installation status (SUBMITTED / AUDIT_APPROVED / AUDIT_REJECTED), or null when
+      // it has never been installed. A non-null value means the rep's install job is done — the My
+      // Work screen uses it to drop the recce from "Ready to install".
+      installStatus: r.installation?.status ?? null,
       version: r.version,
       site: r.site,
       posmCount: r.posms.length,
