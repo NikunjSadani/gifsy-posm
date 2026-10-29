@@ -628,8 +628,9 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
     expect(res.items[0]).toMatchObject({ id: 'r1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: 'r1', status: 'SUBMITTED', statusLabel: 'Submitted' });
-    // Execution-funnel badge from the recce's own status (no install context).
-    expect(res.items[0]).toMatchObject({ funnelStage: 'Recce submitted', funnelTone: 'pending' });
+    // Execution-funnel badge from the recce's own status (no install context) — a SUBMITTED recce
+    // is waiting on ASM approval next.
+    expect(res.items[0]).toMatchObject({ funnelStage: 'ASM approval pending', funnelTone: 'pending' });
     // MANUAL recce: listed (count matches tile) but recceId null (un-linkable).
     expect(res.items[1]).toMatchObject({ id: 'r2', recceId: null });
   });
@@ -870,8 +871,8 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
       elementSummary: 'Glow Sign Board, Banner',
       dimensions: '4 × 3 ft', // de-duped across the two same-sized elements
       statusLabel: 'HO approved', // APPROVED + hoReviewStatus APPROVED → terminal good
-      funnelStage: 'HO approved', // execution-funnel rung from this recce's own status
-      funnelTone: 'approved',
+      funnelStage: 'Installation pending', // HO-approved → the next action due is installation
+      funnelTone: 'pending',
     });
     // The enriched recce select pulls the vendor + element lines for the summary.
     expect(fns.recce.findMany.mock.calls[0][0].select).toMatchObject({

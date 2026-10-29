@@ -36,11 +36,12 @@ export interface DrilldownRecordItem {
   statusLabel: string | null;
   // ── Execution-funnel badge (analytics drill-down; see {@link funnelBadge}) ─────
   /**
-   * Clean label for the outlet's/record's position in the EXECUTION FUNNEL, using the same ladder
-   * as the report's Activity Status: Not started → Recce submitted → ASM approved → HO approved →
-   * Installed → Audited, plus the terminal Recce rejected / Install rejected rungs. Optional: the
-   * analytics drill-down populates it (+ {@link funnelTone}); the ASM approval funnel (already
-   * stage-segmented) omits both, so the FE renders this second badge only when present.
+   * Clean label for what the outlet/record is waiting on in the EXECUTION FUNNEL, worded as the
+   * NEXT ACTION due: Recce pending → ASM approval pending → HO approval pending → Installation
+   * pending → Audit pending → Audited, plus the terminal Recce rejected / Install rejected rungs
+   * (see {@link FUNNEL_BADGE}). Optional: the analytics drill-down populates it (+ {@link funnelTone});
+   * the ASM approval funnel (already stage-segmented) omits both, so the FE renders this second badge
+   * only when present.
    */
   funnelStage?: string;
   /** Tone for the funnel badge, matching the report's status-cell tones. */
@@ -134,13 +135,19 @@ export type FunnelStage =
 /** A funnel-badge tone — same vocabulary as the report's `StatusTone` (outlet-execution.helper). */
 export type FunnelTone = 'neutral' | 'pending' | 'approved' | 'rejected';
 
-/** Clean label + tone for one {@link FunnelStage}. Tones mirror the report's `activityStatusCell`. */
+/**
+ * Clean label + tone for one {@link FunnelStage}. The POSITIVE rungs read as the NEXT ACTION the
+ * outlet is waiting on (so the badge answers "what needs to happen next, until it is audited?"):
+ * Recce pending → ASM approval pending → HO approval pending → Installation pending → Audit pending
+ * → Audited (the only terminal "done"). The two failure rungs stay as explicit rejected states.
+ * Tones: neutral before any work, pending while an action is owed, approved only once Audited.
+ */
 const FUNNEL_BADGE: Record<FunnelStage, { funnelStage: string; funnelTone: FunnelTone }> = {
-  NOT_STARTED: { funnelStage: 'Not started', funnelTone: 'neutral' },
-  RECCE_SUBMITTED: { funnelStage: 'Recce submitted', funnelTone: 'pending' },
-  ASM_APPROVED: { funnelStage: 'ASM approved', funnelTone: 'pending' },
-  HO_APPROVED: { funnelStage: 'HO approved', funnelTone: 'approved' },
-  INSTALLED: { funnelStage: 'Installed', funnelTone: 'pending' },
+  NOT_STARTED: { funnelStage: 'Recce pending', funnelTone: 'neutral' },
+  RECCE_SUBMITTED: { funnelStage: 'ASM approval pending', funnelTone: 'pending' },
+  ASM_APPROVED: { funnelStage: 'HO approval pending', funnelTone: 'pending' },
+  HO_APPROVED: { funnelStage: 'Installation pending', funnelTone: 'pending' },
+  INSTALLED: { funnelStage: 'Audit pending', funnelTone: 'pending' },
   AUDITED: { funnelStage: 'Audited', funnelTone: 'approved' },
   RECCE_REJECTED: { funnelStage: 'Recce rejected', funnelTone: 'rejected' },
   INSTALL_REJECTED: { funnelStage: 'Install rejected', funnelTone: 'rejected' },

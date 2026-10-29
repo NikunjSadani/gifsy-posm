@@ -45,11 +45,12 @@ describe('drilldown-record — human lifecycle labels', () => {
 
 describe('drilldown-record — execution-funnel ladder', () => {
   it('funnelBadge: clean label + report-matching tone per rung', () => {
-    expect(funnelBadge('NOT_STARTED')).toEqual({ funnelStage: 'Not started', funnelTone: 'neutral' });
-    expect(funnelBadge('RECCE_SUBMITTED')).toEqual({ funnelStage: 'Recce submitted', funnelTone: 'pending' });
-    expect(funnelBadge('ASM_APPROVED')).toEqual({ funnelStage: 'ASM approved', funnelTone: 'pending' });
-    expect(funnelBadge('HO_APPROVED')).toEqual({ funnelStage: 'HO approved', funnelTone: 'approved' });
-    expect(funnelBadge('INSTALLED')).toEqual({ funnelStage: 'Installed', funnelTone: 'pending' });
+    // The positive rungs read as the NEXT action due; only Audited is a terminal "done".
+    expect(funnelBadge('NOT_STARTED')).toEqual({ funnelStage: 'Recce pending', funnelTone: 'neutral' });
+    expect(funnelBadge('RECCE_SUBMITTED')).toEqual({ funnelStage: 'ASM approval pending', funnelTone: 'pending' });
+    expect(funnelBadge('ASM_APPROVED')).toEqual({ funnelStage: 'HO approval pending', funnelTone: 'pending' });
+    expect(funnelBadge('HO_APPROVED')).toEqual({ funnelStage: 'Installation pending', funnelTone: 'pending' });
+    expect(funnelBadge('INSTALLED')).toEqual({ funnelStage: 'Audit pending', funnelTone: 'pending' });
     expect(funnelBadge('AUDITED')).toEqual({ funnelStage: 'Audited', funnelTone: 'approved' });
     expect(funnelBadge('RECCE_REJECTED')).toEqual({ funnelStage: 'Recce rejected', funnelTone: 'rejected' });
     expect(funnelBadge('INSTALL_REJECTED')).toEqual({ funnelStage: 'Install rejected', funnelTone: 'rejected' });
