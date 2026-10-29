@@ -222,15 +222,37 @@ export class SitesService {
       where.AND = andClauses;
     }
 
-    const [sites, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.site.findMany({
         where,
         orderBy: [{ createdAt: 'desc' }],
         skip,
         take: limit,
+        // On the "Recce to do" list, also flag which outlets are here because their APP recce was
+        // REJECTED (vs never recced) — the field screen marks those for re-capture. Only joined for
+        // that query (take:1, id-only) so other list callers are unaffected.
+        ...(q.pendingRecce
+          ? {
+              include: {
+                recces: {
+                  where: { recceMode: 'APP' as const, status: 'REJECTED' as const },
+                  select: { id: true },
+                  take: 1,
+                },
+              },
+            }
+          : {}),
       }),
       this.prisma.site.count({ where }),
     ]);
+    const sites = rows.map((r) => {
+      const rel = (r as { recces?: unknown[] }).recces;
+      const hasRejectedRecce = Array.isArray(rel) && rel.length > 0;
+      // Strip the relation used only to derive the flag; return a clean Site row + the flag.
+      const { recces: _recces, ...site } = r as typeof r & { recces?: unknown[] };
+      void _recces;
+      return { ...site, hasRejectedRecce };
+    });
     return { sites, total, page, limit };
   }
 

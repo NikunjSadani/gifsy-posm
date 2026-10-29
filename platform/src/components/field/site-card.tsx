@@ -24,22 +24,33 @@ export function SiteCard({
   noLocation?: boolean;
   onClick: () => void;
 }) {
+  // A rejected recce (needs re-capture) gets a red border + "Sent back" chip so it stands out from
+  // the never-recced outlets it sits beside in "Recce to do".
+  const rejected = site.hasRejectedRecce === true;
   return (
     <button
       onClick={onClick}
       className={cn(
-        'w-full text-left bg-white rounded-2xl border border-gray-100 shadow-sm p-4',
+        'w-full text-left bg-white rounded-2xl border shadow-sm p-4',
         'flex items-center gap-3 active:scale-[0.98] transition-transform',
-        'hover:border-gray-200',
+        rejected ? 'border-red-300 bg-red-50/40 hover:border-red-400' : 'border-gray-100 hover:border-gray-200',
       )}
     >
-      <div className="shrink-0 h-10 w-10 rounded-xl bg-[var(--brand-primary-light)] flex items-center justify-center">
-        <MapPin className="h-5 w-5 text-[var(--brand-primary)]" />
+      <div className={cn(
+        'shrink-0 h-10 w-10 rounded-xl flex items-center justify-center',
+        rejected ? 'bg-red-100' : 'bg-[var(--brand-primary-light)]',
+      )}>
+        <MapPin className={cn('h-5 w-5', rejected ? 'text-red-500' : 'text-[var(--brand-primary)]')} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono font-semibold text-gray-500 shrink-0">{site.code}</span>
           <StatusChip status={site.status} />
+          {rejected && (
+            <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+              Sent back
+            </span>
+          )}
         </div>
         <p className="text-sm font-semibold text-gray-900 truncate mt-0.5">{site.name}</p>
         <p className="text-xs text-gray-500 truncate">{site.town || 'No town'}</p>

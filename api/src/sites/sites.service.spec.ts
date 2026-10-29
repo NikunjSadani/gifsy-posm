@@ -188,6 +188,31 @@ describe('SitesService.list — role scoping', () => {
     expect(count.mock.calls[0][0].where.AND).toEqual([{ OR: pendingOr }]); // same filter on the total
   });
 
+  it('pendingRecce list flags hasRejectedRecce per outlet and strips the joined relation', async () => {
+    const { prisma, findMany } = makePrisma();
+    findMany.mockResolvedValueOnce([
+      { id: 's1', code: 'A', name: 'Rejected one', status: 'ACTIVE', recces: [{ id: 'r1' }] },
+      { id: 's2', code: 'B', name: 'Never recced', status: 'ACTIVE', recces: [] },
+    ]);
+    const svc = new SitesService(prisma);
+    const res = await svc.list(user({ role: 'VENDOR_FIELD', vendorId: 'v1', clientId: 'c1' }), { pendingRecce: true });
+    // The join is id-only, filtered to REJECTED app recces, and limited to one row.
+    expect(findMany.mock.calls[0][0].include).toEqual({
+      recces: { where: { recceMode: 'APP', status: 'REJECTED' }, select: { id: true }, take: 1 },
+    });
+    expect(res.sites[0]).toMatchObject({ id: 's1', hasRejectedRecce: true });
+    expect(res.sites[1]).toMatchObject({ id: 's2', hasRejectedRecce: false });
+    // The relation used only to derive the flag is not leaked in the payload.
+    expect((res.sites[0] as Record<string, unknown>).recces).toBeUndefined();
+  });
+
+  it('a non-pendingRecce list does not join recces (no include)', async () => {
+    const { prisma, findMany } = makePrisma();
+    const svc = new SitesService(prisma);
+    await svc.list(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
+    expect(findMany.mock.calls[0][0].include).toBeUndefined();
+  });
+
   it('beatNames + pendingRecce → BOTH OR groups AND-ed (the beat-OR is NOT clobbered)', async () => {
     const { prisma, findMany } = makePrisma();
     const svc = new SitesService(prisma);

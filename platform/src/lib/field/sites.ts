@@ -35,6 +35,11 @@ export interface Site {
   /** Whether the GSB element type may be captured at this outlet. Gates the recce element picker. */
   gsbAllowed: boolean;
   status: SiteStatus;
+  /**
+   * On the "Recce to do" list: true when this outlet is here because its APP recce was REJECTED
+   * (needs re-capture), vs an outlet that was never recced. Only set by the pendingRecce list.
+   */
+  hasRejectedRecce?: boolean;
 }
 
 /** The `GET /v1/sites` envelope payload (already unwrapped by the api-client). */
