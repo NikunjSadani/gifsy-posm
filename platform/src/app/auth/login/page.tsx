@@ -15,6 +15,7 @@ import toast from 'react-hot-toast';
 import { getRoleHome } from '@/lib/auth-client';
 import { loginAction } from '@/lib/field/login-action';
 import { CLIENT_ID } from '@/lib/field/config';
+import { InstallButton } from '@/components/pwa/install-button';
 
 function LoginInner() {
   const router = useRouter();
@@ -143,6 +144,10 @@ function LoginInner() {
           >
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
+
+          {/* PWA install shortcut — only renders when installable (Android/Chromium) or on iOS;
+              hidden when already installed or unsupported. */}
+          <InstallButton />
 
           <p className="text-center text-xs text-gray-400 mt-4">
             Forgot your password? Contact your administrator.
