@@ -8,7 +8,7 @@
  *
  * Controlled: the parent owns the `File` (`value` + `onChange`) — the assembled File is a JPEG
  * frame. Tapping the zone opens a FULL-SCREEN camera (better framing on a phone); an optional
- * `overlay` (e.g. <GhostOverlay/>) is layered over the live feed for before/after alignment.
+ * `overlay` can be layered over the live feed (e.g. a framing guide).
  *
  * Requirements + honest limits: getUserMedia needs a secure context (HTTPS, or localhost in dev)
  * and a granted camera permission. If the camera is unavailable or denied we show a clear error
@@ -26,7 +26,7 @@ interface CameraCaptureProps {
   value: File | null;
   /** Called with the captured JPEG file, or null when cleared/retaken. */
   onChange: (file: File | null) => void;
-  /** Optional overlay (e.g. <GhostOverlay/>) shown over the live feed for alignment. */
+  /** Optional overlay shown over the live feed (e.g. a framing guide). */
   overlay?: React.ReactNode;
   /** Disable capture (e.g. while uploading). */
   disabled?: boolean;
@@ -279,7 +279,7 @@ export function CameraCapture({
           </div>
 
           {/* Shutter bar — shutter centered, flip control to the right (kept out of the
-              top corners so it never collides with the ghost-guide toggle or Close). */}
+              top corners so it never collides with the Close control). */}
           {!error && (
             <div
               className="relative flex items-center justify-center bg-black py-5"
