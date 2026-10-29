@@ -6,16 +6,22 @@ import { StatusChip } from '@/components/field/status-chip';
 import { formatDistance, type Site } from '@/lib/field/sites';
 
 /**
- * A tappable site card — code, name, town, a status chip, and (on the Nearby tab) a distance.
- * `active:scale-[0.98]` gives the Kwality press feedback.
+ * A tappable site card — code, name, town, a status chip, and (when sorting by distance) a distance
+ * chip. `active:scale-[0.98]` gives the Kwality press feedback.
+ *
+ * Distance display: when `distanceMeters` is a number, a "1.2 km" chip renders. When `noLocation`
+ * is set (a device fix exists but this outlet has no geotag, so it can't be ranked), a muted "No
+ * location" tag renders instead — the rep sees why it sorted to the bottom.
  */
 export function SiteCard({
   site,
   distanceMeters,
+  noLocation = false,
   onClick,
 }: {
   site: Site;
   distanceMeters?: number | null;
+  noLocation?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -36,12 +42,13 @@ export function SiteCard({
           <StatusChip status={site.status} />
         </div>
         <p className="text-sm font-semibold text-gray-900 truncate mt-0.5">{site.name}</p>
-        <p className="text-xs text-gray-500 truncate">
-          {site.town || 'No town'}
-          {typeof distanceMeters === 'number' && (
-            <span className="text-[var(--brand-primary)] font-medium"> · {formatDistance(distanceMeters)}</span>
-          )}
-        </p>
+        <p className="text-xs text-gray-500 truncate">{site.town || 'No town'}</p>
+        {/* Distance on its OWN line (not sharing the truncated town line) so it is never clipped. */}
+        {typeof distanceMeters === 'number' ? (
+          <p className="text-xs font-medium text-[var(--brand-primary)]">{formatDistance(distanceMeters)}</p>
+        ) : (
+          noLocation && <p className="text-xs text-gray-400">No location</p>
+        )}
       </div>
       <ChevronRight className="h-5 w-5 text-gray-300 shrink-0" />
     </button>

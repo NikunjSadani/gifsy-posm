@@ -6,7 +6,7 @@ const { post, get } = vi.hoisted(() => ({
   post: vi.fn((_path: string, _body?: unknown) =>
     Promise.resolve({ success: true, data: { id: 'r1', status: 'SUBMITTED' } }),
   ),
-  get: vi.fn((_url: string) => Promise.resolve({ success: true, data: { recces: [] } })),
+  get: vi.fn((_url: string): Promise<unknown> => Promise.resolve({ success: true, data: { recces: [] } })),
 }));
 vi.mock('@/lib/api-client', () => ({ api: { post, get } }));
 
@@ -20,8 +20,10 @@ import {
   resubmitRecce,
   submitManualRecce,
   fetchMyRecces,
+  fetchAllMyRecces,
   fetchRejectedRecceForSite,
   RECCE_GROUP_ORDER,
+  RECCE_PAGE_SIZE,
   type RecceGroupKey,
   type RecceListRow,
 } from '@/lib/field/recce-api';
@@ -186,6 +188,35 @@ describe('fetchMyRecces — query building', () => {
   it('appends recceMode when set (manual recces fetched independent of RS/Beat)', () => {
     void fetchMyRecces({ recceMode: 'MANUAL' });
     expect(urlOf()).toContain('recceMode=MANUAL');
+  });
+});
+
+describe('fetchAllMyRecces — drains every page before the global sort', () => {
+  beforeEach(() => get.mockReset());
+
+  const rows = (n: number, prefix: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}` }));
+
+  it('pages through until the server runs out, merging all rows', async () => {
+    const total = RECCE_PAGE_SIZE + 3;
+    get.mockImplementation((url: string) => {
+      const page = Number(new URL(url, 'http://x').searchParams.get('page'));
+      const recces = page === 1 ? rows(RECCE_PAGE_SIZE, 'p1') : rows(3, 'p2');
+      return Promise.resolve({ success: true, data: { recces, total, page, limit: RECCE_PAGE_SIZE } });
+    });
+    const res = await fetchAllMyRecces({ rsCode: 'RS1' });
+    expect(get).toHaveBeenCalledTimes(2);
+    if (res.success) expect(res.data.recces).toHaveLength(total);
+  });
+
+  it('short-circuits to the error when a page fails', async () => {
+    get.mockResolvedValue({ success: false, error: 'nope', status: 403 });
+    const res = await fetchAllMyRecces({ recceMode: 'MANUAL' });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error).toBe('nope');
+      expect(res.status).toBe(403);
+    }
   });
 });
 

@@ -13,7 +13,7 @@
  * plus PURE helpers (unit-tested) the My Work + capture screens lean on.
  */
 
-import { api } from '@/lib/api-client';
+import { api, type ApiResponse } from '@/lib/api-client';
 import type { CapturedReccePosm } from '@/components/field/capture/PosmCaptureCard';
 import type { RecceMarkup } from '@/lib/markup';
 
@@ -133,6 +133,7 @@ export interface MyReccesFilters {
    * own manual submissions (including a rejected one they must re-capture) would never show.
    */
   recceMode?: RecceMode;
+  page?: number;
   limit?: number;
 }
 
@@ -144,11 +145,43 @@ export function fetchMyRecces(filters: MyReccesFilters = {}) {
   // Beats are optional + multi: each selected beat becomes a repeated `beatNames` param.
   for (const b of filters.beatNames ?? []) params.append('beatNames', b);
   if (filters.recceMode) params.set('recceMode', filters.recceMode);
+  if (filters.page) params.set('page', String(filters.page));
   // Match the sites screen's page size (backend max is 200) so a rep's work in a beat isn't
   // silently truncated at the default of 50.
-  params.set('limit', String(filters.limit ?? 200));
+  params.set('limit', String(filters.limit ?? RECCE_PAGE_SIZE));
   const qs = params.toString();
   return api.get<RecceListResult>(`/api/recce${qs ? `?${qs}` : ''}`);
+}
+
+/** Page size used when draining every matching recce (the backend list cap). */
+export const RECCE_PAGE_SIZE = 200;
+
+/**
+ * Fetch EVERY matching recce across pages, not just the first window. The installation screen
+ * sorts the rep's work globally (nearest-first by outlet distance), which is only correct over
+ * the FULL set — a single {@link RECCE_PAGE_SIZE} page would mis-rank a rep whose RS/Beat (or
+ * manual-recce) history exceeds the window. Drains page 1..n until the server runs out, then
+ * returns the merged list. Any page failure short-circuits to that error. (`page`/`limit` on the
+ * incoming filters are ignored — this owns pagination.)
+ */
+export async function fetchAllMyRecces(
+  filters: Omit<MyReccesFilters, 'page' | 'limit'> = {},
+): Promise<ApiResponse<{ recces: RecceListRow[]; total: number }>> {
+  const all: RecceListRow[] = [];
+  let page = 1;
+  for (let guard = 0; guard < 1000; guard += 1) {
+    const res = await fetchMyRecces({ ...filters, page, limit: RECCE_PAGE_SIZE });
+    if (!res.success) return res;
+    const batch = res.data.recces ?? [];
+    all.push(...batch);
+    // Exhausted = a short/empty page (reliable); don't stop on a possibly-under-reported `total`.
+    if (batch.length < RECCE_PAGE_SIZE) {
+      return { success: true, data: { recces: all, total: res.data.total ?? all.length } };
+    }
+    page += 1;
+  }
+  // Cap hit — surface an error rather than a silently-partial set reported as complete.
+  return { success: false, error: 'Too many records to load at once — narrow the filter and try again.' };
 }
 
 /** Fetch one recce with its POSM lines + rejection reason (by id, vendor+submitter scoped). */

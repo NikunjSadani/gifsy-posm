@@ -20,7 +20,7 @@
  * was already installed is caught honestly by the install screen (backend 409).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -37,8 +37,9 @@ import {
   Search,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
+import { SortToggle } from '@/components/field/sort-toggle';
 import {
-  fetchMyRecces,
+  fetchAllMyRecces,
   groupRecces,
   groupInstallableByOutlet,
   rejectionLabel,
@@ -47,6 +48,14 @@ import {
   type RecceGroupKey,
   type InstallableOutlet,
 } from '@/lib/field/recce-api';
+import {
+  fetchAllSites,
+  rankByDistance,
+  formatDistance,
+  type FieldSortMode,
+  type LatLng,
+} from '@/lib/field/sites';
+import { useGeo } from '@/lib/field/geo';
 import { getOutletFilter, beatSummary, type OutletFilter } from '@/lib/field/outlet-filter';
 
 // This screen handles the post-submit install pipeline PLUS the one re-capture case that has no other
@@ -71,9 +80,22 @@ export default function MyWorkPage() {
   // `undefined` = not yet read; `null` = read, none set (redirecting away); object = active.
   const [outlet, setOutlet] = useState<OutletFilter | null | undefined>(undefined);
   const [recces, setRecces] = useState<RecceListRow[] | null>(null);
+  // Outlet geotags (site.id → lat/lng). The recce list carries NO coordinates, so the device-
+  // distance sort joins against the sites list for the same RS/Beat. Manual outlets aren't in it
+  // (no RS/Beat) → they resolve to null → sorted to the end as "No location". Non-fatal if it fails.
+  const [coordsBySite, setCoordsBySite] = useState<Map<string, LatLng>>(new Map());
+  const loadGenRef = useRef(0); // load generation — ignore a stale coords fetch after a newer load
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+
+  // Sort-by-distance — the shared device-location hook (no second geolocation path), default Nearest.
+  const { coords, loading: geoLoading, capture } = useGeo();
+  const [sortMode, setSortMode] = useState<FieldSortMode>('nearest');
+
+  useEffect(() => {
+    void capture().catch(() => {});
+  }, [capture]);
 
   // Gate: a device with no outlet filter is sent to the filter screen before any work loads.
   useEffect(() => {
@@ -87,15 +109,17 @@ export default function MyWorkPage() {
   }, [router]);
 
   const load = useCallback(async (f: OutletFilter) => {
+    const gen = ++loadGenRef.current; // guards against a stale coords fetch landing after a newer load
     setLoading(true);
     setError(null);
-    // Two fetches: the APP recces for the chosen RS/Beat (the beat chip governs these), PLUS the
-    // exec's own MANUAL recces regardless of beat — a manual outlet has a null RS/Beat, so without
-    // this a manual submission (including a rejected one that must be re-captured from this screen,
-    // since manual outlets have no "Recce to do" home) would never show.
+    setCoordsBySite(new Map()); // clear stale coords; refilled best-effort below
+    // The work LIST needs only the recces — load + render those FIRST, don't block on the cosmetic
+    // outlet-geotag fetch. Two recce fetches (all pages): the APP recces for the chosen RS/Beat, plus
+    // the exec's own MANUAL recces regardless of beat (a manual outlet has a null RS/Beat, so without
+    // this a manual submission — incl. a rejected one that must be re-captured here — would never show).
     const [appRes, manualRes] = await Promise.all([
-      fetchMyRecces({ rsCode: f.rsCode, beatNames: f.beatNames }),
-      fetchMyRecces({ recceMode: 'MANUAL' }),
+      fetchAllMyRecces({ rsCode: f.rsCode, beatNames: f.beatNames }),
+      fetchAllMyRecces({ recceMode: 'MANUAL' }),
     ]);
     if (appRes.success) {
       // Merge + dedupe by id (a manual recce could in principle surface in both lists), then sort
@@ -116,6 +140,24 @@ export default function MyWorkPage() {
       setRecces(null);
     }
     setLoading(false);
+
+    // Outlet geotags for the distance sort — best-effort, AFTER the list renders (the recce list
+    // carries none). A failure/slowness leaves distances blank but never blocks the work list; a
+    // stale response from a superseded load is ignored via the generation guard.
+    if (appRes.success) {
+      const sitesRes = await fetchAllSites({ rsCode: f.rsCode, beatNames: f.beatNames });
+      if (gen === loadGenRef.current && sitesRes.success) {
+        const coordMap = new Map<string, LatLng>();
+        for (const s of sitesRes.data.sites) {
+          if (s.lat != null && s.lng != null) {
+            const lat = Number(s.lat);
+            const lng = Number(s.lng);
+            if (Number.isFinite(lat) && Number.isFinite(lng)) coordMap.set(s.id, { lat, lng });
+          }
+        }
+        setCoordsBySite(coordMap);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -137,6 +179,11 @@ export default function MyWorkPage() {
     : null;
   const groups: RecceGroup[] = forWork ? groupRecces(forWork) : [];
   const hasAnyWork = !!recces && recces.length > 0;
+
+  // Device fix for the distance sort; outlet coords come from the sites join (`coordsBySite`).
+  const fix: LatLng | null = coords ? { lat: coords.lat, lng: coords.lng } : null;
+  const hasFix = !!coords;
+  const coordsOfSite = (siteId: string): LatLng | null => coordsBySite.get(siteId) ?? null;
 
   // Until the device filter has been read (and while redirecting when none is set), show a
   // spinner rather than flashing empty work.
@@ -180,6 +227,18 @@ export default function MyWorkPage() {
             className="flex-1 text-sm text-gray-900 focus:outline-none bg-transparent"
           />
         </div>
+      )}
+
+      {/* Sort control — Nearest (device distance) / A–Z, applied WITHIN each status group below. */}
+      {!loading && !error && hasAnyWork && (
+        <SortToggle
+          mode={sortMode}
+          onChange={setSortMode}
+          hasFix={hasFix}
+          locating={geoLoading}
+          onRetryLocation={() => void capture().catch(() => {})}
+          className="mb-4"
+        />
       )}
 
       {loading && (
@@ -244,6 +303,14 @@ export default function MyWorkPage() {
             const installOutlets =
               group.key === 'READY_TO_INSTALL' ? groupInstallableByOutlet(group.recces) : null;
             const headerCount = installOutlets ? installOutlets.length : group.recces.length;
+            // Order WITHIN the group by the chosen sort (status grouping itself stays action-first).
+            // Outlets with no resolvable geotag sink to the end, tagged "No location".
+            const rankedOutlets = installOutlets
+              ? rankByDistance(installOutlets, fix, (o) => coordsOfSite(o.site.id), (o) => o.site.name, sortMode)
+              : null;
+            const rankedRecces = installOutlets
+              ? null
+              : rankByDistance(group.recces, fix, (r) => coordsOfSite(r.site.id), (r) => r.site.name, sortMode);
             return (
               <section key={group.key}>
                 <div className="mb-2 flex items-center gap-2">
@@ -254,12 +321,23 @@ export default function MyWorkPage() {
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {installOutlets
-                    ? installOutlets.map((outlet) => (
-                        <InstallOutletCard key={outlet.site.id} outlet={outlet} />
+                  {rankedOutlets
+                    ? rankedOutlets.map(({ item, distanceMeters }) => (
+                        <InstallOutletCard
+                          key={item.site.id}
+                          outlet={item}
+                          distanceMeters={distanceMeters}
+                          noLocation={hasFix && distanceMeters == null}
+                        />
                       ))
-                    : group.recces.map((recce) => (
-                        <RecceCard key={recce.id} recce={recce} groupKey={group.key} />
+                    : rankedRecces!.map(({ item, distanceMeters }) => (
+                        <RecceCard
+                          key={item.id}
+                          recce={item}
+                          groupKey={group.key}
+                          distanceMeters={distanceMeters}
+                          noLocation={hasFix && distanceMeters == null}
+                        />
                       ))}
                 </div>
               </section>
@@ -271,11 +349,39 @@ export default function MyWorkPage() {
   );
 }
 
+// A device-distance chip for the work cards: "1.2 km" when ranked, a muted "No location" when a
+// fix exists but the outlet has no geotag (so the rep sees why it sorted last), else nothing.
+function DistanceTag({
+  distanceMeters,
+  noLocation,
+}: {
+  distanceMeters?: number | null;
+  noLocation?: boolean;
+}) {
+  if (typeof distanceMeters === 'number') {
+    return (
+      <span className="font-medium text-[var(--brand-primary)]"> · {formatDistance(distanceMeters)}</span>
+    );
+  }
+  if (noLocation) return <span className="text-gray-400"> · No location</span>;
+  return null;
+}
+
 // ── One recce row with its group-specific action ──────────────────────────────
 // Reached by the read-only waiting states, the defensive install fallback, AND the MANUAL-rejected
 // 'Needs re-capture' case (its re-capture action is the only home a manual reject has — APP rejects
 // are filtered out before grouping and re-captured from "Recce to do" instead).
-function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: WorkGroupKey }) {
+function RecceCard({
+  recce,
+  groupKey,
+  distanceMeters,
+  noLocation,
+}: {
+  recce: RecceListRow;
+  groupKey: WorkGroupKey;
+  distanceMeters?: number | null;
+  noLocation?: boolean;
+}) {
   const key = groupKey;
   const meta = STATUS_META[key];
   const posmLabel = `${recce.posmCount} Element${recce.posmCount === 1 ? '' : 's'}`;
@@ -289,6 +395,7 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: WorkGro
             <span className="font-mono text-gray-400">{recce.site.code}</span>
             {recce.site.town && <span> · {recce.site.town}</span>}
             <span> · {posmLabel}</span>
+            <DistanceTag distanceMeters={distanceMeters} noLocation={noLocation} />
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-600">
@@ -355,7 +462,15 @@ function RecceCard({ recce, groupKey }: { recce: RecceListRow; groupKey: WorkGro
 // ── One installable OUTLET (ready-to-install, collapsed by outlet) ─────────────
 // An outlet with a single installable recce links straight to its capture screen (unchanged app
 // behaviour); an outlet with several recces (only possible for manual) opens the recce picker.
-function InstallOutletCard({ outlet }: { outlet: InstallableOutlet }) {
+function InstallOutletCard({
+  outlet,
+  distanceMeters,
+  noLocation,
+}: {
+  outlet: InstallableOutlet;
+  distanceMeters?: number | null;
+  noLocation?: boolean;
+}) {
   const { site, recces } = outlet;
   const many = recces.length > 1;
   const href = many
@@ -375,6 +490,7 @@ function InstallOutletCard({ outlet }: { outlet: InstallableOutlet }) {
             <span className="font-mono text-gray-400">{site.code}</span>
             {site.town && <span> · {site.town}</span>}
             <span> · {subtitle}</span>
+            <DistanceTag distanceMeters={distanceMeters} noLocation={noLocation} />
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-600">

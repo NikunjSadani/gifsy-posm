@@ -21,14 +21,19 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { SearchableMultiSelect } from '@/components/ui/searchable-multi-select';
 import { SiteCard } from '@/components/field/site-card';
 import { SiteSheet } from '@/components/field/site-sheet';
+import { SortToggle } from '@/components/field/sort-toggle';
 import {
-  fetchSites,
+  fetchAllSites,
   fetchRsCodes,
   fetchBeats,
+  rankByDistance,
+  siteCoords,
   type Site,
   type SiteFilters,
   type RsCodeOption,
+  type FieldSortMode,
 } from '@/lib/field/sites';
+import { useGeo } from '@/lib/field/geo';
 import { getOutletFilter, setOutletFilter, clearOutletFilter } from '@/lib/field/outlet-filter';
 
 const FIELD_CLASS =
@@ -54,6 +59,18 @@ export default function SitesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Site | null>(null);
+
+  // ── Sort-by-distance (reuses the shared useGeo device-location hook — no second geo path) ─────
+  const { coords, loading: geoLoading, capture } = useGeo();
+  // Default Nearest: with a fix the list ranks by proximity; with NO fix, nearest-mode leaves the
+  // list in its natural order (rankByDistance returns unrankable items untouched) — so the default
+  // is harmless until a fix arrives, and a hint invites the rep to enable location.
+  const [sortMode, setSortMode] = useState<FieldSortMode>('nearest');
+
+  // Ask for one device fix on mount; a denial/timeout just leaves `coords` null (hint shown).
+  useEffect(() => {
+    void capture().catch(() => {});
+  }, [capture]);
 
   // Load the vendor's RS codes (for the first dropdown), mirroring the old filter screen.
   const loadRsCodes = async () => {
@@ -165,7 +182,9 @@ export default function SitesPage() {
     setLoading(true);
     // Debounce so changing RS, toggling beats, or typing a name doesn't fire a request per change.
     const t = setTimeout(async () => {
-      const res = await fetchSites(filters);
+      // LOAD ALL matching outlets (every page), not just the first window — a global
+      // nearest-first sort is only correct over the FULL RS/Beat set.
+      const res = await fetchAllSites(filters);
       if (cancelled) return;
       if (res.success) {
         setSites(res.data.sites);
@@ -185,6 +204,21 @@ export default function SitesPage() {
     // filtersKey captures every filter value; filters is derived from the same state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtersKey]);
+
+  // Rank the FULL loaded set for display. Nearest-first by device distance (outlets with no
+  // geotag sink to the end, tagged "No location"), or A–Z — each card carries its distance chip.
+  const hasFix = !!coords;
+  const ranked = useMemo(
+    () =>
+      rankByDistance(
+        sites,
+        coords ? { lat: coords.lat, lng: coords.lng } : null,
+        (s) => siteCoords(s),
+        (s) => s.name,
+        sortMode,
+      ),
+    [sites, coords, sortMode],
+  );
 
   return (
     <div className="px-4 pt-4">
@@ -288,6 +322,18 @@ export default function SitesPage() {
                 </div>
               </div>
 
+              {/* Sort control — Nearest (device distance) / A–Z. Only meaningful once outlets exist. */}
+              {!loading && !error && sites.length > 0 && (
+                <SortToggle
+                  mode={sortMode}
+                  onChange={setSortMode}
+                  hasFix={hasFix}
+                  locating={geoLoading}
+                  onRetryLocation={() => void capture().catch(() => {})}
+                  className="mb-3"
+                />
+              )}
+
               {/* List states */}
               {loading ? (
                 <div className="flex justify-center py-16">
@@ -314,8 +360,14 @@ export default function SitesPage() {
                 </div>
               ) : (
                 <div className="space-y-2.5 pb-4">
-                  {sites.map((site) => (
-                    <SiteCard key={site.id} site={site} onClick={() => setSelected(site)} />
+                  {ranked.map(({ item, distanceMeters }) => (
+                    <SiteCard
+                      key={item.id}
+                      site={item}
+                      distanceMeters={distanceMeters}
+                      noLocation={hasFix && distanceMeters == null}
+                      onClick={() => setSelected(item)}
+                    />
                   ))}
                 </div>
               )}
