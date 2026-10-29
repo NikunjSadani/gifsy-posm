@@ -224,7 +224,7 @@ export function CameraCapture({
       )}
 
       {open && (
-        <div ref={cameraRef} tabIndex={-1} className="fixed inset-0 z-[70] flex flex-col bg-black outline-none" role="dialog" aria-modal="true" aria-label="Camera">
+        <div ref={cameraRef} tabIndex={-1} className="fixed inset-0 z-[70] flex flex-col bg-black outline-none touch-none" role="dialog" aria-modal="true" aria-label="Camera">
           {/* Live feed (or error) */}
           <div className="relative flex-1 overflow-hidden">
             <video
