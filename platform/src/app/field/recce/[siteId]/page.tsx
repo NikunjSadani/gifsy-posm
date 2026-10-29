@@ -97,6 +97,10 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
   const [gsbAllowed, setGsbAllowed] = useState<boolean | null>(null);
   const [gsbLoading, setGsbLoading] = useState(true);
 
+  // The outlet's name + code, for the header (mirrors the Installation screen). Captured from the
+  // same authoritative per-outlet fetch used for the GSB gate; falls back to the loaded recce's site.
+  const [site, setSite] = useState<{ name: string; code: string } | null>(null);
+
   // Recce context (create vs resubmit vs blocked) resolved on load.
   const [ctxLoading, setCtxLoading] = useState(true);
   const [mode, setMode] = useState<Mode>('create');
@@ -158,6 +162,7 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       const res = await fetchSite(siteId);
       if (!alive) return;
       setGsbAllowed(res.success ? res.data.gsbAllowed : true);
+      if (res.success) setSite({ name: res.data.name, code: res.data.code });
       setGsbLoading(false);
     })();
     return () => {
@@ -314,6 +319,10 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     return existing.rejectionReason?.trim() || rejectionLabel(existing.rejectionReasonCode);
   })();
 
+  // Outlet identity for the header: the authoritative per-outlet fetch, falling back to the loaded
+  // recce's site (resubmit/blocked) so the name + code show even if the site fetch briefly failed.
+  const outlet = site ?? (existing ? { name: existing.site.name, code: existing.site.code } : null);
+
   return (
     <div className="px-4 pt-4">
       <button
@@ -325,6 +334,11 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
       </button>
 
       <h1 className="text-lg font-bold text-gray-900">{mode === 'resubmit' ? 'Re-capture recce' : 'New recce'}</h1>
+      {outlet && (
+        <p className="mt-1 text-sm text-gray-500">
+          {outlet.name} <span className="font-mono text-gray-400">· {outlet.code}</span>
+        </p>
+      )}
       <p className="mt-1 text-sm text-gray-500">
         {mode === 'resubmit'
           ? 'Fix what the reviewer flagged, then re-submit this outlet’s recce.'
