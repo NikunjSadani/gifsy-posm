@@ -28,6 +28,9 @@ export default function NearbyPage() {
   const [selected, setSelected] = useState<Site | null>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [geoState, setGeoState] = useState<GeoState>('idle');
+  // Bumped on each successful fix so the map recentres on a fresh locate, but not on a plain
+  // re-render (e.g. selecting a pin), which would otherwise yank the map back.
+  const [fixNonce, setFixNonce] = useState(0);
 
   useEffect(() => {
     fetchSites({ limit: 200 }).then((res) => {
@@ -44,6 +47,7 @@ export default function NearbyPage() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setFixNonce((n) => n + 1);
         setGeoState('ok');
       },
       () => setGeoState('denied'),
@@ -61,7 +65,7 @@ export default function NearbyPage() {
 
   return (
     <div className="relative h-[calc(100vh_-_8rem)]">
-      <NearbyMap sites={sites} userLocation={userLocation} onSelect={setSelected} />
+      <NearbyMap sites={sites} userLocation={userLocation} onSelect={setSelected} selectedId={selected?.id ?? null} recenterKey={fixNonce} />
 
       {/* Recenter / locate control */}
       <button
@@ -90,7 +94,7 @@ export default function NearbyPage() {
       </div>
 
       {/* Legend */}
-      <div className="absolute left-4 bottom-4 z-[500] bg-white/95 backdrop-blur rounded-2xl shadow-lg border border-gray-100 px-3 py-2 flex items-center gap-3 text-[11px]">
+      <div className="absolute left-4 bottom-4 z-[500] max-w-[calc(100%-2rem)] bg-white/95 backdrop-blur rounded-2xl shadow-lg border border-gray-100 px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#16a34a' }} />
           Active
@@ -98,6 +102,10 @@ export default function NearbyPage() {
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#9ca3af' }} />
           Inactive
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#E3000F' }} />
+          Selected
         </span>
       </div>
 
