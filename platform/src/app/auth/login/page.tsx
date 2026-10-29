@@ -60,7 +60,7 @@ function LoginInner() {
       } catch {
         /* private-mode / storage-blocked: the guard still relies on the cookie + backend */
       }
-      toast.success('Signed in!');
+      toast.success('Signed in!', { duration: 1000 });
       router.replace(getRoleHome(result.user.role));
     } finally {
       // On success we navigate away; on failure this re-enables submit for another try.
