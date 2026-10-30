@@ -117,8 +117,8 @@ describe('PosmCaptureCard — create (editable) mode', () => {
   });
 });
 
-describe('PosmCaptureCard — resubmit (locked) mode', () => {
-  it('seeds and locks the Element type + dimensions (no editable controls), showing the values legibly', () => {
+describe('PosmCaptureCard — resubmit (pre-filled, editable) mode', () => {
+  it('pre-fills the Element type + dimensions from the original but leaves them EDITABLE', () => {
     render(
       <PosmCaptureCard
         slot={1}
@@ -127,37 +127,17 @@ describe('PosmCaptureCard — resubmit (locked) mode', () => {
         initialPosmTypeId="gsb"
         initialWidth={4}
         initialHeight={2.5}
-        lockElementAndDims
       />,
     );
 
-    // The element-type select and the dimension number inputs are GONE — replaced by read-only
-    // presentations the rep cannot change.
-    expect(screen.queryByRole('combobox')).toBeNull();
-    expect(screen.queryByPlaceholderText('Width')).toBeNull();
-    expect(screen.queryByPlaceholderText('Height')).toBeNull();
-
-    // The locked values are shown legibly (seeded from the original submission).
-    const type = screen.getByTestId('posm-type-locked-1');
-    expect(type).toHaveTextContent('Glow Sign Board (GSB)');
-    expect(screen.getByTestId('posm-width-locked-1')).toHaveTextContent('4 ft');
-    expect(screen.getByTestId('posm-height-locked-1')).toHaveTextContent('2.5 ft');
-  });
-
-  it('falls back to the raw type id when the locked type is not in the (gated) picker list', () => {
-    render(
-      <PosmCaptureCard
-        slot={2}
-        posmTypes={[TYPES[0]]} // 'gsb' gated out of the picker for this outlet
-        onChange={vi.fn()}
-        initialPosmTypeId="gsb"
-        initialWidth={3}
-        initialHeight={3}
-        lockElementAndDims
-      />,
-    );
-    // Never blank: the read-only field still shows an identifier for the locked type.
-    expect(screen.getByTestId('posm-type-locked-2')).toHaveTextContent('gsb');
+    // The editable controls are present and seeded from the original submission — the rep can change
+    // them (no read-only lock any more).
+    const select = screen.getByRole('combobox') as HTMLSelectElement;
+    expect(select.value).toBe('gsb');
+    expect((screen.getByPlaceholderText('Width') as HTMLInputElement).value).toBe('4');
+    expect((screen.getByPlaceholderText('Height') as HTMLInputElement).value).toBe('2.5');
+    // No locked read-only presentation remains.
+    expect(screen.queryByTestId('posm-type-locked-1')).toBeNull();
   });
 });
 

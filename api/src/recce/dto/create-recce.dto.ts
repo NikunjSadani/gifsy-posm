@@ -147,6 +147,15 @@ export class CreateRecceDto {
   @IsNotEmpty()
   siteId: string;
 
+  /**
+   * Outlet name as observed by the rep (pre-filled from the master, editable). Optional; stored
+   * WITH the recce for reviewers to see. Never changes the outlet master.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200, { message: 'Outlet name must be at most 200 characters' })
+  outletName?: string;
+
   @IsArray()
   @ArrayMinSize(1, { message: 'A recce needs at least 1 Element line' })
   @ArrayMaxSize(2, { message: 'A recce may have at most 2 Element lines' })

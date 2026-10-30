@@ -86,6 +86,8 @@ export interface RecceQueueItem {
   status: string;
   version: number;
   site: RecceSite;
+  /** The rep's as-observed outlet name for this recce (null → fall back to site.name). */
+  observedOutletName?: string | null;
   submittedBy: { id: string; name: string } | null;
   capturedAt: string | null;
   receivedAt: string | null;

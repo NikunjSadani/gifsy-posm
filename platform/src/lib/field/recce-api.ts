@@ -111,6 +111,8 @@ export interface RecceDetail {
   hoReviewStatus: HoReviewStatus;
   version: number;
   site: { id: string; code: string; name: string; town: string | null; lat: number | null; lng: number | null };
+  /** The rep's as-observed outlet name captured with this recce (null → fall back to site.name). */
+  observedOutletName: string | null;
   submittedBy: { id: string; name: string };
   capturedAt: string | null;
   receivedAt: string;
@@ -232,22 +234,26 @@ function toPosmBody(p: CapturedReccePosm): ReccePosmBody {
   };
 }
 
-/** Submit a fresh recce for a site (∅ → SUBMITTED). */
-export function submitRecce(siteId: string, posms: CapturedReccePosm[]) {
+/** Submit a fresh recce for a site (∅ → SUBMITTED). `outletName` is the rep's as-observed name. */
+export function submitRecce(siteId: string, posms: CapturedReccePosm[], outletName?: string) {
+  const name = outletName?.trim();
   return api.post<{ id: string; status: RecceStatus }>('/api/recce', {
     siteId,
+    ...(name ? { outletName: name } : {}),
     posms: posms.map(toPosmBody),
   });
 }
 
 /**
- * Re-capture a REJECTED recce (REJECTED → SUBMITTED, version++). The body carries only the
- * fresh POSM lines — the site is fixed server-side, matching `ResubmitRecceDto`.
+ * Re-capture a REJECTED recce (REJECTED → SUBMITTED, version++). The body carries the fresh POSM
+ * lines and the (editable) as-observed outlet name — the site is fixed server-side, matching
+ * `ResubmitRecceDto`.
  */
-export function resubmitRecce(recceId: string, posms: CapturedReccePosm[]) {
+export function resubmitRecce(recceId: string, posms: CapturedReccePosm[], outletName?: string) {
+  const name = outletName?.trim();
   return api.post<{ id: string; status: RecceStatus }>(
     `/api/recce/${encodeURIComponent(recceId)}/resubmit`,
-    { posms: posms.map(toPosmBody) },
+    { ...(name ? { outletName: name } : {}), posms: posms.map(toPosmBody) },
   );
 }
 

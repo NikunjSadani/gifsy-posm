@@ -340,6 +340,10 @@ model Recce {
   recceMode     RecceMode   @default(APP) // APP = one per outlet; MANUAL = unlimited, skips ASM → HO
   version       Int         @default(1)
 
+  // Outlet name AS OBSERVED by the rep at recce time (pre-filled from the master, editable). Captured
+  // WITH the recce for reviewers to see — it never changes the outlet master (admins edit that).
+  observedOutletName String?
+
   // geo (worst/representative fixed photo — same math as loyalty geo-fence)
   captureLat      Decimal? @db.Decimal(10, 8)
   captureLng      Decimal? @db.Decimal(11, 8)

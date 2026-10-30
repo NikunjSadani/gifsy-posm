@@ -82,7 +82,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ReccePage — resubmit of a REJECTED recce', () => {
-  it('seeds one locked card per original posm from existing.posms and fixes the set (no add)', async () => {
+  it('pre-fills one EDITABLE card per original posm and fixes the count (no add)', async () => {
     // `use(params)` suspends until the params promise resolves — flush that inside act so the
     // inner page (and its load effects) mount before we query.
     await act(async () => {
@@ -92,15 +92,16 @@ describe('ReccePage — resubmit of a REJECTED recce', () => {
     // Resolves to resubmit mode.
     expect(await screen.findByText('Re-capture recce')).toBeInTheDocument();
 
-    // Exactly one card, locked + seeded from the original posm's type + dimensions.
-    const lockedType = await screen.findByTestId('posm-type-locked-1');
-    expect(lockedType).toHaveTextContent('Glow Sign Board (GSB)');
-    expect(screen.getByTestId('posm-width-locked-1')).toHaveTextContent('4 ft');
-    expect(screen.getByTestId('posm-height-locked-1')).toHaveTextContent('2.5 ft');
-    expect(screen.queryByTestId('posm-type-locked-2')).toBeNull();
+    // Exactly one card, PRE-FILLED (not locked) from the original posm's type + dimensions — the
+    // element picker + W×H inputs are editable and seeded.
+    const selects = await screen.findAllByRole('combobox');
+    expect(selects).toHaveLength(1);
+    expect((selects[0] as HTMLSelectElement).value).toBe('gsb');
+    expect((screen.getByPlaceholderText('Width') as HTMLInputElement).value).toBe('4');
+    expect((screen.getByPlaceholderText('Height') as HTMLInputElement).value).toBe('2.5');
 
-    // The element set is fixed on resubmit: no editable picker, no "Add second Element".
-    expect(screen.queryByRole('combobox')).toBeNull();
+    // No locked read-only presentation, and the COUNT is fixed on resubmit (no "Add second Element").
+    expect(screen.queryByTestId('posm-type-locked-1')).toBeNull();
     expect(screen.queryByText('Add second Element')).toBeNull();
   });
 });
@@ -144,7 +145,7 @@ describe('ReccePage — for-site resolver (no ?recceId)', () => {
 
     // Resubmit (not blocked) — the resolver's rejected recce won over the newer submitted one.
     expect(await screen.findByText('Re-capture recce')).toBeInTheDocument();
-    expect(await screen.findByTestId('posm-type-locked-1')).toHaveTextContent('Glow Sign Board (GSB)');
+    expect((await screen.findByRole('combobox') as HTMLSelectElement).value).toBe('gsb'); // pre-filled, editable
     expect(screen.queryByText(/already has a/i)).toBeNull(); // not the blocked state
   });
 });

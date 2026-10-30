@@ -135,6 +135,9 @@ export class RecceService {
             submittedById: user.sub,
             status: RecceStatus.SUBMITTED,
             version: 1,
+            // As-observed outlet name (pre-filled from the master, editable by the rep); null falls
+            // back to the master name at read time. Never writes back to the outlet master.
+            observedOutletName: dto.outletName?.trim() || null,
             ...prepared.geo,
             posms: { create: prepared.posmCreate },
           },
@@ -257,6 +260,8 @@ export class RecceService {
             // No ASM stage: the manual recce enters HO review directly (R4).
             hoReviewStatus: HoReviewStatus.PENDING,
             version: 1,
+            // The manual rep names the outlet; keep that as the recce's as-observed name too.
+            observedOutletName: outletName || null,
             ...prepared.geo,
             posms: { create: prepared.posmCreate },
           },
@@ -312,11 +317,13 @@ export class RecceService {
 
     const recce = await this.prisma.recce.findFirst({
       where: { id, ...scope },
-      // The original POSM lines (type + dimensions) are loaded so the resubmit can be validated to
-      // EQUAL them — the FE locks the element type + dimensions to the original and only re-captures
-      // photo + markup, so a modified client (or an FE bug) must not be able to drop / re-type an
-      // element and silently lose it. See assertResubmitMatchesOriginal below.
-      include: { site: true, posms: { select: { posmTypeId: true, dimensions: true } } },
+      // The original POSM lines pin the resubmit to the same element COUNT (the type + dimensions are
+      // editable — re-validated by prepare()). Their type + dims are also snapshotted into the audit
+      // log below, since the re-capture DESTROYS the old child rows and the element is now editable.
+      include: {
+        site: true,
+        posms: { select: { id: true, posmTypeId: true, dimensions: true, posmType: { select: { code: true } } } },
+      },
     });
     if (!recce) throw new NotFoundException('Recce not found');
     if (recce.status !== RecceStatus.REJECTED) {
@@ -326,17 +333,21 @@ export class RecceService {
     }
     if (recce.site.status !== 'ACTIVE') throw new BadRequestException('Outlet is not active');
 
-    // The element SET is locked on resubmit: the resubmitted POSM lines must match the original
-    // recce's — same count, same set of posmTypeIds, same dimensions (order-insensitive). This
-    // enforces the FE lock server-side so an element can never be dropped or re-typed on re-capture.
-    this.assertResubmitMatchesOriginal(recce.posms, dto.posms);
+    // Resubmit pins the element COUNT only: the same number of lines as the original (no silent
+    // drop/add). The element type + dimensions are editable on re-capture — prepare() re-validates
+    // the submitted values exactly like a fresh entry (tenant membership + GSB gate + measurement +
+    // max-area cap), so a changed element still can't bypass those rules.
+    this.assertResubmitSameCount(recce.posms, dto.posms);
 
-    // GSB gate is BYPASSED on resubmit: the element identity is fixed (it equals the original, which
-    // was already GSB-valid when first accepted). Only the photo + markup are new, so re-applying the
-    // gate against the outlet's CURRENT gsbAllowed would turn a later gsbAllowed=false flip into a
-    // permanent dead-end (a locked GSB element could never be re-captured). A normal create/manual
-    // path still runs the gate unchanged.
-    const prepared = await this.prepare(clientId, recce.site, dto.posms, { isResubmit: true });
+    // Snapshot the element set BEFORE it is replaced — a durable record of what the rejected version
+    // contained, now that the element type + dimensions are editable on re-capture.
+    const originalElements = recce.posms.map((p) => ({
+      posmTypeId: p.posmTypeId,
+      code: p.posmType?.code ?? null,
+      dimensions: p.dimensions,
+    }));
+
+    const prepared = await this.prepare(clientId, recce.site, dto.posms);
 
     let duplicate = false;
     let updated;
@@ -346,7 +357,9 @@ export class RecceService {
         // its POSM child rows is safe.
         await tx.reccePosm.deleteMany({ where: { recceId: id } });
         const next = await tx.recce.update({
-          where: { id },
+          // Status-guarded transition (matches the codebase's race-safe pattern): if a concurrent
+          // resubmit already moved it off REJECTED, this matches 0 rows → P2025 → clean 409 below.
+          where: { id, status: RecceStatus.REJECTED },
           data: {
             status: RecceStatus.SUBMITTED,
             version: { increment: 1 },
@@ -365,6 +378,8 @@ export class RecceService {
             hoReviewedAt: null,
             hoRejectionReasonCode: null,
             hoRejectionReason: null,
+            // Re-capture may correct the as-observed outlet name (pre-filled, editable).
+            observedOutletName: dto.outletName?.trim() || null,
             ...prepared.geo,
             posms: { create: prepared.posmCreate },
           },
@@ -382,7 +397,9 @@ export class RecceService {
             action: 'UPDATE',
             entityType: 'RECCE',
             entityId: id,
-            oldValues: toJson({ status: RecceStatus.REJECTED, version: recce.version }),
+            // Snapshot the pre-resubmit element set (type + dims) so a reject→edit→resubmit cycle
+            // leaves a durable record of what changed, not just the status/version delta.
+            oldValues: toJson({ status: RecceStatus.REJECTED, version: recce.version, elements: originalElements }),
             newValues: toJson({ status: RecceStatus.SUBMITTED, version: next.version }),
             metadata: { clientId, event: 'RECCE_RESUBMIT' } as Prisma.InputJsonValue,
           },
@@ -390,8 +407,12 @@ export class RecceService {
         return next;
       });
     } catch (e) {
-      // A4: clean 409 on a unique-constraint race.
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      // A4: clean 409 on a unique-constraint race (P2002) OR a lost status-guard race (P2025 — a
+      // concurrent resubmit already moved this recce off REJECTED).
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        (e.code === 'P2002' || e.code === 'P2025')
+      ) {
         throw new ConflictException('This recce could not be resubmitted (concurrent write).');
       }
       throw e;
@@ -506,7 +527,7 @@ export class RecceService {
   /**
    * Resolve the REJECTED recce the CURRENT caller may re-capture at a given site — the
    * authoritative target for the field app's re-capture flow. Returns `{ recce: <RecceDetail> }`
-   * (the SAME shape as get(), so the FE can seed + lock from `recce.posms`) or `{ recce: null }`
+   * (the SAME shape as get(), so the FE can PRE-FILL from `recce.posms`) or `{ recce: null }`
    * when the site has no rejected recce the caller can act on.
    *
    * Scoped EXACTLY like resubmit() (via `scopeWhere`: tenant + vendor pin, fail-closed for a vendor
@@ -564,22 +585,19 @@ export class RecceService {
     clientId: string,
     site: { id: string; lat: Prisma.Decimal | null; lng: Prisma.Decimal | null; gsbAllowed?: boolean; settings?: unknown },
     lines: ReccePosmLineDto[],
-    opts: { isResubmit?: boolean } = {},
   ): Promise<PreparedRecce> {
     const posmTypes = await this.assertPosmTypesInTenant(clientId, lines.map((l) => l.posmTypeId));
     const typeById = new Map(posmTypes.map((p) => [p.id, p]));
 
     // GSB GATE: an element flagged `isGsb=true` may be recced ONLY at an outlet whose master record is
     // approved for GSB (Site.gsbAllowed === true). Keyed on the explicit PosmType.isGsb flag (replaces
-    // the former hardcoded code==='GSB' rule). Enforced here, the shared choke-point for the APP
-    // (create) and MANUAL (createManual) lanes, so the gate cannot be bypassed by any FRESH submit path
-    // — and BEFORE any media/fence/hash/DB write. A provisional manual walk-in outlet has
-    // gsbAllowed=false by default, so GSB is correctly blocked there until HO finalises + approves the
-    // outlet. The resubmit lane passes isResubmit:true — its element set is locked to the
-    // (already-valid) original, so re-applying the gate against the outlet's CURRENT gsbAllowed would
-    // make a later gsbAllowed flip a permanent dead-end.
+    // the former hardcoded code==='GSB' rule). Enforced here, the shared choke-point for EVERY submit
+    // lane — APP create, MANUAL create, AND resubmit (a resubmit may now change the element, so its
+    // chosen element must pass the gate against the outlet's current gsbAllowed exactly like a fresh
+    // entry) — and BEFORE any media/fence/hash/DB write. A provisional manual walk-in outlet has
+    // gsbAllowed=false by default, so GSB is correctly blocked there until HO finalises + approves it.
     const hasGsb = posmTypes.some((p) => p.isGsb === true);
-    if (!opts.isResubmit && hasGsb && site.gsbAllowed !== true) {
+    if (hasGsb && site.gsbAllowed !== true) {
       throw new BadRequestException('You can only recce the GSB element at outlets approved for GSB.');
     }
 
@@ -604,9 +622,10 @@ export class RecceService {
       ) {
         throw new BadRequestException('Width and height are required for this element.');
       }
-      // Max-area cap: skip on resubmit (dims are locked from the original recce — mirror the GSB gate),
-      // and compare in sq ft after normalising the recorded unit so a cm/mm entry can't bypass the cap.
-      if (!opts.isResubmit && pt.maxAreaSqFt != null) {
+      // Max-area cap: applies to every lane (a resubmit may now edit the dimensions, so they are
+      // re-validated like a fresh entry). Compared in sq ft after normalising the recorded unit so a
+      // cm/mm entry can't bypass the cap.
+      if (pt.maxAreaSqFt != null) {
         const factor = AREA_UNIT_TO_FT[d.unit.trim().toLowerCase()];
         if (factor == null) {
           throw new BadRequestException(`Unsupported dimension unit "${d.unit}" for this element.`);
@@ -756,58 +775,21 @@ export class RecceService {
   }
 
   /**
-   * Enforce the resubmit element LOCK server-side: the resubmitted POSM lines must EQUAL the
-   * original recce's — same COUNT, same set of `posmTypeId`s, and the same dimensions
-   * (width/height/unit, canonicalised so the "branding not required"/NA case compares equal).
-   * The match is ORDER-INSENSITIVE and multiset-aware (two identical lines must still both be
-   * present). Any mismatch is a 400 — the FE only re-captures photo + markup, never the element
-   * identity, so a dropped / re-typed / re-sized element can only mean a tampered or buggy client.
+   * Resubmit element-COUNT lock: a re-captured recce must carry the SAME NUMBER of element lines as
+   * the original (one card per flagged element) — so an element can never be silently dropped or an
+   * extra one added on re-capture. The element TYPE and DIMENSIONS are now EDITABLE on resubmit (the
+   * rep fixes what the reviewer flagged), re-validated like a fresh entry by prepare() (tenant
+   * membership, GSB gate, measurement + max-area cap); only the count is pinned here.
    */
-  private assertResubmitMatchesOriginal(
-    original: { posmTypeId: string; dimensions: Prisma.JsonValue }[],
+  private assertResubmitSameCount(
+    original: { id: string }[],
     incoming: ReccePosmLineDto[],
   ) {
-    const fail = (): never => {
+    if (original.length !== incoming.length) {
       throw new BadRequestException(
-        'Resubmission must re-capture the same elements (type and dimensions) as the original recce.',
+        `Resubmission must re-capture the same number of elements as the original recce (${original.length}).`,
       );
-    };
-    if (original.length !== incoming.length) fail();
-
-    const key = (posmTypeId: string, dims: unknown) => {
-      const d = this.canonicalDims(dims);
-      return `${posmTypeId}|${d.width}|${d.height}|${d.unit}`;
-    };
-    // Multiset of the original lines' keys; each incoming line must consume one.
-    const counts = new Map<string, number>();
-    for (const o of original) {
-      const k = key(o.posmTypeId, o.dimensions);
-      counts.set(k, (counts.get(k) ?? 0) + 1);
     }
-    for (const i of incoming) {
-      const k = key(i.posmTypeId, i.dimensions);
-      const c = counts.get(k);
-      if (!c) fail(); // not in the original set (or already fully consumed)
-      else counts.set(k, c - 1);
-    }
-    // Lengths are equal and every incoming line consumed a positive count, so the multiset matched.
-  }
-
-  /**
-   * Canonicalise a dimensions value (stored JSON OR an incoming DTO) to comparable primitives, so
-   * the resubmit lock compares like-for-like. A numeric width/height is kept, a non-numeric one
-   * becomes null, and a non-string / empty unit becomes null — so an absent / NA / malformed
-   * dimension (`{}`, null, "garbage") collapses to {null,null,null} and compares equal to another
-   * absent one, while a real {width,height,unit} compares on its actual values.
-   */
-  private canonicalDims(d: unknown): { width: number | null; height: number | null; unit: string | null } {
-    if (!d || typeof d !== 'object' || Array.isArray(d)) {
-      return { width: null, height: null, unit: null };
-    }
-    const o = d as Record<string, unknown>;
-    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-    const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : null);
-    return { width: num(o.width), height: num(o.height), unit: str(o.unit) };
   }
 
   private async assertPosmTypesInTenant(clientId: string, ids: string[]) {
@@ -842,6 +824,7 @@ export class RecceService {
   private present(
     r: {
       id: string; status: RecceStatus; recceMode: RecceMode; version: number;
+      observedOutletName: string | null;
       captureLat: Prisma.Decimal | null; captureLng: Prisma.Decimal | null; captureAccuracy: number | null;
       distanceMeters: Prisma.Decimal | null; geoFenceOk: boolean | null;
       capturedAt: Date | null; receivedAt: Date;
@@ -874,6 +857,8 @@ export class RecceService {
         id: r.site.id, code: r.site.code, name: r.site.name, town: r.site.town,
         lat: this.dec(r.site.lat), lng: this.dec(r.site.lng),
       },
+      // The rep's as-observed outlet name (null when not captured → reviewers fall back to site.name).
+      observedOutletName: r.observedOutletName ?? null,
       submittedBy: r.submittedBy,
       integrity: {
         geoFenceOk: r.geoFenceOk,

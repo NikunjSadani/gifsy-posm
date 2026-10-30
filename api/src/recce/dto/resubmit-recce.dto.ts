@@ -1,5 +1,5 @@
 import {
-  IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested,
+  IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsOptional, IsString, MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ReccePosmLineDto } from './create-recce.dto';
@@ -11,6 +11,12 @@ import { ReccePosmLineDto } from './create-recce.dto';
  * to SUBMITTED.
  */
 export class ResubmitRecceDto {
+  /** Outlet name as observed by the rep (pre-filled, editable); stored WITH the recce. Optional. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200, { message: 'Outlet name must be at most 200 characters' })
+  outletName?: string;
+
   @IsArray()
   @ArrayMinSize(1, { message: 'A recce needs at least 1 Element line' })
   @ArrayMaxSize(2, { message: 'A recce may have at most 2 Element lines' })

@@ -230,6 +230,13 @@ export default function RecceDetailPage() {
               )}
             </div>
             <div className="flex flex-col gap-1 mt-2 text-sm text-gray-600">
+              {/* The rep's as-observed outlet name, shown only when it differs from the master — so
+                  the reviewer can see (and act on) a name correction captured at recce time. */}
+              {item.observedOutletName && item.observedOutletName.trim() && item.observedOutletName.trim() !== item.site.name && (
+                <span className="w-fit rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                  Name as entered by rep: <span className="font-semibold">{item.observedOutletName}</span>
+                </span>
+              )}
               {item.site.town && (
                 <span className="flex items-center gap-1.5"><MapPin className="h-4 w-4 text-gray-400" /> {item.site.town}</span>
               )}

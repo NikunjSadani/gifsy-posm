@@ -209,6 +209,8 @@ export class ApprovalService {
         lat: this.dec(r.site.lat),
         lng: this.dec(r.site.lng),
       },
+      // The rep's as-observed outlet name captured with this recce (null → reviewer uses site.name).
+      observedOutletName: r.observedOutletName ?? null,
       submittedBy: r.submittedBy,
       capturedAt: r.capturedAt,
       receivedAt: r.receivedAt,

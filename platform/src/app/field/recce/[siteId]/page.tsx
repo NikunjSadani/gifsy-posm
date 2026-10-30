@@ -7,9 +7,9 @@
  *   - CREATE   → a site with no recce yet: POST /api/recce { siteId, posms }.
  *   - RESUBMIT → a REJECTED recce (reached from "Recce to do" — a rejected outlet appears there —
  *                via ?recceId=…, or detected for the site): POST /api/recce/:id/resubmit { posms }
- *                — a fresh POST would 409. The rejection reason is surfaced so the rep knows what
- *                to fix, and the element TYPE + DIMENSIONS are locked to the original submission
- *                (one card per original posm): the rep re-captures only the photo + element box.
+ *                — a fresh POST would 409. The rejection reason is surfaced so the rep knows what to
+ *                fix; the element TYPE + DIMENSIONS are PRE-FILLED from the original but EDITABLE
+ *                (one card per original posm — the COUNT is fixed), re-validated server-side.
  *   - BLOCKED  → the site already has a SUBMITTED/APPROVED (immutable) recce: no re-capture.
  *
  * Each line (PosmCaptureCard): pick POSM type + dimensions, take a photo, auto-attach a GPS
@@ -105,6 +105,11 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
   const [ctxLoading, setCtxLoading] = useState(true);
   const [mode, setMode] = useState<Mode>('create');
   const [existing, setExisting] = useState<RecceDetail | null>(null);
+
+  // Editable "as observed" outlet name, pre-filled from the master (or a prior correction on
+  // resubmit). Seeded once when the outlet/recce resolves; the rep may edit it before submitting.
+  const [outletNameInput, setOutletNameInput] = useState('');
+  const seededName = useRef(false);
 
   const [count, setCount] = useState(1); // number of Element cards (1 or 2)
   const [expandedIndex, setExpandedIndex] = useState(0); // accordion: only one card expanded at a time
@@ -224,14 +229,14 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     };
   }, [recceIdParam, siteId]);
 
-  // On resubmit the element SET is fixed to the original recce: render exactly one card per
-  // original posm, each locked to that posm's type + dimensions. In create mode the rep builds the
-  // set freely (1–2 cards, add/remove allowed).
+  // On resubmit the element COUNT is fixed to the original recce: render exactly one card per
+  // original posm, each PRE-FILLED with (but not locked to) that posm's type + dimensions. In create
+  // mode the rep builds the set freely (1–2 cards, add/remove allowed).
   const resubmitPosms = mode === 'resubmit' && existing ? existing.posms : null;
   const cardCount = resubmitPosms ? resubmitPosms.length : count;
 
   // When the resubmit context resolves, size the per-card state array to the original posm count
-  // (one slot per original posm) so each locked card reports into its own slot.
+  // (one slot per original posm) so each card reports into its own slot.
   useEffect(() => {
     if (resubmitPosms) {
       setStates(resubmitPosms.map(() => EMPTY_STATE));
@@ -240,6 +245,16 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     // Keyed on the resolved recce id — runs once per loaded resubmit recce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, existing?.id]);
+
+  // Seed the editable outlet-name field once: a prior correction on resubmit, else the master name.
+  useEffect(() => {
+    if (seededName.current) return;
+    const seed = existing?.observedOutletName ?? site?.name ?? existing?.site.name;
+    if (seed) {
+      setOutletNameInput(seed);
+      seededName.current = true;
+    }
+  }, [existing, site]);
 
   const setStateAt = useCallback((i: number, s: PosmCaptureState) => {
     setStates((prev) => {
@@ -282,9 +297,10 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
     setSubmitting(true);
     try {
       const isResubmit = mode === 'resubmit' && existing;
+      const outletName = outletNameInput.trim() || undefined;
       const res = isResubmit
-        ? await resubmitRecce(existing.id, readyLines)
-        : await submitRecce(siteId, readyLines);
+        ? await resubmitRecce(existing.id, readyLines, outletName)
+        : await submitRecce(siteId, readyLines, outletName);
       if (!res.success) {
         toast.error(res.error || 'Could not submit the recce. Please try again.');
         return;
@@ -394,16 +410,23 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
                 slot={i + 1}
                 posmTypes={visiblePosmTypes}
                 onChange={(s) => setStateAt(i, s)}
-                // Resubmit: the element set is fixed — no remove affordance. Create: card 2 removable.
+                // Resubmit: the element COUNT is fixed — one card per original element, no add/remove.
+                // Create: card 2 removable.
                 onRemove={!resubmitPosms && i === 1 ? removeSecond : undefined}
                 collapsed={cardCount === 2 && i !== expandedIndex}
                 onExpand={() => setExpandedIndex(i)}
-                // Resubmit: seed + lock the element type and dimensions to the original posm so the
-                // rep only re-captures the photo + element box.
-                initialPosmTypeId={original?.posmType.id}
+                // Resubmit: PRE-FILL the element type + dimensions from the original posm, but leave
+                // them EDITABLE so the rep can fix what the reviewer flagged (re-validated server-side).
+                // Only seed the type when it's still selectable for this outlet — a type now gated out
+                // (e.g. a GSB element on an outlet that revoked GSB) is left blank so the rep re-picks,
+                // instead of a phantom value the picker can't show.
+                initialPosmTypeId={
+                  original && visiblePosmTypes.some((t) => t.id === original.posmType.id)
+                    ? original.posmType.id
+                    : undefined
+                }
                 initialWidth={original?.dimensions?.width}
                 initialHeight={original?.dimensions?.height}
-                lockElementAndDims={!!original}
               />
             );
           })}
@@ -419,6 +442,25 @@ function ReccePageInner({ params }: { params: Promise<{ siteId: string }> }) {
               Add second Element
             </button>
           )}
+
+          {/* Editable "as observed" outlet name — pre-filled from the master; the rep corrects it if
+              the name on the shopfront differs. Stored with the recce (reviewers see it); it never
+              changes the outlet master. */}
+          <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+            <label htmlFor="outlet-name" className="mb-1.5 block text-xs font-medium text-gray-600">
+              Outlet name
+            </label>
+            <input
+              id="outlet-name"
+              type="text"
+              value={outletNameInput}
+              onChange={(e) => setOutletNameInput(e.target.value)}
+              placeholder="Enter outlet name"
+              maxLength={200}
+              className="w-full rounded-xl border-2 border-gray-200 px-3 py-3 text-sm text-gray-900 focus:border-[var(--brand-primary)] focus:outline-none"
+            />
+            <p className="mt-1.5 text-xs text-gray-400">Pre-filled from records — edit if the outlet name differs on site.</p>
+          </div>
         </div>
       )}
 

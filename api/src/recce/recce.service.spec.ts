@@ -284,7 +284,7 @@ describe('RecceService', () => {
     expect(tx.recce.update.mock.calls[0][0].data.hoReviewStatus).toBe('PENDING');
   });
 
-  // ── Resubmit element LOCK (the re-captured set must EQUAL the original) ─────────
+  // ── Resubmit element COUNT lock (type + dimensions are EDITABLE; count is pinned) ─────────
   const rejectedRecceWithPosms = (posms: { posmTypeId: string; dimensions: unknown }[], over: Record<string, unknown> = {}) => ({
     id: 'r1', status: 'REJECTED', version: 2, hoReviewStatus: 'REJECTED',
     site: { ...activeSite },
@@ -292,22 +292,45 @@ describe('RecceService', () => {
     ...over,
   });
 
-  it('resubmit LOCK: a RE-TYPED element (posmTypeId changed) → 400, no deleteMany/transaction', async () => {
+  // A resubmit happy-path transaction (update + child-row replace + audit) with media hashing stubbed.
+  const resubmitHappyTx = () => {
+    const updatedRow = {
+      id: 'r1', status: 'SUBMITTED', version: 3,
+      captureLat: null, captureLng: null, captureAccuracy: null, distanceMeters: null, geoFenceOk: null,
+      capturedAt: null, receivedAt: new Date(), rejectionReasonCode: null, rejectionReason: null,
+      hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
+      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
+      submittedBy: { id: 'u1', name: 'Field' },
+      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
+    };
+    const tx = {
+      recce: { update: jest.fn().mockResolvedValue(updatedRow) },
+      reccePosm: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
+    return tx;
+  };
+
+  it('resubmit ALLOWS a re-typed element (type is editable now) as long as the count matches', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt2', code: 'PT2', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: null }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
-    // Original = pt1 @ {2,3,ft}; the resubmit sends pt2 (a different element) → rejected server-side.
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    // Original = pt1; the resubmit sends pt2 (a different, valid element) — now accepted (re-review follows).
     mockPrisma.recce.findFirst.mockResolvedValue(
       rejectedRecceWithPosms([{ posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } }]),
     );
-    await expect(
-      service.resubmit(vendorField, 'r1', { posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), posmTypeId: 'pt2' }] as any }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    const tx = resubmitHappyTx();
+    const res = await service.resubmit(vendorField, 'r1', { posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), posmTypeId: 'pt2' }] as any });
+    expect(res.status).toBe('SUBMITTED');
+    expect(tx.recce.update).toHaveBeenCalled();
   });
 
-  it('resubmit LOCK: a DROPPED element (count mismatch) → 400, no write', async () => {
+  it('resubmit COUNT lock: a DROPPED element (count mismatch) → 400, no write', async () => {
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     // Original had TWO elements; the resubmit drops one → count mismatch is rejected (the dropped
-    // element can no longer be silently lost + skip ASM).
+    // element can no longer be silently lost + skip re-review).
     mockPrisma.recce.findFirst.mockResolvedValue(
       rejectedRecceWithPosms([
         { posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } },
@@ -320,21 +343,39 @@ describe('RecceService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('resubmit LOCK: a CHANGED dimension → 400, no write', async () => {
+  it('resubmit ALLOWS a changed dimension (dimensions are editable now)', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: null }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
-    // Original pt1 @ {2,3,ft}; resubmit re-sends pt1 but at {9,9,ft} → dimension mismatch is rejected.
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    // Original pt1 @ {2,3,ft}; resubmit re-sends pt1 at {9,9,ft} — a changed size is now accepted.
     mockPrisma.recce.findFirst.mockResolvedValue(
       rejectedRecceWithPosms([{ posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } }]),
     );
+    const tx = resubmitHappyTx();
+    const res = await service.resubmit(vendorField, 'r1', {
+      posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), dimensions: { width: 9, height: 9, unit: 'ft' } } as any],
+    });
+    expect(res.status).toBe('SUBMITTED');
+    expect(tx.recce.update).toHaveBeenCalled();
+  });
+
+  it('resubmit RE-VALIDATES the max-area cap on edited dimensions → over-cap is rejected, no write', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 10 }]);
+    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
+    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
+    mockPrisma.recce.findFirst.mockResolvedValue(
+      rejectedRecceWithPosms([{ posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } }]),
+    );
+    // The edited size 4×4 = 16 > 10 sq ft cap → rejected (the cap now applies on resubmit).
     await expect(
       service.resubmit(vendorField, 'r1', {
-        posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), dimensions: { width: 9, height: 9, unit: 'ft' } } as any],
+        posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), dimensions: { width: 4, height: 4, unit: 'ft' } } as any],
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('resubmit LOCK: the SAME set in a DIFFERENT order is accepted (order-insensitive match)', async () => {
+  it('resubmit with the same element COUNT (2 lines) is accepted', async () => {
     mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', isActive: true }, { id: 'pt2', isActive: true }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
@@ -361,7 +402,7 @@ describe('RecceService', () => {
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
     mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
 
-    // Resubmit sends pt2 FIRST then pt1 (reversed vs the original + distinct photo keys per line).
+    // Resubmit sends pt2 FIRST then pt1 (distinct photo keys per line) — count matches, both valid.
     await service.resubmit(vendorField, 'r1', {
       posms: [
         { posmTypeId: 'pt2', dimensions: { width: 4, height: 5, unit: 'ft' }, photo: { key: `${KEY}-2`, geo: { lat: 19.0761, lng: 72.8771 } }, markup: line({ lat: 0, lng: 0 }).markup } as any,
@@ -372,39 +413,22 @@ describe('RecceService', () => {
     expect(tx.recce.update.mock.calls[0][0].data.status).toBe('SUBMITTED');
   });
 
-  it('resubmit BYPASSES the GSB gate: a locked isGsb element re-captures even after the outlet flipped gsbAllowed=false', async () => {
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true }]);
+  it('resubmit RE-APPLIES the GSB gate: a GSB element on an outlet that now disallows GSB → 400, no write', async () => {
+    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'gsb1', code: 'GSB', isGsb: true, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: null }]);
     mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
     mockIntegrity.fetchImageBytes.mockResolvedValue(null);
-    // The outlet is now gsbAllowed=false — a FRESH GSB create would 400 — but the original recce was
-    // a GSB element (valid when first accepted). Resubmit must NOT re-apply the gate (else permanent
-    // dead-end), so the re-capture of the same GSB element succeeds.
+    // The outlet now disallows GSB. Because the element is editable on resubmit, the chosen element
+    // must pass the gate like a fresh entry — so re-submitting a GSB element here is rejected.
     mockPrisma.recce.findFirst.mockResolvedValue(
       rejectedRecceWithPosms(
         [{ posmTypeId: 'gsb1', dimensions: { width: 2, height: 3, unit: 'ft' } }],
         { site: { ...activeSite, gsbAllowed: false } },
       ),
     );
-    const updatedRow = {
-      id: 'r1', status: 'SUBMITTED', version: 3,
-      captureLat: null, captureLng: null, captureAccuracy: null, distanceMeters: null, geoFenceOk: null,
-      capturedAt: null, receivedAt: new Date(), rejectionReasonCode: null, rejectionReason: null,
-      hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
-      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
-      submittedBy: { id: 'u1', name: 'Field' },
-      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'gsb1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'gsb1', code: 'GSB', name: 'GSB' } }],
-    };
-    const tx = {
-      recce: { update: jest.fn().mockResolvedValue(updatedRow) },
-      reccePosm: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    };
-    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
-    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
-
-    const res = await service.resubmit(vendorField, 'r1', { posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), posmTypeId: 'gsb1' }] as any });
-    expect(res.status).toBe('SUBMITTED');
-    expect(tx.recce.update).toHaveBeenCalled();
+    await expect(
+      service.resubmit(vendorField, 'r1', { posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), posmTypeId: 'gsb1' }] as any }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
   // ── forSite resolver (authoritative re-capture target) ──────────────────────────
@@ -1022,37 +1046,4 @@ describe('RecceService', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('resubmit BYPASSES the max-area cap: locked dims re-submit even after the cap was lowered below them', async () => {
-    mockPrisma.posmType.findMany.mockResolvedValue([{ id: 'pt1', code: 'PT1', isGsb: false, isActive: true, measurement: 'DIMENSION', maxAreaSqFt: 1 }]);
-    mockPrisma.client.findUnique.mockResolvedValue({ settings: { geoFence: { enabled: false, radiusMeters: 100 } } });
-    mockIntegrity.fetchImageBytes.mockResolvedValue(null);
-    // Original pt1 @ {2,3,ft} = 6 sq ft, accepted when the cap was higher; the cap is now 1 sq ft.
-    // A FRESH create of 6 sq ft would 400, but a resubmit of the LOCKED dims must not re-apply the
-    // cap (else permanent dead-end), mirroring the GSB-gate bypass.
-    mockPrisma.recce.findFirst.mockResolvedValue(
-      rejectedRecceWithPosms([{ posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } }]),
-    );
-    const updatedRow = {
-      id: 'r1', status: 'SUBMITTED', version: 3,
-      captureLat: null, captureLng: null, captureAccuracy: null, distanceMeters: null, geoFenceOk: null,
-      capturedAt: null, receivedAt: new Date(), rejectionReasonCode: null, rejectionReason: null,
-      hoReviewStatus: 'PENDING', hoRejectionReasonCode: null, hoRejectionReason: null,
-      site: { id: 's1', code: 'S1', name: 'Store', town: 'Mumbai', lat: 19.076, lng: 72.877 },
-      submittedBy: { id: 'u1', name: 'Field' },
-      posms: [{ id: 'rp1', slotNo: 1, posmTypeId: 'pt1', dimensions: {}, photo: { key: KEY }, markup: null, qualityFlags: null, posmType: { id: 'pt1', code: 'PT1', name: 'Board' } }],
-    };
-    const tx = {
-      recce: { update: jest.fn().mockResolvedValue(updatedRow) },
-      reccePosm: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    };
-    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
-    mockMedia.recordImageHashes.mockResolvedValue({ dupHashes: [] });
-
-    const res = await service.resubmit(vendorField, 'r1', {
-      posms: [{ ...line({ lat: 19.0761, lng: 72.8771 }), posmTypeId: 'pt1', dimensions: { width: 2, height: 3, unit: 'ft' } } as any],
-    });
-    expect(res.status).toBe('SUBMITTED');
-    expect(tx.recce.update).toHaveBeenCalled();
-  });
 });
