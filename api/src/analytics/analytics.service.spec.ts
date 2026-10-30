@@ -1,25 +1,17 @@
 import { ForbiddenException, StreamableFile } from '@nestjs/common';
-import { type Readable } from 'node:stream';
-import * as XLSX from 'xlsx';
+import { Readable } from 'node:stream';
 import { AnalyticsService } from './analytics.service';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { ListOutletReportDto } from '../reports/dto/list-outlet-report.dto';
 
-/** Drain a streamed xlsx to its parsed rows (AOA of the first sheet). */
-function collect(stream: Readable): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    stream.on('data', (c: Buffer) => chunks.push(c));
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', reject);
-  });
-}
-async function readStreamedRows(file: StreamableFile): Promise<string[][]> {
-  const buf = await collect(file.getStream());
-  const wb = XLSX.read(buf, { type: 'buffer' });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, blankrows: false, defval: '' });
-}
+/**
+ * The drill-down .xlsx export now delegates to the reports' full-column outlet-execution stream,
+ * so the service takes ReportsService. A lightweight stub records the delegated call; the report
+ * stream itself is covered by the reports service's own specs.
+ */
+const reportsStream = jest.fn((_user: JwtPayload, _q: ListOutletReportDto): Readable => Readable.from(['x']));
+const reportsMock = { outletExecutionXlsxStream: reportsStream } as unknown as import('../reports/reports.service').ReportsService;
 
 /**
  * AnalyticsService — SECURITY (scoping) + correctness proofs.
@@ -66,7 +58,7 @@ const firstRecceWhere = (fns: Record<string, any>) => fns.recce.count.mock.calls
 describe('AnalyticsService.summary — scoping', () => {
   it('CLIENT_ADMIN: every base query is tenant-pinned, no vendor/asm narrowing', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     expect(firstSiteWhere(fns)).toEqual({ clientId: 'c1' });
@@ -80,7 +72,7 @@ describe('AnalyticsService.summary — scoping', () => {
 
   it('un-assumed GIFSY_ADMIN: platform-wide (NO clientId filter anywhere)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }));
 
     expect(firstSiteWhere(fns).clientId).toBeUndefined();
@@ -91,14 +83,14 @@ describe('AnalyticsService.summary — scoping', () => {
 
   it('assumed GIFSY_ADMIN: pinned to the assumed tenant (NOT platform-wide)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'GIFSY_ADMIN', clientId: 'cB', assumed: true }));
     expect(firstSiteWhere(fns)).toEqual({ clientId: 'cB' });
   });
 
   it('VENDOR_HO: confined to their OWN fleet on site AND recce (site.vendorId)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }));
 
     expect(firstSiteWhere(fns)).toEqual({ clientId: 'c1', vendorId: 'v-7' });
@@ -111,7 +103,7 @@ describe('AnalyticsService.summary — scoping', () => {
 
   it('VENDOR_HO with NO vendorId: FAILS CLOSED (403), never runs an unscoped query', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await expect(
       svc.summary(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined })),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -121,7 +113,7 @@ describe('AnalyticsService.summary — scoping', () => {
 
   it('ASM: confined to their territory (site.asmUserId), recce via the site relation', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }));
 
     expect(firstSiteWhere(fns)).toEqual({ clientId: 'c1', asmUserId: 'asm-3' });
@@ -130,7 +122,7 @@ describe('AnalyticsService.summary — scoping', () => {
 
   it('pendingRecceReview pins hoReviewStatus NONE; pendingHoReview is just hoReviewStatus PENDING', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
     // recce.count order: 0 recced, 1 approved, 2 hoApproved, 3 rejectedRecce, 4 pendingRecceReview,
     // 5 geoTrue, 6 geoDecided, 7 recceManual, 8 pendingHoReview.
@@ -146,7 +138,7 @@ describe('AnalyticsService.summary — scoping', () => {
 describe('AnalyticsService.summary — KPI math + 0-guards', () => {
   it('rates are NULL when denominators are 0 (no data → null → "—", never a misleading 0)', async () => {
     const { prisma } = makePrisma(); // all counts default to 0
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     expect(res.kpis.recceApprovalRatePct).toBeNull();
@@ -174,7 +166,7 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
     const audited = new Date('2026-01-03T00:00:00Z');
     fns.installation.findMany.mockResolvedValue([{ auditedAt: audited, recce: { receivedAt: received } }]);
 
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     // approved = ASM-approved (6); hoApproved = installable (4), a strict subset.
@@ -209,7 +201,7 @@ describe('AnalyticsService.summary — KPI math + 0-guards', () => {
 describe('AnalyticsService.summary — elementFunnels (per-PosmType, element grain)', () => {
   it('empty when no element lines are in scope', async () => {
     const { prisma } = makePrisma(); // reccePosm.groupBy defaults to []
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
     expect(res.elementFunnels).toEqual([]);
   });
@@ -249,7 +241,7 @@ describe('AnalyticsService.summary — elementFunnels (per-PosmType, element gra
       { id: 'p-shelf', code: 'SHF', name: 'Shelf' },
     ]);
 
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     expect(res.elementFunnels).toEqual([
@@ -264,7 +256,7 @@ describe('AnalyticsService.summary — elementFunnels (per-PosmType, element gra
     const { prisma, fns } = makePrisma();
     fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 1 } }]);
     fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'A', name: 'Alpha' }]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     const calls = fns.reccePosm.groupBy.mock.calls;
@@ -286,7 +278,7 @@ describe('AnalyticsService.summary — elementFunnels (per-PosmType, element gra
     const { prisma, fns } = makePrisma();
     fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 1 } }]);
     fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'A', name: 'Alpha' }]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }));
 
     const calls = fns.reccePosm.groupBy.mock.calls;
@@ -301,7 +293,7 @@ describe('AnalyticsService.summary — elementFunnels (per-PosmType, element gra
     const { prisma, fns } = makePrisma();
     fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 1 } }]);
     fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'A', name: 'Alpha' }]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.summary(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }));
 
     const calls = fns.reccePosm.groupBy.mock.calls;
@@ -313,7 +305,7 @@ describe('AnalyticsService.summary — elementFunnels (per-PosmType, element gra
 describe('AnalyticsService.vendorScorecards — scoping', () => {
   it('VENDOR_HO: vendor universe pinned to their own id (only their row)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.vendorScorecards(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }));
 
     expect(fns.site.groupBy.mock.calls[0][0].where).toEqual({ clientId: 'c1', vendorId: 'v-7' });
@@ -325,7 +317,7 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
   it('ASM: vendor universe restricted to vendors in their territory (from site groupBy)', async () => {
     const { prisma, fns } = makePrisma();
     fns.site.groupBy.mockResolvedValue([{ vendorId: 'v-1', _count: { _all: 3 } }, { vendorId: null, _count: { _all: 1 } }]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.vendorScorecards(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }));
 
     expect(fns.site.groupBy.mock.calls[0][0].where).toEqual({ clientId: 'c1', asmUserId: 'asm-3' });
@@ -361,7 +353,7 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
       .mockResolvedValueOnce([{ siteId: 's1', _count: { _all: 1 } }]);
     fns.installation.groupBy.mockResolvedValue([]);
     fns.installation.findMany.mockResolvedValue([]); // no AUDIT_APPROVED turnaround rows
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.vendorScorecards(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     expect(res.items).toHaveLength(1);
@@ -414,7 +406,7 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
       { siteId: 's1', status: 'AUDIT_APPROVED', _count: { _all: 22_000 } },
     ]);
     fns.installation.findMany.mockResolvedValue([]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.vendorScorecards(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     const row = res.items[0];
@@ -452,7 +444,7 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
       ]);
     fns.installation.groupBy.mockResolvedValue([]);
     fns.installation.findMany.mockResolvedValue([]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.vendorScorecards(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }));
 
     const row = res.items[0];
@@ -469,7 +461,7 @@ describe('AnalyticsService.vendorScorecards — scoping', () => {
 describe('AnalyticsService.geo — scoping + truncation + furthestStage', () => {
   it('VENDOR_HO: site query pinned to fleet + non-null coords; install stage adds installs.some', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.geo(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }), { stage: 'install' });
     const where = fns.site.findMany.mock.calls[0][0].where;
     expect(where).toMatchObject({ clientId: 'c1', vendorId: 'v-7', lat: { not: null }, lng: { not: null }, installs: { some: {} } });
@@ -482,7 +474,7 @@ describe('AnalyticsService.geo — scoping + truncation + furthestStage', () => 
       recces: [{ status: 'APPROVED' }], installs: [{ status: 'AUDIT_APPROVED' }],
     }));
     fns.site.findMany.mockResolvedValue(many);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.geo(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), {});
 
     expect(res.truncated).toBe(true);
@@ -495,7 +487,7 @@ describe('AnalyticsService.geo — scoping + truncation + furthestStage', () => 
     fns.site.findMany.mockResolvedValue([
       { id: 's1', code: 'C1', name: 'N1', town: 't', lat: 1, lng: 2, vendorId: null, recces: [], installs: [] },
     ]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.geo(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: 'recce' });
     expect(res.points[0]).toMatchObject({ furthestStage: 'NONE', latestStatus: 'NONE' });
     expect(res.truncated).toBe(false);
@@ -511,7 +503,7 @@ describe('AnalyticsService.geo — scoping + truncation + furthestStage', () => 
       { id: 's2', code: 'C2', name: 'N2', town: 't', lat: 3, lng: 4, vendorId: null,
         recces: [{ status: 'APPROVED', hoReviewStatus: 'APPROVED' }], installs: [] },
     ]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.geo(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: 'recce' });
     expect(res.points[0].furthestStage).toBe('ASM_APPROVED');
     expect(res.points[1].furthestStage).toBe('HO_APPROVED');
@@ -529,7 +521,7 @@ describe('AnalyticsService.records — scoping, any-status, media → view paths
       },
     ]);
     fns.recce.count.mockResolvedValue(1);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.records(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }), { stage: 'recce', status: 'REJECTED' });
 
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' }, status: 'REJECTED' });
@@ -551,7 +543,7 @@ describe('AnalyticsService.records — scoping, any-status, media → view paths
       },
     ]);
     fns.installation.count.mockResolvedValue(1);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.records(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }), { stage: 'install' });
 
     expect(fns.installation.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-3' } });
@@ -562,14 +554,14 @@ describe('AnalyticsService.records — scoping, any-status, media → view paths
 
   it('CLIENT_ADMIN drill-down: an explicit vendorId narrows the site relation server-side', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.records(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { stage: 'recce', vendorId: 'v-9' });
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-9' } });
   });
 
   it('VENDOR_HO passing a FOREIGN vendorId still only gets their OWN fleet (drill-down ignored)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     // A VENDOR_HO for fleet v-7 tries to drill into v-OTHER — it must be ignored, staying v-7.
     await svc.records(
       user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }),
@@ -596,7 +588,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
       },
     ]);
     fns.site.count.mockResolvedValue(1);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'total-outlets' } as any);
 
     expect(fns.site.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
@@ -623,7 +615,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
       { id: 'r2', status: 'SUBMITTED', recceMode: 'MANUAL', site: { code: 'C2', name: 'N2', town: null } },
     ]);
     fns.recce.count.mockResolvedValue(2);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
 
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1' });
@@ -637,21 +629,21 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('asm-approved: APPROVED && approvedById set (matches summary — manual + resubmitted-then-HO-approved APP excluded)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'asm-approved' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', approvedById: { not: null } });
   });
 
   it('ho-approved: APPROVED && hoReviewStatus APPROVED', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'ho-approved' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'APPROVED', hoReviewStatus: 'APPROVED' });
   });
 
   it('pending-asm-review: SUBMITTED app recces STILL in the ASM stage (hoReviewStatus NONE)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'pending-asm-review' } as any);
     // hoReviewStatus NONE excludes a resubmitted app recce (SUBMITTED + APP but HO-bound).
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'SUBMITTED', recceMode: 'APP', hoReviewStatus: 'NONE' });
@@ -659,14 +651,14 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('pending-ho-review: ANY recce at hoReviewStatus PENDING (mirrors summary — app/manual/resubmit)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'pending-ho-review' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', hoReviewStatus: 'PENDING' });
   });
 
   it('rejected-recce / recces-app / recces-manual pin the expected recce predicate', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'rejected-recce' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'REJECTED' });
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recces-app' } as any);
@@ -677,7 +669,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('installed / audited / pending-install-audit / rejected-install pin the install status', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const u = user({ role: 'CLIENT_ADMIN', clientId: 'c1' });
     await svc.drilldown(u, { metric: 'installed' } as any);
     // `installed` = all scoped installations (no status filter).
@@ -698,7 +690,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     fns.installation.count.mockResolvedValue(1);
     fns.reccePosm.groupBy.mockResolvedValue([{ posmTypeId: 'p1', _count: { _all: 2 } }]);
     fns.posmType.findMany.mockResolvedValue([{ id: 'p1', code: 'GSB', name: 'Glow Sign Board' }]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
 
     expect(res.items[0]).toMatchObject({ id: 'i1', outletCode: 'C1', outletName: 'N1', town: 't', recceId: null, status: 'AUDIT_APPROVED', statusLabel: 'Audited' });
@@ -723,7 +715,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
       { id: 'p1', code: 'A', name: 'Alpha' },
       { id: 'p2', code: 'B', name: 'Beta' },
     ]);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
     expect(fns.reccePosm.groupBy.mock.calls[0][0].where).toEqual({ recce: { clientId: 'c1' } });
     expect(res.byElementType).toEqual([
@@ -734,14 +726,14 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('VENDOR_HO: recce metric confined to their fleet via the site relation', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }), { metric: 'recce' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
   });
 
   it('CLIENT_ADMIN drill-down: an explicit vendorId narrows the site relation (recce + install + site)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const u = user({ role: 'CLIENT_ADMIN', clientId: 'c1' });
     await svc.drilldown(u, { metric: 'recce', vendorId: 'v-9' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { vendorId: 'v-9' } });
@@ -753,7 +745,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('VENDOR_HO passing a FOREIGN vendorId still only gets their OWN fleet (drill-down ignored)', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(
       user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }),
       { metric: 'recce', vendorId: 'v-OTHER' } as any,
@@ -765,7 +757,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('ASM: recce metric territory-pinned (site.asmUserId); admin vendorId ignored for ASM', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }), { metric: 'recce', vendorId: 'v-9' } as any);
     const where = fns.recce.findMany.mock.calls[0][0].where;
     expect(where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-3' } });
@@ -774,14 +766,14 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('un-assumed GIFSY_ADMIN: platform-wide (no clientId) on a recce metric', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'GIFSY_ADMIN', clientId: 'gifsy', assumed: false }), { metric: 'recce' } as any);
     expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({});
   });
 
   it('VENDOR_HO with NO vendorId: FAILS CLOSED (403), never runs a query', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await expect(
       svc.drilldown(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined }), { metric: 'recce' } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -792,7 +784,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 
   it('limit is capped at 200', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', limit: 5000 } as any);
     expect(fns.recce.findMany.mock.calls[0][0].take).toBe(200);
   });
@@ -801,7 +793,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const { prisma, fns } = makePrisma();
     fns.recce.findMany.mockResolvedValue([{ id: 'r1', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'C1', name: 'N1', town: 't' } }]);
     fns.recce.count.mockResolvedValue(10);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', limit: 50 } as any);
     const call = fns.recce.findMany.mock.calls[0][0];
     expect(call.take).toBe(50);
@@ -816,7 +808,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const { prisma, fns } = makePrisma();
     fns.recce.findMany.mockResolvedValue([{ id: 'r9', status: 'SUBMITTED', recceMode: 'APP', site: { code: 'C9', name: 'N9', town: 't' } }]);
     fns.recce.count.mockResolvedValue(10);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce', afterId: 'r5', limit: 50 } as any);
     const call = fns.recce.findMany.mock.calls[0][0];
     expect(call.cursor).toEqual({ id: 'r5' });
@@ -831,7 +823,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
     const { prisma, fns } = makePrisma();
     fns.site.findMany.mockResolvedValue([{ id: 's2', code: 'C2', name: 'N2', town: 'Pune', status: 'ACTIVE' }]);
     fns.site.count.mockResolvedValue(5);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'total-outlets', afterId: 's1', limit: 50 } as any);
     const call = fns.site.findMany.mock.calls[0][0];
     expect(call.cursor).toEqual({ id: 's1' });
@@ -857,7 +849,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
       },
     ]);
     fns.recce.count.mockResolvedValue(1);
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const res = await svc.drilldown(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
     expect(res.items[0]).toEqual({
       id: 'r1',
@@ -887,7 +879,7 @@ describe('AnalyticsService.drilldown — scoped sheet-shaped per-tile lists', ()
 describe('AnalyticsService.export — scoped xlsx stream', () => {
   it('returns a StreamableFile; VENDOR_HO export runs the SAME fleet-scoped queries', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     const file = await svc.export(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }));
     expect(file).toBeInstanceOf(StreamableFile);
     // summary() + vendorScorecards() both ran under the fleet scope.
@@ -897,78 +889,95 @@ describe('AnalyticsService.export — scoped xlsx stream', () => {
 
   it('VENDOR_HO with no vendorId: export FAILS CLOSED (403)', async () => {
     const { prisma } = makePrisma();
-    const svc = new AnalyticsService(prisma);
+    const svc = new AnalyticsService(prisma, reportsMock);
     await expect(
       svc.export(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined })),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 
-describe('AnalyticsService.drilldownXlsx — scoped enriched drill-down export', () => {
-  it('streams the enriched columns + rows for a recce metric', async () => {
+describe('AnalyticsService.drilldownXlsx — full-column report, scoped to the drilled outlets', () => {
+  it('recce metric: delegates to the full-column report scoped to the DISTINCT matched outlet codes (recce mode)', async () => {
     const { prisma, fns } = makePrisma();
-    const captured = new Date('2026-10-20T06:30:00.000Z');
-    fns.recce.findMany.mockResolvedValueOnce([
-      {
-        id: 'r1',
-        status: 'SUBMITTED',
-        recceMode: 'APP',
-        hoReviewStatus: 'NONE',
-        capturedAt: captured,
-        site: { code: 'C1', name: 'Shop One', town: 'Pune', vendor: { name: 'Vendor One' } },
-        posms: [{ dimensions: { width: 4, height: 3, unit: 'ft' }, posmType: { name: 'Glow Sign Board' } }],
-      },
-    ]);
-    const svc = new AnalyticsService(prisma);
-    const file = svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+    reportsStream.mockClear();
+    // The export resolves the matched OUTLET codes under the metric's scope, then hands them off.
+    fns.recce.findMany.mockResolvedValueOnce([{ site: { code: 'C1' } }, { site: { code: 'C1' } }, { site: { code: 'C2' } }]);
+    const svc = new AnalyticsService(prisma, reportsMock);
+    const u = user({ role: 'CLIENT_ADMIN', clientId: 'c1' });
+    const file = await svc.drilldownXlsx(u, { metric: 'recce' } as any);
     expect(file).toBeInstanceOf(StreamableFile);
-    const rows = await readStreamedRows(file);
-    expect(rows[0]).toEqual(['Outlet Code', 'Outlet Name', 'Town', 'Vendor', 'Element(s)', 'W × H', 'Recce Date', 'Status']);
-    expect(rows[1]).toEqual(['C1', 'Shop One', 'Pune', 'Vendor One', 'Glow Sign Board', '4 × 3 ft', '2026-10-20', 'Submitted']);
-    // Export is UNCAPPED: it pulls batches of 500 by id cursor, not the paged 50/200 take.
-    expect(fns.recce.findMany.mock.calls[0][0].take).toBe(500);
-    expect(fns.recce.findMany.mock.calls[0][0].orderBy).toEqual({ id: 'asc' });
+    // Codes are pulled under the metric's scoped where (code-only select).
+    expect(fns.recce.findMany.mock.calls[0][0].where).toMatchObject({ clientId: 'c1' });
+    // Delegates to the full report with the deduped codes, recce mode, SAME caller (so the report
+    // ANDs its own tenant/vendor scope on top → the export can never exceed the drill-down's scope).
+    expect(reportsStream).toHaveBeenCalledTimes(1);
+    expect(reportsStream.mock.calls[0]![0]).toBe(u);
+    expect(reportsStream.mock.calls[0]![1]).toEqual({ outletCodes: 'C1,C2', mode: 'recce' });
   });
 
-  it('VENDOR_HO export is FLEET-SCOPED (isolation): query pinned to their vendorId via the site relation', async () => {
+  it('VENDOR_HO export is FLEET-SCOPED (isolation): the code query is pinned to their vendorId; a foreign vendorId is ignored', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
-    const file = svc.drilldownXlsx(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' }), {
-      metric: 'recce',
-      vendorId: 'v-OTHER', // a foreign fleet passed in — MUST be ignored
-    } as any);
-    await readStreamedRows(file); // drain so the cursor batch runs
+    reportsStream.mockClear();
+    fns.recce.findMany.mockResolvedValueOnce([{ site: { code: 'C1' } }]);
+    const svc = new AnalyticsService(prisma, reportsMock);
+    const u = user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: 'v-7' });
+    await svc.drilldownXlsx(u, { metric: 'recce', vendorId: 'v-OTHER' } as any); // foreign fleet MUST be ignored
     const where = fns.recce.findMany.mock.calls[0][0].where;
     expect(where).toEqual({ clientId: 'c1', site: { vendorId: 'v-7' } });
     expect(JSON.stringify(where)).not.toContain('v-OTHER');
+    // The report is handed the SAME vendor-scoped caller, so it re-confines to their fleet.
+    expect(reportsStream.mock.calls[0]![0]).toBe(u);
   });
 
-  it('VENDOR_HO with NO vendorId: export FAILS CLOSED (403) before any row is read', async () => {
+  it('VENDOR_HO with NO vendorId: export FAILS CLOSED (403) before any row is read or delegated', async () => {
     const { prisma, fns } = makePrisma();
-    const svc = new AnalyticsService(prisma);
-    expect(() =>
+    reportsStream.mockClear();
+    const svc = new AnalyticsService(prisma, reportsMock);
+    await expect(
       svc.drilldownXlsx(user({ role: 'VENDOR_HO', clientId: 'c1', vendorId: undefined }), { metric: 'recce' } as any),
-    ).toThrow(ForbiddenException);
+    ).rejects.toBeInstanceOf(ForbiddenException);
     expect(fns.recce.findMany).not.toHaveBeenCalled();
+    expect(reportsStream).not.toHaveBeenCalled();
   });
 
-  it('install metric export pulls the installed element lines via reccePosm', async () => {
+  it('install metric: codes come from the installations and delegate in INSTALLED mode (install + audit columns)', async () => {
     const { prisma, fns } = makePrisma();
-    fns.installation.findMany.mockResolvedValueOnce([
-      {
-        id: 'i1',
-        status: 'AUDIT_APPROVED',
-        capturedAt: new Date('2026-10-19T00:00:00.000Z'),
-        recce: { capturedAt: new Date('2026-10-15T00:00:00.000Z') },
-        site: { code: 'C9', name: 'Nine', town: null, vendor: { name: 'V9' } },
-        posms: [{ reccePosm: { dimensions: { width: 2, height: 2, unit: 'ft' }, posmType: { name: 'Shelf' } } }],
-      },
-    ]);
-    const svc = new AnalyticsService(prisma);
-    const file = svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
-    const rows = await readStreamedRows(file);
-    // recceDate must be the RECCE's capture date (2026-10-15), NOT the install's (2026-10-19).
-    expect(rows[1]).toEqual(['C9', 'Nine', '', 'V9', 'Shelf', '2 × 2 ft', '2026-10-15', 'Audited']);
+    reportsStream.mockClear();
+    fns.installation.findMany.mockResolvedValueOnce([{ site: { code: 'C9' } }, { site: { code: 'C9' } }]);
+    const svc = new AnalyticsService(prisma, reportsMock);
+    await svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'audited' } as any);
     expect(fns.installation.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', status: 'AUDIT_APPROVED' });
+    expect(reportsStream.mock.calls[0]![1]).toEqual({ outletCodes: 'C9', mode: 'installed' });
+  });
+
+  it('a metric matching NO outlets delegates with a sentinel code (header-only), never an absent filter that would export EVERY outlet', async () => {
+    const { prisma, fns } = makePrisma();
+    reportsStream.mockClear();
+    fns.recce.findMany.mockResolvedValueOnce([]);
+    const svc = new AnalyticsService(prisma, reportsMock);
+    await svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+    expect(reportsStream.mock.calls[0]![1].outletCodes).toBe('\u0000');
+  });
+
+  it('ISOLATION: a blank/whitespace outlet code trims away to the zero-row sentinel (an ASM cannot leak the tenant via it)', async () => {
+    const { prisma, fns } = makePrisma();
+    reportsStream.mockClear();
+    // A blank-coded outlet would pass a raw length check but trim to nothing in the report, dropping
+    // the code filter → for an ASM (confined ONLY by the code set) that would leak every territory.
+    fns.recce.findMany.mockResolvedValueOnce([{ site: { code: ' ' } }]);
+    const svc = new AnalyticsService(prisma, reportsMock);
+    await svc.drilldownXlsx(user({ role: 'ASM', sub: 'asm-3', clientId: 'c1' }), { metric: 'recce' } as any);
+    // The code query is territory-pinned, and the blank code normalises to the sentinel (zero rows).
+    expect(fns.recce.findMany.mock.calls[0][0].where).toEqual({ clientId: 'c1', site: { asmUserId: 'asm-3' } });
+    expect(reportsStream.mock.calls[0]![1].outletCodes).toBe('\u0000');
+  });
+
+  it('drops a blank code but keeps the real ones (mixed set)', async () => {
+    const { prisma, fns } = makePrisma();
+    reportsStream.mockClear();
+    fns.recce.findMany.mockResolvedValueOnce([{ site: { code: 'A1' } }, { site: { code: ' ' } }, { site: { code: 'A2' } }]);
+    const svc = new AnalyticsService(prisma, reportsMock);
+    await svc.drilldownXlsx(user({ role: 'CLIENT_ADMIN', clientId: 'c1' }), { metric: 'recce' } as any);
+    expect(reportsStream.mock.calls[0]![1].outletCodes).toBe('A1,A2');
   });
 });

@@ -386,6 +386,11 @@ export function drilldownExportUrl(metric: string, opts: { vendorId?: string } =
   params.set('metric', metric);
   const vendorId = opts.vendorId?.trim();
   if (vendorId) params.set('vendorId', vendorId);
+  // Pass this app's origin so the full-column report's photo hyperlinks resolve as ABSOLUTE links
+  // (the backend sits behind the proxy and can't know it); the server validates/sanitises it.
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    params.set('origin', window.location.origin);
+  }
   return `/api/analytics/drilldown.xlsx?${params.toString()}`;
 }
 

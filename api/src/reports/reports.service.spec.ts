@@ -819,6 +819,16 @@ describe('ReportsService — VENDOR_HO fleet confinement (isolation)', () => {
     }
   });
 
+  it('xlsx: `outletCodes` NARROWS the query to that set (code IN), ANDed with the tenant scope', async () => {
+    const { service, fns } = makeService();
+    fns.site.findMany.mockResolvedValueOnce([sampleSite()]).mockResolvedValue([]);
+    // Deduped + trimmed; used by the analytics drill-down export to confine the full report.
+    await streamToBuffer(service.outletExecutionXlsxStream(admin(), { outletCodes: ' A1 , A2 , A1 ,' }));
+    const where = fns.site.findMany.mock.calls[0][0].where;
+    expect(where.code).toEqual({ in: ['A1', 'A2'] });
+    expect(where.clientId).toBe('c1'); // still tenant-scoped
+  });
+
   it('xlsx: a VENDOR_HO with NO vendorId is FAIL-CLOSED (the stream builder throws 403 before any row)', () => {
     const { service, fns } = makeService();
     // The `where` is built synchronously when the stream is constructed, so the 403 fires here.

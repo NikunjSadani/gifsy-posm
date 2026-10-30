@@ -169,12 +169,19 @@ describe('exportUrl', () => {
 // ─── drilldownExportUrl ─────────────────────────────────────────────────────────
 
 describe('drilldownExportUrl', () => {
+  // In jsdom window.location.origin is set, so the URL also carries an `&origin=…` param (for the
+  // report's absolute photo links). Assert on the non-origin part, and that origin is appended.
   it('carries the metric; drops a blank vendorId', () => {
-    expect(drilldownExportUrl('recce')).toBe('/api/analytics/drilldown.xlsx?metric=recce');
-    expect(drilldownExportUrl('recce', { vendorId: '  ' })).toBe('/api/analytics/drilldown.xlsx?metric=recce');
+    expect(drilldownExportUrl('recce')).toMatch(/^\/api\/analytics\/drilldown\.xlsx\?metric=recce(&origin=[^&]+)?$/);
+    expect(drilldownExportUrl('recce', { vendorId: '  ' })).toMatch(/^\/api\/analytics\/drilldown\.xlsx\?metric=recce(&origin=[^&]+)?$/);
   });
   it('serialises an admin vendorId narrowing', () => {
-    expect(drilldownExportUrl('recce', { vendorId: 'v-9' })).toBe('/api/analytics/drilldown.xlsx?metric=recce&vendorId=v-9');
+    const url = drilldownExportUrl('recce', { vendorId: 'v-9' });
+    expect(url).toContain('metric=recce');
+    expect(url).toContain('vendorId=v-9');
+  });
+  it('appends the app origin for the report photo links', () => {
+    expect(drilldownExportUrl('recce')).toContain(`origin=${encodeURIComponent(window.location.origin)}`);
   });
 });
 

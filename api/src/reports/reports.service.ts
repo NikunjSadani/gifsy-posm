@@ -792,6 +792,13 @@ export class ReportsService {
     const scope = tenantScope(user);
     if (scope !== undefined) where.clientId = scope;
     if (q.siteCode) where.code = { contains: q.siteCode, mode: 'insensitive' };
+    // Optional NARROWING filter to a specific set of outlet codes (used by the analytics drill-down
+    // export to confine the full report to the drilled metric's outlets). ANDs with the tenant/vendor
+    // scope + any siteCode above, so it can only ever restrict the view, never widen it.
+    const codeSet = [...new Set((q.outletCodes ?? '').split(',').map((c) => c.trim()).filter(Boolean))];
+    if (codeSet.length > 0) {
+      where.code = where.code ? { ...(where.code as Prisma.StringFilter), in: codeSet } : { in: codeSet };
+    }
     if (q.town) where.town = { contains: q.town, mode: 'insensitive' };
     if (q.region) where.region = { contains: q.region, mode: 'insensitive' };
     if (q.state) where.state = { contains: q.state, mode: 'insensitive' };

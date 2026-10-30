@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { tenantScope, vendorScope } from '../common/tenant-scope';
 import { readMediaValue } from '../capture/visibility-types';
-import { buildXlsx, streamXlsx, type HyperlinkCell } from '../common/xlsx';
+import { buildXlsx } from '../common/xlsx';
 import {
   type DrilldownRecordItem,
   type ElementTypeCount,
@@ -19,12 +19,12 @@ import {
   installFunnelStage,
   funnelBadge,
   funnelStageToGeo,
-  DRILLDOWN_XLSX_HEADERS,
-  drilldownXlsxRow,
 } from '../common/drilldown-record';
 import { GeoQueryDto } from './dto/geo-query.dto';
 import { RecordsQueryDto } from './dto/records-query.dto';
 import { DrilldownMetric, DrilldownQueryDto } from './dto/drilldown-query.dto';
+import { ReportsService } from '../reports/reports.service';
+import { ListOutletReportDto } from '../reports/dto/list-outlet-report.dto';
 
 export type { DrilldownRecordItem, ElementTypeCount } from '../common/drilldown-record';
 
@@ -99,7 +99,10 @@ export class AnalyticsService {
   /** Geo/heatmap hard cap (contract): report truncation past this many points. */
   private static readonly GEO_CAP = 5_000;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reports: ReportsService,
+  ) {}
 
   // ── Scoping chokepoint ─────────────────────────────────────────────────────────
 
@@ -990,69 +993,61 @@ export class AnalyticsService {
   }
 
   /**
-   * The ENRICHED drill-down for one metric as a streamed .xlsx (NO row cap). Same scope +
-   * predicate as {@link drilldown} (via the shared {@link drilldownPlan}), so a VENDOR_HO export
-   * contains ONLY their fleet and an ASM only their territory. Rows are pulled in batches by a
-   * stable `id` cursor and written straight to the response, so peak memory is one batch regardless
-   * of how many records the metric matches. Columns = {@link DRILLDOWN_XLSX_HEADERS}.
+   * The drill-down export as the FULL outlet-execution report (every column), confined to the
+   * outlets the drilled metric matches under THIS caller's scope. The scoped outlet-code set is
+   * computed via the same {@link drilldownPlan} as the on-screen drill-down (so scope + predicate
+   * can never diverge), then handed to the reports' full-column xlsx stream — which ANDs its OWN
+   * tenant/vendor scope on top, so the export can NEVER exceed the drill-down's scope. An install-
+   * lane metric uses the installed-mode report (install + audit columns; those outlets are all
+   * installed, so none are dropped); every other lane uses the recce-mode report (all matched
+   * outlets, recce columns). Replaces the former thin 8-column drill-down export.
    */
-  drilldownXlsx(user: JwtPayload, q: DrilldownQueryDto): StreamableFile {
+  async drilldownXlsx(user: JwtPayload, q: DrilldownQueryDto): Promise<StreamableFile> {
     const plan = this.drilldownPlan(user, q); // throws (fail-closed) before any row is read
-    let cursorId: string | undefined;
-    let exhausted = false;
-
-    const nextBatch = async (): Promise<Record<string, string | HyperlinkCell>[]> => {
-      if (exhausted) return [];
-      const items = await this.drilldownXlsxBatch(plan, cursorId);
-      if (items.length < AnalyticsService.XLSX_BATCH) exhausted = true;
-      if (items.length > 0) cursorId = items[items.length - 1].id;
-      return items.map(drilldownXlsxRow);
-    };
-
-    return new StreamableFile(
-      streamXlsx({ sheetName: 'Drill-down', headers: [...DRILLDOWN_XLSX_HEADERS], nextBatch }),
-      {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        disposition: `attachment; filename="posm-drilldown-${q.metric}.xlsx"`,
-      },
-    );
+    const mode = plan.kind === 'install' ? 'installed' : 'recce';
+    // Normalise EXACTLY as outletReportWhere will (trim + drop blanks), so the two agree on what
+    // "empty" means. A blank/whitespace outlet code would otherwise pass a raw length check here but
+    // trim to nothing in the report → the code filter would be dropped → for an ASM (whose only
+    // scope pin in the report IS this code set) the export would leak the whole tenant. ISOLATION-
+    // CRITICAL: an empty set must route to the sentinel, never to an absent filter.
+    const codes = (await this.drilldownOutletCodes(plan)).map((c) => c.trim()).filter(Boolean);
+    // An empty match → a NUL-char sentinel no real outlet can carry → a header-only sheet (NOT an
+    // absent filter, which would export EVERY scoped outlet). Codes are comma-joined (the report's
+    // PPTX convention); outlet codes are alphanumeric and never contain a comma, so the split
+    // round-trips them cleanly.
+    const outletCodes = codes.length > 0 ? [...new Set(codes)].join(',') : '\u0000';
+    // Forward the FE-supplied origin so the report's photo hyperlinks are absolute (server-validated).
+    const reportQ = { outletCodes, mode, origin: q.origin } as ListOutletReportDto;
+    return new StreamableFile(this.reports.outletExecutionXlsxStream(user, reportQ), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="posm-drilldown-${q.metric}.xlsx"`,
+    });
   }
 
-  /** Streaming batch size for {@link drilldownXlsx} — one batch is the peak in-memory row count. */
-  private static readonly XLSX_BATCH = 500;
-
-  /** One cursor-paged batch of enriched items for the export, by the plan's entity. */
-  private async drilldownXlsxBatch(
+  /**
+   * The DISTINCT, scope-confined set of outlet codes the drilled metric matches — computed from the
+   * plan's OWN (already-scoped) where, so the code set can never exceed the on-screen drill-down's
+   * scope. Fed to the full-column report export, which ANDs its own scope on top.
+   */
+  private async drilldownOutletCodes(
     plan: ReturnType<AnalyticsService['drilldownPlan']>,
-    cursorId: string | undefined,
-  ): Promise<DrilldownRecordItem[]> {
-    const paging = {
-      take: AnalyticsService.XLSX_BATCH,
-      orderBy: { id: 'asc' as const },
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-    };
+  ): Promise<string[]> {
     if (plan.kind === 'site') {
-      const rows = await this.prisma.site.findMany({
-        where: plan.where,
-        select: AnalyticsService.SITE_DRILL_SELECT,
-        ...paging,
-      });
-      return rows.map((r) => this.siteItem(r));
+      const rows = await this.prisma.site.findMany({ where: plan.where, select: { code: true } });
+      return [...new Set(rows.map((r) => r.code))];
     }
     if (plan.kind === 'install') {
       const rows = await this.prisma.installation.findMany({
         where: plan.where,
-        select: AnalyticsService.INSTALL_DRILL_SELECT,
-        ...paging,
+        select: { site: { select: { code: true } } },
       });
-      return rows.map((i) => this.installItem(i));
+      return [...new Set(rows.map((r) => r.site.code))];
     }
     const rows = await this.prisma.recce.findMany({
       where: plan.where,
-      select: AnalyticsService.RECCE_DRILL_SELECT,
-      ...paging,
+      select: { site: { select: { code: true } } },
     });
-    return rows.map((r) => this.recceItem(r));
+    return [...new Set(rows.map((r) => r.site.code))];
   }
 
   /**

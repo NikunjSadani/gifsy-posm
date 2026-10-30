@@ -56,6 +56,15 @@ export class DrilldownQueryDto {
   vendorId?: string;
 
   /**
+   * This app's origin (e.g. https://app.kwality.in), passed by the FE so the .xlsx export's photo
+   * hyperlinks resolve as ABSOLUTE links. The report builder validates/sanitises it; an absent or
+   * implausible value degrades to a relative link.
+   */
+  @IsOptional()
+  @IsString()
+  origin?: string;
+
+  /**
    * Keyset cursor: the id of the LAST row the client already holds. Omitted on the first page;
    * each subsequent page passes it so the server seeks PAST that row (cursor paging). This is
    * immune to the duplicate/skip that OFFSET paging suffers when rows are inserted or deleted

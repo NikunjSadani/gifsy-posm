@@ -61,7 +61,7 @@ export class AnalyticsController {
    */
   @Get('drilldown.xlsx')
   @Roles('CLIENT_ADMIN', 'GIFSY_ADMIN', 'VENDOR_HO', 'ASM')
-  drilldownXlsx(@CurrentUser() user: JwtPayload, @Query() query: DrilldownQueryDto): StreamableFile {
+  drilldownXlsx(@CurrentUser() user: JwtPayload, @Query() query: DrilldownQueryDto): Promise<StreamableFile> {
     return this.analytics.drilldownXlsx(user, query);
   }
 
